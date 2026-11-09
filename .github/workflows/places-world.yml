@@ -17,9 +17,9 @@ concurrency:
   group: places-world
   cancel-in-progress: false
 env:
-  GCS_BUCKET: ${{ vars.GCS_BUCKET }}
-  KMS_SIGN_KEY: ${{ vars.KMS_SIGN_KEY }}
-  KMS_RULES_KEY: ${{ vars.KMS_RULES_KEY }}
+  GCS_BUCKET: ${{ vars.GCS_BUCKET || 'trip-mate-0vum9k.firebasestorage.app' }}
+  KMS_SIGN_KEY: ${{ vars.KMS_SIGN_KEY || 'projects/trip-mate-0vum9k/locations/us-east1/keyRings/triproutie/cryptoKeys/places-manifest-ed25519/cryptoKeyVersions/1' }}
+  KMS_RULES_KEY: ${{ vars.KMS_RULES_KEY || 'projects/trip-mate-0vum9k/locations/us-east1/keyRings/triproutie/cryptoKeys/pipeline-rules-rsa/cryptoKeyVersions/1' }}
 jobs:
   plan:
     if: github.repository == 'joon0515/triproutie-pipeline' && github.ref == 'refs/heads/main'
@@ -51,8 +51,8 @@ jobs:
       - uses: actions/checkout@v4
       - uses: google-github-actions/auth@v2
         with:
-          workload_identity_provider: ${{ vars.GCP_WIF_PROVIDER }}
-          service_account: ${{ vars.GCP_SA_EMAIL }}
+          workload_identity_provider: ${{ vars.GCP_WIF_PROVIDER || 'projects/222914945328/locations/global/workloadIdentityPools/github-pool/providers/github-provider' }}
+          service_account: ${{ vars.GCP_SA_EMAIL || 'pipeline-uploader@trip-mate-0vum9k.iam.gserviceaccount.com' }}
           create_credentials_file: true
       - uses: google-github-actions/setup-gcloud@v2
       - uses: actions/setup-python@v5
@@ -73,8 +73,8 @@ jobs:
       - uses: actions/checkout@v4
       - uses: google-github-actions/auth@v2
         with:
-          workload_identity_provider: ${{ vars.GCP_WIF_PROVIDER }}
-          service_account: ${{ vars.GCP_SA_EMAIL }}
+          workload_identity_provider: ${{ vars.GCP_WIF_PROVIDER || 'projects/222914945328/locations/global/workloadIdentityPools/github-pool/providers/github-provider' }}
+          service_account: ${{ vars.GCP_SA_EMAIL || 'pipeline-uploader@trip-mate-0vum9k.iam.gserviceaccount.com' }}
       - uses: google-github-actions/setup-gcloud@v2
       - run: pip install -q cryptography >/dev/null
       - run: python3 scripts/finalize.py "${{ inputs.tag }}"
