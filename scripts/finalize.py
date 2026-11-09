@@ -4,7 +4,10 @@ import base64, datetime, glob, json, os, subprocess, sys
 sys.path.insert(0, 'tools')
 from canonical_fix import canon_value, canonical
 TAG = sys.argv[1]; D = os.environ['RUNNER_TEMP']; DEST = f"gs://{os.environ['GCS_BUCKET']}/places/v1/{TAG}"
-subprocess.run(['gcloud', 'storage', 'cp', '-q', f'{DEST}/parts/*.json', f'{D}/parts/'], check=True, capture_output=True)
+os.makedirs(f'{D}/parts', exist_ok=True)
+r = subprocess.run(['gcloud', 'storage', 'cp', '-q', f'{DEST}/parts/*.json', f'{D}/parts/'], capture_output=True, text=True)
+if r.returncode:
+    sys.exit('parts download failed: ' + r.stderr.strip()[-300:])
 tiles = [t for f in sorted(glob.glob(f'{D}/parts/*.json')) for t in json.load(open(f))['tiles']]
 man = canon_value({'schema': 'places-world-1', 'version': TAG, 'created_at': datetime.datetime.utcnow().strftime('%Y-%m-%dT%H:%M:%SZ'),
                    'path': f'places/v1/{TAG}/tiles/', 'tiles': tiles, 'disabled': False, 'revoked': [],
