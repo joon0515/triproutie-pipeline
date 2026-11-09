@@ -2,7 +2,8 @@
 # Actions 안에서만: KMS 로 데이터 키를 풀어 규칙 묶음을 tools/ 아래에 펼침. 키·평문은 로그에 남기지 않고 바로 지움.
 set -euo pipefail
 umask 077
-gcloud kms asymmetric-decrypt --key="${KMS_RULES_KEY%/cryptoKeyVersions/*}" --version="${KMS_RULES_KEY##*/}" \
+IFS=/ read -r _ KP _ KL _ KR _ KK _ KV <<< "$KMS_RULES_KEY"
+gcloud kms asymmetric-decrypt --project="$KP" --location="$KL" --keyring="$KR" --key="$KK" --version="$KV" \
   --ciphertext-file=private_enc/rules.key.enc --plaintext-file="$RUNNER_TEMP/dek.bin" >/dev/null
 python3 - "$RUNNER_TEMP/dek.bin" <<'PY'
 import io, sys, tarfile
