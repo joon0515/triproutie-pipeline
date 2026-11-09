@@ -3,7 +3,7 @@
 set -euo pipefail
 umask 077
 gcloud kms asymmetric-decrypt --key="${KMS_RULES_KEY%/cryptoKeyVersions/*}" --version="${KMS_RULES_KEY##*/}" \
-  --ciphertext-file=private_enc/rules.key.enc --plaintext-file="$RUNNER_TEMP/dek.bin" >/dev/null 2>&1
+  --ciphertext-file=private_enc/rules.key.enc --plaintext-file="$RUNNER_TEMP/dek.bin" >/dev/null
 python3 - "$RUNNER_TEMP/dek.bin" <<'PY'
 import io, sys, tarfile
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
