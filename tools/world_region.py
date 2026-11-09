@@ -31,7 +31,7 @@ def con_fsq():
     if os.path.exists('/root/.ccr/ca-bundle.crt'):
         c.execute("SET ca_cert_file='/root/.ccr/ca-bundle.crt'")
     c.execute(f"SET memory_limit='{os.environ.get('DUCK_MEM', '2GB')}'"); c.execute('SET preserve_insertion_order=false')
-    tok = os.environ['FSQ_TOKEN']
+    tok = os.environ['FSQ_TOKEN'].strip().strip('"').strip("'")
     c.execute(f"CREATE TEMPORARY SECRET fsq (TYPE ICEBERG, TOKEN '{tok}')"); del tok
     c.execute("ATTACH 'places' AS places (TYPE ICEBERG, ENDPOINT 'https://catalog.h3-hub.foursquare.com/iceberg', SECRET fsq)")
     return c
