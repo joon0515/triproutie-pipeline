@@ -1,0 +1,80 @@
+# 트립루티 places-world-v1 — 지역별 병렬 빌드 → Firebase Storage 비공개 경로(places/v1/<tag>/) 업로드 → KMS 서명 manifest.
+# 실행: Actions 탭에서 수동(workflow_dispatch)만. 포크 PR·pull_request_target 없음. 산출 데이터는 GitHub(Release·artifact·cache·로그)에 남기지 않음.
+name: places-world
+on:
+  workflow_dispatch:
+    inputs:
+      regions:
+        description: "지역 목록(쉼표) 또는 all"
+        default: "all"
+      tag:
+        description: "판 이름(예 2026-11-10)"
+        required: true
+permissions:
+  contents: read
+  id-token: write        # Workload Identity Federation(OIDC) 전용
+concurrency:
+  group: places-world
+  cancel-in-progress: false
+env:
+  GCS_BUCKET: ${{ vars.GCS_BUCKET }}
+  KMS_SIGN_KEY: ${{ vars.KMS_SIGN_KEY }}
+  KMS_RULES_KEY: ${{ vars.KMS_RULES_KEY }}
+jobs:
+  plan:
+    if: github.repository == 'joon0515/triproutie-pipeline' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.m.outputs.matrix }}
+    steps:
+      - uses: actions/checkout@v4
+      - id: m
+        run: |
+          python3 - <<'PY' >> "$GITHUB_OUTPUT"
+          import json, os
+          R = list(json.load(open('tools/world_regions.json')))
+          want = os.environ['IN'].strip()
+          sel = R if want in ('', 'all') else [r.strip() for r in want.split(',') if r.strip() in R]
+          print('matrix=' + json.dumps({'region': sel}))
+          PY
+        env:
+          IN: ${{ inputs.regions }}
+  build:
+    needs: plan
+    runs-on: ubuntu-latest
+    timeout-minutes: 350
+    strategy:
+      fail-fast: false
+      max-parallel: 20
+      matrix: ${{ fromJson(needs.plan.outputs.matrix) }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ vars.GCP_WIF_PROVIDER }}
+          service_account: ${{ vars.GCP_SA_EMAIL }}
+          create_credentials_file: true
+      - uses: google-github-actions/setup-gcloud@v2
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: deps
+        run: pip install -q duckdb==1.* h3 cryptography >/dev/null
+      - name: rules
+        run: bash scripts/decrypt_rules.sh
+      - name: build-and-upload
+        env:
+          FSQ_TOKEN: ${{ secrets.FSQ_TOKEN }}
+        run: bash scripts/run_region.sh "${{ matrix.region }}" "${{ inputs.tag }}"
+  finalize:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ vars.GCP_WIF_PROVIDER }}
+          service_account: ${{ vars.GCP_SA_EMAIL }}
+      - uses: google-github-actions/setup-gcloud@v2
+      - run: pip install -q cryptography >/dev/null
+      - run: python3 scripts/finalize.py "${{ inputs.tag }}"

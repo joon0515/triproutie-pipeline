@@ -1,0 +1,9 @@
+raw/
+packs/
+*.parquet
+*.json.gz
+__pycache__/
+tools/rules.json
+rules_src/
+d14/
+raw/

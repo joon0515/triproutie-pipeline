@@ -1,0 +1,15 @@
+rules_version = '2';
+// 트립루티 Firebase Storage 규칙 초안(배포는 대표님): 장소 타일·manifest 는 로그인(게스트 익명 로그인 포함) 사용자만 읽기, 쓰기는 모두 금지
+// (쓰기는 파이프라인 서비스 계정이 IAM 으로만 함 — 규칙과 무관). App Check 는 Firebase 콘솔 → App Check → Storage '시행(Enforce)'으로 켬.
+// 다운로드 토큰(firebaseStorageDownloadTokens)은 만들지 않으므로 공개 URL 이 없음 → 앱은 SDK getData() 로만 받음.
+service firebase.storage {
+  match /b/{bucket}/o {
+    match /places/{ver}/{allPaths=**} {
+      allow read: if request.auth != null && request.auth.uid != null;
+      allow write: if false;
+    }
+    match /{allPaths=**} {
+      allow read, write: if false;
+    }
+  }
+}
