@@ -1,0 +1,82 @@
+# 트립루티 places-layers — 편의시설 층(OSM)·이름 보충 층(OSM) 지역별 병렬 빌드 → Firebase Storage 비공개 경로(places/v1/<tag>/layers/) → KMS 서명 목록(layers.json).
+# places-world.yml 과 같은 방식: 수동 실행(workflow_dispatch)만, WIF(OIDC) 로그인, KMS Ed25519 서명, 산출물은 GitHub(Release·artifact·cache·로그)에 남기지 않음.
+# 인기 층(pop_*.json.gz — 위키 조회수)은 여기서 만들지 않는다(위키미디어 요청 제한 때문에 따로 천천히 만든 것을 layers_extra/ 로 넣는다 — README).
+name: places-layers
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "판 이름(예 2026-11-20). 층 판은 타일 판과 따로 간다"
+        required: true
+      groups:
+        description: "지역 묶음(쉼표): priority(일본·한국·대만·홍콩) · asia · europe · americas · oceania · all, 또는 지역 이름(jp-kansai,kr)"
+        default: "priority"
+      names:
+        description: "이름 보충 층도 만든다(world 가 적힌 지역만): yes | no"
+        default: "yes"
+      world_tag:
+        description: "이름 보충 층을 붙일 세계 타일 판(places/v1/<world_tag>/tiles). 비우면 places/v1/manifest.json 의 version"
+        default: ""
+permissions:
+  contents: read
+  id-token: write        # Workload Identity Federation(OIDC) 전용
+concurrency:
+  group: places-layers
+  cancel-in-progress: false
+env:
+  GCS_BUCKET: ${{ vars.GCS_BUCKET || 'trip-mate-0vum9k.firebasestorage.app' }}
+  KMS_SIGN_KEY: ${{ vars.KMS_SIGN_KEY || 'projects/trip-mate-0vum9k/locations/us-east1/keyRings/triproutie/cryptoKeys/places-manifest-ed25519/cryptoKeyVersions/1' }}
+jobs:
+  plan:
+    if: github.repository == 'joon0515/triproutie-pipeline' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.m.outputs.matrix }}
+    steps:
+      - uses: actions/checkout@v4
+      - id: m
+        run: python3 scripts/layers_plan.py >> "$GITHUB_OUTPUT"
+        env:
+          IN_GROUPS: ${{ inputs.groups }}
+          IN_TAG: ${{ inputs.tag }}
+  build:
+    needs: plan
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    strategy:
+      fail-fast: false
+      max-parallel: 8      # OSM 추출본 서버에 한꺼번에 몰리지 않게
+      matrix: ${{ fromJson(needs.plan.outputs.matrix) }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ vars.GCP_WIF_PROVIDER || 'projects/222914945328/locations/global/workloadIdentityPools/github-pool/providers/github-provider' }}
+          service_account: ${{ vars.GCP_SA_EMAIL || 'pipeline-uploader@trip-mate-0vum9k.iam.gserviceaccount.com' }}
+          create_credentials_file: true
+      - uses: google-github-actions/setup-gcloud@v2
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: deps
+        run: pip install -q osmium >/dev/null
+      - name: build-and-upload
+        env:
+          IN_NAMES: ${{ inputs.names }}
+          IN_WORLD_TAG: ${{ inputs.world_tag }}
+        run: bash scripts/run_layers_region.sh "${{ matrix.region }}" "${{ inputs.tag }}"
+  finalize:
+    needs: build
+    if: ${{ !cancelled() && needs.build.result != 'skipped' }}   # 지역 몇 개가 실패해도 된 것만으로 목록을 만든다(없는 파일은 목록에 안 들어간다)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ vars.GCP_WIF_PROVIDER || 'projects/222914945328/locations/global/workloadIdentityPools/github-pool/providers/github-provider' }}
+          service_account: ${{ vars.GCP_SA_EMAIL || 'pipeline-uploader@trip-mate-0vum9k.iam.gserviceaccount.com' }}
+      - uses: google-github-actions/setup-gcloud@v2
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: bash scripts/finalize_layers.sh "${{ inputs.tag }}"
