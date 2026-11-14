@@ -53,7 +53,7 @@ def extract(r):
         q = sel if len(reg['bbox']) == 1 else f'select distinct on (id) * from ({sel})'  # 상자 1개면 중복 없음 → 메모리 절약(DISTINCT 는 전부 메모리에 올림)
         c.execute(f"copy ({q}) to '{fo}.tmp' (format parquet, compression zstd)"); os.replace(fo + '.tmp', fo)
         print(r, 'ovt', c.execute(f"select count(*) from '{fo}'").fetchone()[0], round(time.time() - t), 's', flush=True)
-    if not os.path.exists(ff):
+    if not os.path.exists(ff) and os.environ.get('OVT_ONLY') != '1':  # OVT_ONLY=1: 로컬 시험(FSQ 토큰 없음)
         c = con_fsq(); t = time.time()
         sel = ' union all '.join(f"""select fsq_place_id, name, latitude, longitude, address, locality, country, date_refreshed, tel, website, instagram,
               fsq_category_ids, fsq_category_labels, unresolved_flags from places.datasets.places_os
@@ -66,40 +66,47 @@ def extract(r):
 
 
 def tile(r):
+    """11/14 16:00 수정: 타일을 (나라, 셀) 단위로 나눈다.
+    전에는 타일 하나에 cc = 지역의 첫 나라(sea_mainland → TH)만 적었고, build_pack 이 `actry != cc` 행을 버려
+    여러 나라 지역(17개)에서 첫 나라 말고는 전부 빠졌다(방비엥 LA·팀부 BT·호이안 VN·카즈베기 GE·우유니 BO …).
+    이제 나라마다 따로 적응형 타일(r3 → r4 → r5)을 만들고 슬러그를 w-<셀>_<나라> 로 한다 → build_pack 은 손대지 않아도 된다."""
     reg = REGIONS[r]
     fo, ff = os.path.join(W, f'{r}_ovt.parquet'), os.path.join(W, f'{r}_fsq.parquet')
     c = duckdb.connect(); c.execute('INSTALL h3 FROM community'); c.execute('LOAD h3')
     c.execute(f"SET memory_limit='{os.environ.get('DUCK_MEM', '2GB')}'")
-    c.execute(f"""create table cnt as select c5, sum(w) w from (
-        select h3_latlng_to_cell(lat, lon, 5) c5, {EST_OVT} w from read_parquet('{fo}')
-        union all select h3_latlng_to_cell(latitude, longitude, 5) c5, {EST_FSQ} w from read_parquet('{ff}')) group by 1""")
-    rows = c.execute("select c5, w, h3_cell_to_parent(c5, 4), h3_cell_to_parent(c5, 3) from cnt").fetchall()
+    fsq_sql = f"union all select h3_latlng_to_cell(latitude, longitude, 5) c5, country cc, {EST_FSQ} w from read_parquet('{ff}')" if os.path.exists(ff) else ''
+    c.execute(f"""create table cnt as select c5, cc, sum(w) w from (
+        select h3_latlng_to_cell(lat, lon, 5) c5, actry cc, {EST_OVT} w from read_parquet('{fo}')
+        {fsq_sql}) where cc is not null group by 1, 2""")
+    rows = c.execute("select c5, cc, w, h3_cell_to_parent(c5, 4), h3_cell_to_parent(c5, 3) from cnt").fetchall()
     s3, s4 = {}, {}
-    for c5, w, p4, p3 in rows:
-        s3[p3] = s3.get(p3, 0) + w; s4[p4] = s4.get(p4, 0) + w
+    for c5, cc, w, p4, p3 in rows:
+        s3[(cc, p3)] = s3.get((cc, p3), 0) + w; s4[(cc, p4)] = s4.get((cc, p4), 0) + w
     tmap = {}
-    for c5, w, p4, p3 in rows:
-        tmap[c5] = p3 if s3[p3] <= TILE_ROWS else (p4 if s4[p4] <= TILE_ROWS else c5)
-    c.execute('create table tm (c5 ubigint, tile ubigint)')
-    c.executemany('insert into tm values (?, ?)', list(tmap.items()))
-    tiles = {}
-    for c5, t in tmap.items():
-        tiles.setdefault(t, []).append(c5)
+    for c5, cc, w, p4, p3 in rows:
+        tmap[(c5, cc)] = p3 if s3[(cc, p3)] <= TILE_ROWS else (p4 if s4[(cc, p4)] <= TILE_ROWS else c5)
+    c.execute('create table tm (c5 ubigint, cc varchar, tile ubigint, tkey varchar)')
+    keys = {}
+    for (c5, cc), t in tmap.items():
+        keys.setdefault((t, cc), []).append(c5)
+    tstr = {t: c.execute('select h3_h3_to_string(?)', [t]).fetchone()[0] for t in {t for t, _ in keys}}
+    c.executemany('insert into tm values (?, ?, ?, ?)', [(c5, cc, t, f'{tstr[t]}_{cc}') for (c5, cc), t in tmap.items()])
     out = {}
-    for t, c5s in tiles.items():
-        tid = c.execute('select h3_h3_to_string(?)', [t]).fetchone()[0]
-        slug = f'w-{tid}'
-        cs = [x[0] for x in c.execute(f"select h3_h3_to_string(c5) from tm where tile = {t}").fetchall()]
+    for (t, cc), c5s in keys.items():
+        tid = f'{tstr[t]}_{cc}'
+        cs = sorted(c.execute('select h3_h3_to_string(?)', [x]).fetchone()[0] for x in c5s)
         la, lo = c.execute('select h3_cell_to_lat(?), h3_cell_to_lng(?)', [t, t]).fetchone()
         res = c.execute('select h3_get_resolution(?)', [t]).fetchone()[0]
-        out[slug] = {'region': r, 'res': res, 'cells': cs, 'center': [round(la, 4), round(lo, 4)], 'cc': reg['cc'][0], 'name_ko': f"{reg['name_ko']} 타일 {tid}"}
-    # 타일별 원본(셀 → 타일 표로 붙여 한 번에 나눠 씀: 타일 폴더 hive 분할)
-    c.execute(f"""copy (select o.*, h3_h3_to_string(tm.tile) tile from read_parquet('{fo}') o join tm on h3_latlng_to_cell(o.lat, o.lon, 5) = tm.c5)
+        out[f'w-{tid}'] = {'region': r, 'res': res, 'cells': cs, 'center': [round(la, 4), round(lo, 4)], 'cc': cc, 'name_ko': f"{reg['name_ko']} 타일 {tid}"}
+    # 타일별 원본(셀·나라 → 타일 표로 붙여 한 번에 나눠 씀: 타일 폴더 hive 분할, 폴더 이름 tile=<셀>_<나라>)
+    c.execute(f"""copy (select o.*, tm.tkey tile from read_parquet('{fo}') o join tm on h3_latlng_to_cell(o.lat, o.lon, 5) = tm.c5 and o.actry = tm.cc)
         to '{W}/{r}_ovt_t' (format parquet, partition_by (tile), overwrite_or_ignore, compression zstd)""")
-    c.execute(f"""copy (select f.*, h3_h3_to_string(tm.tile) tile from read_parquet('{ff}') f join tm on h3_latlng_to_cell(f.latitude, f.longitude, 5) = tm.c5)
-        to '{W}/{r}_fsq_t' (format parquet, partition_by (tile), overwrite_or_ignore, compression zstd)""")
+    if os.path.exists(ff):
+        c.execute(f"""copy (select f.*, tm.tkey tile from read_parquet('{ff}') f join tm on h3_latlng_to_cell(f.latitude, f.longitude, 5) = tm.c5 and f.country = tm.cc)
+            to '{W}/{r}_fsq_t' (format parquet, partition_by (tile), overwrite_or_ignore, compression zstd)""")
     json.dump(out, open(os.path.join(W, f'tiles_{r}.json'), 'w'), ensure_ascii=False)
-    print(r, 'tiles', len(out), {k: sum(1 for v in out.values() if v['res'] == k) for k in (3, 4, 5)}, flush=True)
+    print(r, 'tiles', len(out), {k: sum(1 for v in out.values() if v['res'] == k) for k in (3, 4, 5)},
+          'by cc', dict(sorted({cc: sum(1 for v in out.values() if v['cc'] == cc) for cc in reg['cc']}.items())), flush=True)
 
 
 if __name__ == '__main__':
