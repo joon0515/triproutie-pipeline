@@ -13,6 +13,14 @@ if r.returncode:
 EXP = (datetime.datetime.utcnow() + datetime.timedelta(days=90)).strftime('%Y-%m-%dT%H:%M:%SZ')
 regions = []; ntiles = 0
 os.makedirs(f'{D}/regions', exist_ok=True)
+# 11/14: 같은 파일 이름이 두 지역에 있으면 한쪽이 덮어써진 것이다 → 서명하지 않고 멈춘다.
+_seen = {}
+for _f in sorted(glob.glob(f'{D}/parts/*.json')):
+    _pj = json.load(open(_f, encoding='utf-8'))
+    for _t in _pj['tiles']:
+        if _t['file'] in _seen and _seen[_t['file']] != _pj['region']:
+            sys.exit(f"duplicate tile file across regions: {_t['file']} ({_seen[_t['file']]} / {_pj['region']})")
+        _seen[_t['file']] = _pj['region']
 for f in sorted(glob.glob(f'{D}/parts/*.json')):
     pj = json.load(open(f)); R = pj['region']
     rm = canonical(canon_value({'schema': 'places-world-region-1', 'version': TAG, 'region': R, 'path': f'places/v1/{TAG}/tiles/', 'tiles': pj['tiles']})).encode('utf-8')
