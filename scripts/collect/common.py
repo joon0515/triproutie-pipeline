@@ -37,7 +37,10 @@ class Blocked(Exception):
 
 
 def host_of(url):
-    return (urllib.parse.urlsplit(url).hostname or '').lower().rstrip('.')
+    try:
+        return (urllib.parse.urlsplit(url).hostname or '').lower().rstrip('.')
+    except ValueError:  # 전각 문자 등 깨진 주소 → 빈 값(forbidden 처리되어 버려짐)
+        return ''
 
 
 def forbidden(url):
