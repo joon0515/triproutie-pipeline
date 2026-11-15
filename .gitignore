@@ -7,3 +7,6 @@ tools/rules.json
 rules_src/
 d14/
 raw/
+functions/node_modules/
+functions/geo_cfg.json
+functions/.env
