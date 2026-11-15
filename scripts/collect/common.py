@@ -36,6 +36,22 @@ class Blocked(Exception):
     pass
 
 
+def iri_to_uri(url):
+    """한글·전각 등 비ASCII 주소를 요청 가능한 형태로(호스트는 IDNA, 경로·쿼리는 퍼센트 인코딩)."""
+    try:
+        url.encode('ascii'); return url
+    except UnicodeEncodeError:
+        pass
+    sp = urllib.parse.urlsplit(url)
+    try:
+        host = (sp.hostname or '').encode('idna').decode('ascii')
+    except UnicodeError:
+        host = sp.hostname or ''
+    net = host + (f':{sp.port}' if sp.port else '')
+    q = lambda x, safe: urllib.parse.quote(x, safe=safe)
+    return urllib.parse.urlunsplit((sp.scheme, net, q(sp.path, "/%:@!$&'()*+,;="), q(sp.query, "=&%+/:@!$'()*,;?"), q(sp.fragment, "")))
+
+
 def host_of(url):
     try:
         return (urllib.parse.urlsplit(url).hostname or '').lower().rstrip('.')
@@ -159,6 +175,7 @@ class Http:
         return not forbidden(url) and self._robots(url).can_fetch(ROBOTS_NAME, url)
 
     def get(self, url, accept=None):
+        url = iri_to_uri(url)
         h = host_of(url)
         if forbidden(url):
             raise Blocked('forbidden domain')
