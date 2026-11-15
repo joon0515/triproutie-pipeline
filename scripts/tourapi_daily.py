@@ -3,14 +3,18 @@
 
     TOURAPI_KEY=... python3 scripts/tourapi_daily.py --state tourapi/state.json --store W/store --layers W/layers --agg W/agg_tourapi.json
 
-범위: 17개 시도(areaCode) 전부 × 관광지 12·문화시설 14·레포츠 28·숙박 32·쇼핑 38·음식점 39. 시도 단위 목록(areaBasedList2)에
-  그 시도의 모든 시군구가 들어 있고, 장소마다 sigungucode 를 함께 저장한다(소도시 포함).
-호출: 목록 1회/500곳 + 장소마다 detailIntro2 1회 (+ 요금이 detailInfo2 에만 있는 12·28 은 1회 더).
-이어받기: 상태 파일(--state, 저장소에 커밋하는 작은 JSON)에 '몇 번째 작업·몇 쪽'과 오늘 호출 수만 둔다. 이미 이번 회차(pass)에
-  받은 장소는 저장소(--store, GCS 와 동기화)를 보고 건너뛰므로 같은 쪽을 다시 읽어도 상세 호출은 다시 하지 않는다.
-한도: KST 날짜별 호출 수 ≤ --limit(기본 900, 개발계정). 한도 초과 응답(LIMITED_NUMBER…)이면 그날 즉시 멈춤.
-실패: 호출당 4번까지 지수 대기, 연속 20회 실패면 그날 중단(종료코드 2). 키 오류도 2. 장소 하나가 끝내 실패하면 건너뛰고
-  retry 목록(최대 300)에 넣어 다음 날 먼저 다시 받는다.
+범위: 16개 시도(법정동 lDongRegnCd — 광주·전남 통합 뒤) 전부 × 관광지 12·문화시설 14·레포츠 28·숙박 32·쇼핑 38·음식점 39. 시도 단위 목록에 그 시도의 모든
+  시군구가 들어 있고 장소마다 lDongSignguCd 를 저장한다(전국 269개 시군구, 소도시 포함).
+단계(11/15 변경 — 전국 장소를 첫날 앱에 넣기 위해):
+  1) list   : 96개 작업(시도×종류)의 areaBasedList2 를 1000곳/쪽으로 전부 받는다(이름·주소·좌표·대표사진·분류). 약 130회 → 첫날 끝.
+  2) detail : 남은 한도로 detailIntro2(영업시간·휴무·주차·메뉴·체크인…). 순서 = 관광지12·음식점39 → 숙박32 → 문화14·레포츠28·쇼핑38,
+              같은 종류 안에서는 앱 데이터에 이미 있는 곳(tourapi/priority_cids.json) → 서울·부산 외(소도시) → 서울·부산.
+  3) info   : 요금이 detailInfo2 에만 있는 12·28 의 요금. 끝나면 회차(pass)+1, 1)부터 다시(내용 갱신).
+이어받기: 상태 파일(--state, 저장소에 커밋하는 작은 JSON)에는 단계·작업 번호·쪽·오늘 호출 수만. 장소별 진행(받은 회차·실패 횟수)은
+  누적본(--store, GCS 와 동기화)의 카드에 있어 같은 곳을 두 번 부르지 않는다.
+한도: KST 날짜별 호출 수 ≤ --limit(기본 900, 개발계정). 한도 초과 응답(LIMITED_NUMBER…)·429 면 그날 즉시 멈춤.
+실패: 호출당 4번까지 지수 대기, 연속 20회 실패면 그날 중단(종료코드 2). 키 오류(401·403·미등록)도 2. 장소 하나가 끝내 실패하면
+  카드에 실패 횟수를 적고 다음 곳으로(3번 실패한 곳은 이번 회차에서 건너뜀).
 출력(장소 내용은 로그에 쓰지 않음 — 개수만):
   --store  area_<시도>.json   {cid: 장소 카드}  (누적, GCS gs://<bucket>/tourapi/v1/store/ 와 동기화)
   --layers kto_<시도>.json.gz schema 'tourapi-1' — places-layers finalize 가 layers_extra/ 에서 집어 목록에 싣는다
@@ -23,13 +27,18 @@ import argparse, datetime, gzip, json, os, re, sys, time, urllib.error, urllib.p
 
 BASE = os.environ.get('TOURAPI_BASE', 'https://apis.data.go.kr/B551011/KorService2/')
 KST = datetime.timezone(datetime.timedelta(hours=9))
-AREAS = ['1', '2', '3', '4', '5', '6', '7', '8', '31', '32', '33', '34', '35', '36', '37', '38', '39']  # 17개 시도
-AREA_KO = {'1': '서울', '2': '인천', '3': '대전', '4': '대구', '5': '광주', '6': '부산', '7': '울산', '8': '세종', '31': '경기', '32': '강원',
-           '33': '충북', '34': '충남', '35': '경북', '36': '경남', '37': '전북', '38': '전남', '39': '제주'}
+# 시도 = 법정동 시도 코드(lDongRegnCd). 옛 areaCode 는 TourAPI 자료의 약 2/3(새로 등록·갱신된 곳)에 비어 있어 그것으로 거르면 빠진다
+# (11/15 로컬 자료 28,913곳 중 19,187곳 areacode 없음). 광주·전남은 통합(12). 시군구 = lDongSignguCd(전국 269개).
+AREAS = ['11', '26', '27', '28', '12', '30', '31', '36110', '41', '51', '43', '44', '52', '47', '48', '50']  # 16개 시도(통합 뒤)
+AREA_KO = {'11': '서울', '26': '부산', '27': '대구', '28': '인천', '12': '전남광주', '30': '대전', '31': '울산', '36110': '세종', '41': '경기',
+           '51': '강원', '43': '충북', '44': '충남', '52': '전북', '47': '경북', '48': '경남', '50': '제주'}
 TYPES = ['12', '39', '32', '14', '28', '38']  # 앞쪽이 먼저(일정 엔진이 많이 쓰는 순)
 TYPE_KO = {'12': '관광지', '14': '문화시설', '28': '레포츠', '32': '숙박', '38': '쇼핑', '39': '음식점'}
 NEED_INFO = {'12', '28'}  # 요금이 detailInfo2 에만 있는 종류
-ROWS = 500
+ROWS = 1000
+PRIO = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'tourapi', 'priority_cids.json')
+BIG = {'11', '26'}  # 서울·부산(대화 세션 판에서 이미 많이 받은 곳) — 상세는 뒤로
+DETAIL_ORDER = {'12': 0, '39': 0, '32': 1, '14': 2, '28': 2, '38': 2}
 PHOTO_OK = {'Type1': 'KOGL-1', 'Type3': 'KOGL-3'}
 ATTR = '한국관광공사 TourAPI 4.0 (공공누리 제1·3유형, 출처표시)'
 
@@ -228,14 +237,25 @@ def normalize(ct, intro, info):
     return f
 
 
-def card(x, ct, facts, pas):
-    c = {'cid': str(x['contentid']), 'type': ct, 'name': (x.get('title') or '')[:80], 'area': str(x.get('areacode') or ''),
-         'sigungu': str(x.get('sigungucode') or ''), 'addr': (x.get('addr1') or '')[:60], 'cpy': x.get('cpyrhtDivCd') or None,
-         'modified': x.get('modifiedtime') or None, 'collected': today(), 'pass': pas, 'f': facts}
+LIST_KEYS = ('contentid', 'title', 'lDongRegnCd', 'lDongSignguCd', 'areacode', 'sigungucode', 'addr1', 'mapx', 'mapy', 'cpyrhtDivCd', 'firstimage', 'firstimage2', 'modifiedtime',
+             'cat1', 'cat2', 'cat3', 'lclsSystm1', 'lclsSystm2', 'lclsSystm3', 'tel')
+
+
+def card(x, ct, pas, old=None):
+    """목록 항목 → 장소 카드. old(이전 카드)의 사실·상세 진행은 그대로 둔다."""
+    c = dict(old or {})
+    c.update({'cid': str(x['contentid']), 'type': ct, 'name': (x.get('title') or '')[:80], 'area': str(x.get('lDongRegnCd') or ''),
+              'sigungu': str(x.get('lDongSignguCd') or x.get('sigungucode') or ''), 'areacode_old': str(x.get('areacode') or '') or None, 'addr': (x.get('addr1') or '')[:60], 'cpy': x.get('cpyrhtDivCd') or None,
+              'modified': x.get('modifiedtime') or None, 'listed': today(), 'lpass': pas,
+              'cat': x.get('lclsSystm3') or x.get('cat3') or None})
+    c.setdefault('f', {})
+    if (x.get('tel') or '').strip():
+        c['tel'] = x['tel'].strip()[:40]
     try:
         c['lon'], c['lat'] = round(float(x['mapx']), 6), round(float(x['mapy']), 6)
     except Exception:
         pass
+    c.pop('photo', None)
     lic = PHOTO_OK.get(x.get('cpyrhtDivCd') or '')
     if lic and (x.get('firstimage') or '').startswith('http'):
         p = {'url': x['firstimage'], 'license': lic, 'credit': '한국관광공사'}
@@ -275,71 +295,85 @@ class Store:
 
 
 # ---------- 하루 실행 ----------
-def fetch_place(cl, x, ct, pas):
-    cid = str(x['contentid'])
-    r1 = cl.get('detailIntro2', contentId=cid, contentTypeId=ct)
-    if r1 is None:
-        return None
-    info = None
-    if ct in NEED_INFO:
-        r2 = cl.get('detailInfo2', contentId=cid, contentTypeId=ct)
-        if r2 is None:
-            return None
-        info = r2[1]
-    return card(x, ct, normalize(ct, r1[1], info), pas)
-
-
-def run(state, store, cl):
-    st = state
-    st.setdefault('pass', 1); st.setdefault('task', 0); st.setdefault('page', 1); st.setdefault('retry', []); st.setdefault('totals', {})
-    T = tasks(); new = 0; stop = None
+def load_prio():
     try:
-        # 1) 어제 실패한 장소 먼저(목록 항목 일부를 retry 에 들고 있다)
-        keep = []
-        for r in list(st['retry']):
-            need = 2 if r['type'] in NEED_INFO else 1
-            if cl.left() < need:
-                keep.append(r); continue
-            c = fetch_place(cl, r['x'], r['type'], st['pass'])
-            if c:
-                store.put(r['area'], c); new += 1
-            elif r.get('n', 0) < 3:
-                keep.append(dict(r, n=r.get('n', 0) + 1))
-        st['retry'] = keep
-        # 2) 작업(시도×종류) 순서대로, 쪽 단위
+        with open(PRIO) as fh:
+            return set(map(str, json.load(fh)))
+    except Exception:
+        return set()
+
+
+def queue(store, st, prio, step):
+    """이번 회차에 아직 안 받은 카드들을 우선순위대로. step = 'detail'(detailIntro2) | 'info'(detailInfo2, 12·28만)."""
+    P = st['pass']; mark, fk = ('dpass', 'dfail') if step == 'detail' else ('ipass', 'ifail')
+    L = []
+    for a in AREAS:
+        for cid, c in store.area(a).items():
+            if c.get(mark) == P or (c.get(fk) or [0, 0])[0] == P and c[fk][1] >= 3:
+                continue
+            if step == 'info' and c['type'] not in NEED_INFO:
+                continue
+            L.append((DETAIL_ORDER.get(c['type'], 3), cid not in prio, a in BIG, int(cid) if cid.isdigit() else 0, a, cid))
+    L.sort()
+    return [(a, cid) for *_, a, cid in L]
+
+
+def run(state, store, cl, prio=None):
+    st = state
+    prio = load_prio() if prio is None else prio
+    for k, v in (('pass', 1), ('phase', 'list'), ('task', 0), ('page', 1), ('totals', {})):
+        st.setdefault(k, v)
+    st.pop('retry', None)
+    T = tasks(); new = {'list': 0, 'detail': 0, 'info': 0}; stop = None
+    try:
         while True:
-            if st['task'] >= len(T):  # 전국 한 바퀴 끝 → 다음 회차(내용 갱신)
-                st['completed_passes'] = st.get('completed_passes', 0) + 1
-                st['pass'] += 1; st['task'] = 0; st['page'] = 1
-            a, ct = T[st['task']]
-            if cl.left() < 2:
-                raise Stop('LIMIT')
-            r = cl.get('areaBasedList2', areaCode=a, contentTypeId=ct, numOfRows=ROWS, pageNo=st['page'], arrange='A')
-            if r is None:
-                raise Stop('LISTFAIL')
-            body, items = r
-            st['totals'][f'{a}-{ct}'] = int(body.get('totalCount') or 0)
-            have = store.area(a)
-            for x in items:
-                cid = str(x.get('contentid') or '')
-                if not cid or (have.get(cid) or {}).get('pass') == st['pass']:
-                    continue
-                need = 2 if ct in NEED_INFO else 1
-                if cl.left() < need:
-                    raise Stop('LIMIT')  # 같은 쪽을 내일 다시 읽고, 받은 곳은 건너뛴다
-                c = fetch_place(cl, x, ct, st['pass'])
-                if c:
-                    store.put(a, c); new += 1
-                elif len(st['retry']) < 300:
-                    st['retry'].append({'area': a, 'type': ct, 'x': {k: x.get(k) for k in ('contentid', 'title', 'areacode', 'sigungucode', 'addr1', 'mapx', 'mapy', 'cpyrhtDivCd', 'firstimage', 'firstimage2', 'modifiedtime')}})
-            if not items or st['page'] * ROWS >= int(body.get('totalCount') or 0):
-                st['task'] += 1; st['page'] = 1
-            else:
-                st['page'] += 1
+            if st['phase'] == 'list':
+                if st['task'] >= len(T):
+                    st['phase'] = 'detail'; st['list_done'] = today(); continue
+                a, ct = T[st['task']]
+                r = cl.get('areaBasedList2', lDongRegnCd=a, contentTypeId=ct, numOfRows=ROWS, pageNo=st['page'], arrange='A')
+                if r is None:
+                    raise Stop('LISTFAIL')
+                body, items = r
+                tot = int(body.get('totalCount') or 0); st['totals'][f'{a}-{ct}'] = tot
+                have = store.area(a)
+                for x in items:
+                    cid = str(x.get('contentid') or '')
+                    if cid:
+                        store.put(a, card(x, ct, st['pass'], have.get(cid))); new['list'] += 1
+                if not items or st['page'] * ROWS >= tot:
+                    st['task'] += 1; st['page'] = 1
+                else:
+                    st['page'] += 1
+                continue
+            step = st['phase']
+            Q = queue(store, st, prio, step)
+            if not Q:
+                if step == 'detail':
+                    st['phase'] = 'info'; st['detail_done'] = today(); continue
+                st['completed_passes'] = st.get('completed_passes', 0) + 1  # 한 바퀴 끝 → 목록부터 다시(갱신)
+                st['pass'] += 1; st['phase'] = 'list'; st['task'] = 0; st['page'] = 1
+                continue
+            op, mark, fk = ('detailIntro2', 'dpass', 'dfail') if step == 'detail' else ('detailInfo2', 'ipass', 'ifail')
+            for a, cid in Q:
+                c = store.area(a)[cid]
+                r = cl.get(op, contentId=cid, contentTypeId=c['type'])
+                if r is None:
+                    n = c[fk][1] + 1 if (c.get(fk) or [0])[0] == st['pass'] else 1
+                    c[fk] = [st['pass'], n]; store.dirty.add(a); continue
+                if step == 'detail':
+                    keep = {k: v for k, v in c['f'].items() if k == 'fees_krw'}
+                    c['f'] = dict(normalize(c['type'], r[1], None), **keep)
+                else:
+                    fs = normalize(c['type'], None, r[1]).get('fees_krw')
+                    if fs:
+                        c['f']['fees_krw'] = fs
+                c[mark] = st['pass']; c['collected'] = today(); c.pop(fk, None)
+                store.dirty.add(a); new[step] += 1
     except Stop as e:
         stop = str(e)
     store.save()
-    st['last'] = {'date': today(), 'new_places': new, 'stop': stop}
+    st['last'] = {'date': today(), 'new': new, 'stop': stop}
     return stop
 
 
@@ -353,21 +387,24 @@ def build_outputs(store, layers_dir, agg_path):
             continue
         lr = {}
         for cid, c in rows.items():
-            e = {'n': c['name'], 't': c['type'], 'sg': c['sigungu'], 'f': c['f']}
+            e = {'n': c['name'], 't': c['type'], 'sg': c['sigungu'], 'a': c.get('addr'), 'c': c.get('cat'), 'f': c['f']}
             if 'lat' in c:
                 e['lat'], e['lon'] = c['lat'], c['lon']
             if c.get('photo'):
                 e['photo'] = c['photo']
             lr['kto:' + cid] = e
             agg['kto:' + cid] = dict(name=c['name'], city=c['addr'][:20], tourapi_cid=cid, type=TYPE_KO[c['type']], cpy=c.get('cpy'),
-                                     area=AREA_KO[a], sigungu=c['sigungu'], collected=c['collected'],
+                                     area=AREA_KO[a], sigungu=c['sigungu'], cat=c.get('cat'), lat=c.get('lat'), lon=c.get('lon'),
+                                     listed=c.get('listed'), collected=c.get('collected'), detail=bool(c.get('dpass')),
                                      **({'photo': c['photo']} if c.get('photo') else {}), **c['f'])
         doc = {'schema': 'tourapi-1', 'license': 'KOGL', 'attribution': ATTR, 'source': 'KorService2', 'area': a, 'area_ko': AREA_KO[a],
                'built': today(), 'rows': lr}
         b = gzip.compress(json.dumps(doc, ensure_ascii=False, separators=(',', ':')).encode('utf-8'), 9)
-        open(os.path.join(layers_dir, f'kto_{a}.json.gz'), 'wb').write(b)
+        with open(os.path.join(layers_dir, f'kto_{a}.json.gz'), 'wb') as fh:
+            fh.write(b)
         n_all += len(lr)
-    json.dump({'_source': ATTR, **agg}, open(agg_path, 'w', encoding='utf-8'), ensure_ascii=False, separators=(',', ':'))
+    with open(agg_path, 'w', encoding='utf-8') as fh:
+        json.dump({'_source': ATTR, **agg}, fh, ensure_ascii=False, separators=(',', ':'))
     return n_all
 
 
@@ -389,7 +426,7 @@ def main():
     json.dump(state, open(a.state, 'w'), ensure_ascii=False, indent=1, sort_keys=True)
     n = build_outputs(store, a.layers, a.agg)
     T = tasks(); tot = sum(state['totals'].values())
-    print(f"tourapi: calls={state['calls']} new={state['last']['new_places']} stored={n} task={state['task']}/{len(T)} pass={state['pass']} known_total={tot} stop={stop}")
+    print(f"tourapi: calls={state['calls']} new={state['last']['new']} stored={n} phase={state['phase']} task={state['task']}/{len(T)} pass={state['pass']} known_total={tot} stop={stop}")
     return 2 if stop in ('KEY', 'FAIL20', 'LISTFAIL') else 0
 
 
