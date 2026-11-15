@@ -1,7 +1,8 @@
 name: deploy-functions
 # 서버 함수(flightLookup·geoLookup) 배포 — Cloud Shell 수작업 대체.
-# firebase.json codebase "tools" 만 다루고, 함수 이름을 하나씩 지정(--only functions:tools:<이름>)해 배포한다.
-# 기존 codebase "proxy"(placesSearch·g·roadRoute 등, 원본은 Cloud Shell ~/tr)는 건드리지도 지우지도 않는다. --force 없음.
+# 지금 배포돼 있는 codebase "proxy" 그대로 쓰되, 반드시 함수 이름을 지정(--only functions:proxy:<이름>)해 배포한다.
+# 이 저장소엔 proxy 의 일부(두 함수)만 있으므로 이름 없는 전체 배포(--only functions:proxy)는 금지 — 아래 deploy 단계가 막는다. --force 없음.
+# 이름 지정 배포는 지정 밖 함수를 계획에서 빼므로(firebase-tools planner: endpointMatchesAnyFilter) placesSearch·g·roadRoute 등은 그대로.
 # 비밀값은 읽지도 출력하지도 않는다(Secret 이름·켜진 버전 여부만 확인, 값은 함수 런타임이 Secret Manager 에서 받음).
 on:
   push:
@@ -23,7 +24,7 @@ concurrency:
 env:
   PROJECT: trip-mate-0vum9k
   REGION: asia-northeast3
-  CODEBASE: tools
+  CODEBASE: proxy
   GCS_BUCKET: ${{ vars.GCS_BUCKET || 'trip-mate-0vum9k.firebasestorage.app' }}
   # 입력·변수는 env 로만 넘긴다(셸에 직접 끼워 넣지 않음)
   ONLY: ${{ inputs.only || 'flightLookup,geoLookup' }}
@@ -94,7 +95,8 @@ jobs:
       - name: deploy (이름 지정만, --force 없음)
         working-directory: .
         run: |
-          case "$ONLY" in *[!A-Za-z0-9,]*|"") echo "::error::only 형식 오류"; exit 1;; esac
+          case "$ONLY" in *[!A-Za-z0-9,]*|""|,*|*,|*,,*) echo "::error::only 형식 오류(함수 이름을 쉼표로)"; exit 1;; esac
+          for n in $(echo "$ONLY" | tr ',' ' '); do case $n in flightLookup|geoLookup) ;; *) echo "::error::$n 은 이 저장소 함수가 아님"; exit 1;; esac; done
           F=$(echo "$ONLY" | tr ',' '\n' | sed "s/^/functions:$CODEBASE:/" | paste -sd, -)
           echo "targets=$F"
           npx -y firebase-tools@15 deploy --project "$PROJECT" --only "$F" --non-interactive 2>&1 | tee /tmp/deploy.log | grep -E "✔|Error|error|Deploy complete|ecret|⚠|delet" | head -40

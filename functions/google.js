@@ -1,6 +1,6 @@
 'use strict';
 // makeVerify 만 담은 얇은 판. Cloud Shell ~/tr/functions/google.js(11/14판) 의 makeVerify 와 같은 코드(Firebase ID 토큰 + 설정 시 App Check).
-// 구글 대리 함수(placesSearch 등)는 이 codebase 에 없다 — 그쪽 원본은 여전히 Cloud Shell(codebase proxy).
+// 구글 대리 함수(placesSearch 등)는 이 저장소에 없다 — 그쪽 원본은 여전히 Cloud Shell ~/tr.
 function makeVerify(requireAppCheck) {
   const { getAuth } = require('firebase-admin/auth');
   const { getAppCheck } = require('firebase-admin/app-check');

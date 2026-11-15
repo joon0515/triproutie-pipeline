@@ -1,7 +1,7 @@
 {
   "name": "triproutie-tools-functions",
   "private": true,
-  "description": "Trip Routie: flightLookup, geoLookup (codebase tools, deployed by GitHub Actions)",
+  "description": "Trip Routie: flightLookup, geoLookup (part of codebase proxy; deploy by name only via GitHub Actions)",
   "main": "index.js",
   "engines": { "node": "22" },
   "scripts": {
