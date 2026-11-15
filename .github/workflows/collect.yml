@@ -5,7 +5,7 @@
 name: collect
 on:
   schedule:
-    - cron: "0 * * * *"
+    - cron: "23 * * * *"   # 정각은 GitHub 예약이 밀리거나 빠지기 쉬워 23분으로
   workflow_dispatch: {}
 permissions:
   contents: write     # collect/status.json 커밋 전용
