@@ -1,0 +1,11 @@
+{
+  "name": "triproutie-tools-functions",
+  "private": true,
+  "description": "Trip Routie: flightLookup, geoLookup (codebase tools, deployed by GitHub Actions)",
+  "main": "index.js",
+  "engines": { "node": "22" },
+  "scripts": {
+    "test": "node test_geo_fn.js && node test_flight_fn.js ${ROUTES:-routes_iata.json.gz}"
+  },
+  "dependencies": { "firebase-admin": "^14.5.0", "firebase-functions": "^7.4.0" }
+}

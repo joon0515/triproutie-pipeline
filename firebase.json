@@ -1,0 +1,5 @@
+{
+  "functions": [
+    { "source": "functions", "codebase": "tools", "ignore": ["node_modules", ".git", "*.local", "test_*.js", "*.json.gz"] }
+  ]
+}

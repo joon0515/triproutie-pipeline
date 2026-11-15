@@ -1,0 +1,119 @@
+name: deploy-functions
+# 서버 함수(flightLookup·geoLookup) 배포 — Cloud Shell 수작업 대체.
+# firebase.json codebase "tools" 만 다루고, 함수 이름을 하나씩 지정(--only functions:tools:<이름>)해 배포한다.
+# 기존 codebase "proxy"(placesSearch·g·roadRoute 등, 원본은 Cloud Shell ~/tr)는 건드리지도 지우지도 않는다. --force 없음.
+# 비밀값은 읽지도 출력하지도 않는다(Secret 이름·켜진 버전 여부만 확인, 값은 함수 런타임이 Secret Manager 에서 받음).
+on:
+  push:
+    branches: [main]
+    paths: ["functions/**", "firebase.json", ".github/workflows/deploy_functions.yml"]
+  pull_request:
+    paths: ["functions/**", "firebase.json", ".github/workflows/deploy_functions.yml"]
+  workflow_dispatch:
+    inputs:
+      only:
+        description: "배포할 함수(쉼표 구분)"
+        default: "flightLookup,geoLookup"
+permissions:
+  contents: read
+  id-token: write
+concurrency:
+  group: deploy-functions
+  cancel-in-progress: false
+env:
+  PROJECT: trip-mate-0vum9k
+  REGION: asia-northeast3
+  CODEBASE: tools
+  GCS_BUCKET: ${{ vars.GCS_BUCKET || 'trip-mate-0vum9k.firebasestorage.app' }}
+  # 입력·변수는 env 로만 넘긴다(셸에 직접 끼워 넣지 않음)
+  ONLY: ${{ inputs.only || 'flightLookup,geoLookup' }}
+  GEO_COORD: ${{ vars.GEO_COORD }}
+  GEO_UA: ${{ vars.GEO_UA }}
+  REQUIRE_APP_CHECK: ${{ vars.REQUIRE_APP_CHECK || 'false' }}
+jobs:
+  test:
+    # PR·모든 브랜치: 키·GCP 없이 도는 시험(주소 검색 63건 + 진입점 불러오기). 항공 시험은 노선표가 GCS 에 있어 main 의 deploy 에서.
+    runs-on: ubuntu-latest
+    defaults: { run: { working-directory: functions } }
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: "22", cache: npm, cache-dependency-path: functions/package-lock.json }
+      - run: npm ci --no-audit --no-fund
+      - name: geo test (63/0)
+        run: |
+          node test_geo_fn.js | tail -1 | tee /tmp/geo.txt
+          grep -qx 'geo_fn: 63/0' /tmp/geo.txt
+      - name: entry loads
+        run: node -e "const e=require('./index.js'); for (const k of ['flightLookup','geoLookup']) if(!e[k]) throw new Error(k)"
+  deploy:
+    needs: test
+    # Workload Identity 조건이 main 만 허용 → 배포는 main 의 push·수동 실행에서만.
+    if: github.repository == 'joon0515/triproutie-pipeline' && github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    defaults: { run: { working-directory: functions } }
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: "22", cache: npm, cache-dependency-path: functions/package-lock.json }
+      - uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ vars.GCP_WIF_PROVIDER || 'projects/222914945328/locations/global/workloadIdentityPools/github-pool/providers/github-provider' }}
+          service_account: ${{ vars.GCP_SA_EMAIL || 'pipeline-uploader@trip-mate-0vum9k.iam.gserviceaccount.com' }}
+          create_credentials_file: true
+      - uses: google-github-actions/setup-gcloud@v2
+      - run: npm ci --no-audit --no-fund
+      - name: flight test (88/0, 실제 노선표)
+        run: |
+          gcloud storage cp "gs://$GCS_BUCKET/flight/v1/routes_iata.json.gz" /tmp/routes_iata.json.gz --quiet
+          node test_flight_fn.js /tmp/routes_iata.json.gz | tail -1 | tee /tmp/flight.txt
+          grep -qx 'flight_fn: 88/0' /tmp/flight.txt
+      - name: geo test (63/0)
+        run: |
+          node test_geo_fn.js | tail -1 | tee /tmp/geo.txt
+          grep -qx 'geo_fn: 63/0' /tmp/geo.txt
+      - name: secrets present (이름·켜진 버전만)
+        id: sec
+        run: |
+          has() { [ -n "$(gcloud secrets versions list "$1" --project "$PROJECT" --filter='state=ENABLED' --format='value(name)' --limit=1 2>/dev/null)" ]; }
+          for s in DATA_GO_KR_KEY JUSO_KEY; do has $s || { echo "::error::Secret $s 없음/켜진 버전 없음(또는 권한 없음) — 배포 중단"; exit 1; }; echo "$s: 있음"; done
+          # 좌표키: vars.GEO_COORD 가 true/false 면 그대로, 비어 있으면 Secret 이 보이면 true
+          C="$GEO_COORD"
+          if [ -z "$C" ]; then if has JUSO_COORD_KEY; then C=true; else C=false; fi; fi
+          if [ "$C" = true ] && ! has JUSO_COORD_KEY; then echo "::error::GEO_COORD=true 인데 JUSO_COORD_KEY 가 안 보임"; exit 1; fi
+          printf '{"coord":%s}\n' "$C" > geo_cfg.json
+          echo "coord=$C" >> "$GITHUB_OUTPUT"; echo "geo coord=$C"
+      - name: params (.env, 비밀 아님)
+        run: |
+          case "$REQUIRE_APP_CHECK" in true|false) ;; *) echo "::error::REQUIRE_APP_CHECK 는 true/false"; exit 1;; esac
+          case "$GEO_COORD" in ""|true|false) ;; *) echo "::error::GEO_COORD 는 true/false/빈칸"; exit 1;; esac
+          { echo "REQUIRE_APP_CHECK=$REQUIRE_APP_CHECK"; [ -n "$GEO_UA" ] && printf 'GEO_UA="%s"\n' "${GEO_UA//\"/}"; true; } > .env
+          if grep -qE '^(DATA_GO_KR_KEY|JUSO_KEY|JUSO_COORD_KEY)=' .env; then echo "::error::.env 에 Secret 이름"; exit 1; fi
+          cat .env
+      - name: deploy (이름 지정만, --force 없음)
+        working-directory: .
+        run: |
+          case "$ONLY" in *[!A-Za-z0-9,]*|"") echo "::error::only 형식 오류"; exit 1;; esac
+          F=$(echo "$ONLY" | tr ',' '\n' | sed "s/^/functions:$CODEBASE:/" | paste -sd, -)
+          echo "targets=$F"
+          npx -y firebase-tools@15 deploy --project "$PROJECT" --only "$F" --non-interactive 2>&1 | tee /tmp/deploy.log | grep -E "✔|Error|error|Deploy complete|ecret|⚠|delet" | head -40
+          [ "${PIPESTATUS[0]}" = 0 ] || { echo "::error::배포 실패"; tail -40 /tmp/deploy.log; exit 1; }
+      - name: verify (401·바인딩·인스턴스 상한)
+        run: |
+          FAIL=0
+          d() { gcloud functions describe "$1" --project "$PROJECT" --region "$REGION" --gen2 --format="value($2)" 2>/dev/null; }
+          for fn in $(echo "$ONLY" | tr ',' ' '); do
+            case $fn in
+              flightLookup) BODY='{"no":"KE081","date":"2026-11-16"}'; NEED=DATA_GO_KR_KEY; MAXI=2 ;;
+              geoLookup) BODY='{"q":"부산 해운대구 우동","lang":"ko"}'; NEED=JUSO_KEY; MAXI=1 ;;
+              *) BODY='{}'; NEED=; MAXI= ;;
+            esac
+            SEC=$(d $fn 'serviceConfig.secretEnvironmentVariables[].key'); MI=$(d $fn 'serviceConfig.maxInstanceCount')
+            CODE=$(curl -s -o /tmp/b.txt -w '%{http_code}' -X POST -H 'content-type: application/json' -d "$BODY" "https://$REGION-$PROJECT.cloudfunctions.net/$fn")
+            echo "$fn: no-auth=$CODE secrets=[$SEC] maxInstances=$MI"
+            [ "$CODE" = 401 ] || { echo "::error::$fn 인증 없이 $CODE (401 이어야 함)"; FAIL=1; }
+            [ -z "$NEED" ] || echo "$SEC" | grep -q "$NEED" || { echo "::error::$fn Secret $NEED 바인딩 없음"; FAIL=1; }
+            [ -z "$MAXI" ] || [ "$MI" = "$MAXI" ] || { echo "::error::$fn maxInstances $MI (기대 $MAXI)"; FAIL=1; }
+          done
+          exit $FAIL
