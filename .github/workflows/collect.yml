@@ -1,0 +1,105 @@
+# 트립루티 세계 수집 1단(collect) — 매시 정각. 계획(plan)이 출처×나라 조각을 골라 matrix 로 동시에 돌린다(최대 18 — 무료 플랜 동시 20 안쪽).
+# 원칙: sources/registry.yaml 의 status: active 출처만, robots.txt 는 요청 때마다 실시간 확인, 사이트당 초당 1회 이하·하루 한도, UA 에 저장소 주소.
+# 금지 목록 도메인은 코드가 자동 제외. 결과 원본은 Storage gs://<bucket>/collect/v1/raw/<출처>/<날짜>/ 에만(공개 저장소에는 작은 collect/status.json 만 커밋).
+# 겹치면 앞 실행을 유지하고 새 실행은 1개만 기다린다(cancel-in-progress: false). 한 조각은 48분 예산 → 55분에 강제 종료.
+name: collect
+on:
+  schedule:
+    - cron: "0 * * * *"
+  workflow_dispatch: {}
+permissions:
+  contents: write     # collect/status.json 커밋 전용
+  id-token: write     # Workload Identity Federation(OIDC)
+  issues: write       # 3회 연속 실패 경보
+concurrency:
+  group: collect
+  cancel-in-progress: false
+env:
+  GCS_BUCKET: ${{ vars.GCS_BUCKET || 'trip-mate-0vum9k.firebasestorage.app' }}
+  STORE: gs://${{ vars.GCS_BUCKET || 'trip-mate-0vum9k.firebasestorage.app' }}/collect/v1
+jobs:
+  plan:
+    if: github.repository == 'joon0515/triproutie-pipeline' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    outputs:
+      matrix: ${{ steps.p.outputs.matrix }}
+      any: ${{ steps.p.outputs.any }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ vars.GCP_WIF_PROVIDER || 'projects/222914945328/locations/global/workloadIdentityPools/github-pool/providers/github-provider' }}
+          service_account: ${{ vars.GCP_SA_EMAIL || 'pipeline-uploader@trip-mate-0vum9k.iam.gserviceaccount.com' }}
+      - uses: google-github-actions/setup-gcloud@v2
+      - uses: actions/setup-python@v5
+        with: {python-version: "3.12"}
+      - run: pip install -q pyyaml holidays >/dev/null
+      - name: test (mock, no network)
+        run: python3 -W ignore -m unittest tests/test_collect.py 2>&1 | tail -3
+      - id: p
+        env:
+          HAS_FSQ_TOKEN: ${{ secrets.FSQ_TOKEN != '' }}
+        run: python3 scripts/collect/run.py plan --store "$STORE" >> "$GITHUB_OUTPUT"
+  collect:
+    needs: plan
+    if: needs.plan.outputs.any == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 55
+    strategy:
+      fail-fast: false
+      max-parallel: 18
+      matrix: ${{ fromJson(needs.plan.outputs.matrix) }}
+    concurrency:
+      group: collect-${{ matrix.source }}-${{ matrix.shard }}   # 같은 출처·조각만 겹치지 않게
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@v4
+      - uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ vars.GCP_WIF_PROVIDER || 'projects/222914945328/locations/global/workloadIdentityPools/github-pool/providers/github-provider' }}
+          service_account: ${{ vars.GCP_SA_EMAIL || 'pipeline-uploader@trip-mate-0vum9k.iam.gserviceaccount.com' }}
+      - uses: google-github-actions/setup-gcloud@v2
+      - uses: actions/setup-python@v5
+        with: {python-version: "3.12"}
+      - run: pip install -q pyyaml holidays "duckdb==1.*" >/dev/null
+      - name: collect ${{ matrix.source }} / ${{ matrix.shard }}
+        env:
+          FSQ_TOKEN: ${{ secrets.FSQ_TOKEN }}
+          DUCK_MEM: 10GB
+        run: python3 scripts/collect/run.py job --store "$STORE" --source "${{ matrix.source }}" --shard "${{ matrix.shard }}" --budget-min 48
+  summary:
+    needs: [plan, collect]
+    if: ${{ !cancelled() && needs.plan.result == 'success' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ vars.GCP_WIF_PROVIDER || 'projects/222914945328/locations/global/workloadIdentityPools/github-pool/providers/github-provider' }}
+          service_account: ${{ vars.GCP_SA_EMAIL || 'pipeline-uploader@trip-mate-0vum9k.iam.gserviceaccount.com' }}
+      - uses: google-github-actions/setup-gcloud@v2
+      - uses: actions/setup-python@v5
+        with: {python-version: "3.12"}
+      - run: pip install -q pyyaml >/dev/null
+      - name: summary + status commit
+        run: |
+          python3 scripts/collect/run.py summary --store "$STORE" --out collect/status.json --alert "$RUNNER_TEMP/alert.md" | tee -a "$GITHUB_STEP_SUMMARY"
+          git config user.name "github-actions[bot]"; git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add collect/status.json
+          if ! git diff --cached --quiet; then
+            git commit -q -m "collect: 상태 $(date -u +%FT%H:%MZ)"
+            for i in 1 2 3; do git push -q origin HEAD:main && break; sleep 5; git pull -q --rebase origin main; done
+          fi
+      - name: issue on 3 consecutive failures
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          [ -f "$RUNNER_TEMP/alert.md" ] || exit 0
+          T="수집 경보: 조각 3회 연속 실패"
+          if [ -z "$(gh issue list --state open --search "$T in:title" --json number -q '.[].number')" ]; then
+            gh issue create --title "$T" --body-file "$RUNNER_TEMP/alert.md" --label collect 2>/dev/null || gh issue create --title "$T" --body-file "$RUNNER_TEMP/alert.md"
+          else
+            gh issue comment "$(gh issue list --state open --search "$T in:title" --json number -q '.[0].number')" --body-file "$RUNNER_TEMP/alert.md"
+          fi
