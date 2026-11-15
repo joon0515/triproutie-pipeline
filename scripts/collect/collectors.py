@@ -1,6 +1,6 @@
 """출처별 수집기. 모두 같은 모양: fn(ctx) — ctx.http(예절 HTTP)·ctx.st(이 조각 상태)·ctx.emit(dataset, rows)·ctx.store·ctx.shard·ctx.src.
 결과 원본은 ctx.emit → Storage raw/<source>/<날짜>/ 에만. 저장소(GitHub)에는 상태 요약만 남는다."""
-import bz2, csv, datetime, hashlib, html.parser, io, json, os, re, sys, time, urllib.parse, zipfile
+import bz2, csv, datetime, gzip, hashlib, html.parser, io, json, os, re, shutil, subprocess, sys, tarfile, tempfile, time, urllib.parse, zipfile
 import xml.etree.ElementTree as ET
 
 from common import LANGS, Stop, Blocked, forbidden, host_of, license_open, place, today, valid_coord
@@ -91,7 +91,8 @@ def wikivoyage(ctx):
 
 
 # ---------- Mobility Database → GTFS ----------
-def gtfs_feeds(csv_bytes):
+def gtfs_feeds(csv_bytes, extra_licenses=()):
+    """카탈로그 → 받을 피드. extra_licenses = 등록부에서 대표가 따로 허락한 라이선스 주소 조각(예 IDFM 'Licence Mobilités')."""
     out = []
     for r in csv.DictReader(io.StringIO(csv_bytes.decode('utf-8', 'replace'))):
         if r.get('data_type') != 'gtfs' or (r.get('status') or 'active') not in ('active', '') or r.get('redirect.id'):
@@ -99,11 +100,39 @@ def gtfs_feeds(csv_bytes):
         if (r.get('urls.authentication_type') or '0') not in ('0', ''):
             continue  # 키가 필요한 피드는 받지 않음
         lic, u = r.get('urls.license') or '', r.get('urls.latest') or r.get('urls.direct_download') or ''
-        if not u or forbidden(u) or not license_open(lic):
+        if not u or forbidden(u) or not (license_open(lic) or (lic and any(x in lic for x in extra_licenses))):
             continue
+        bb = []
+        for k in ('minimum_longitude', 'minimum_latitude', 'maximum_longitude', 'maximum_latitude'):
+            try:
+                bb.append(float(r.get('location.bounding_box.' + k) or ''))
+            except ValueError:
+                bb = None
+                break
         out.append({'id': r['id'], 'url': u, 'license': lic, 'provider': r.get('provider', '')[:80], 'cc': r.get('location.country_code', ''),
-                    'city': r.get('location.municipality', '')[:60]})
+                    'city': r.get('location.municipality', '')[:60], 'bbox': bb})
     return out
+
+
+def lic_class(lic):
+    """GTFS 보관 폴더(라이선스별): cc0 | cc-by | cc-by-sa | odbl | etalab | other-open."""
+    s = (lic or '').lower()
+    for key, cls in (('publicdomain/zero', 'cc0'), ('/by-sa/', 'cc-by-sa'), ('/by/', 'cc-by'), ('odbl', 'odbl'), ('etalab', 'etalab'), ('licence-ouverte', 'etalab')):
+        if key in s:
+            return cls
+    return 'other-open'
+
+
+def gtfs_target(feed, targets):
+    """보관 대상 도시(등록부 mobility_gtfs.targets) 중 피드 bbox 가 겹치는 첫 도시 이름. 없으면 None."""
+    bb = feed.get('bbox')
+    if not bb:
+        return None
+    for t in targets or []:
+        w, s_, e, n = t['bbox']
+        if not (bb[2] < w or bb[0] > e or bb[3] < s_ or bb[1] > n):
+            return t['city']
+    return None
 
 
 def parse_gtfs(zbytes, src, feed):
@@ -128,23 +157,44 @@ def parse_gtfs(zbytes, src, feed):
 
 
 def gtfs(ctx):
-    feeds = [f for f in gtfs_feeds(ctx.http.get(ctx.src['url'])) if shard_of(f['id'], ctx.nshards) == int(ctx.shard)]
+    targets = ctx.src.get('targets') or []
+    feeds = [f for f in gtfs_feeds(ctx.http.get(ctx.src['url']), ctx.src.get('extra_licenses') or ()) if shard_of(f['id'], ctx.nshards) == int(ctx.shard)]
     done = ctx.st.setdefault('done', {})
-    feeds.sort(key=lambda f: done.get(f['id'], ''))  # 오래된 것부터
-    summary = []
     for f in feeds:
+        f['target'] = gtfs_target(f, targets)
+    feeds.sort(key=lambda f: (f['target'] is None, done.get(f['id'], '')))  # 보관 대상 도시(서울·부산·교토·도쿄·오사카·파리·방콕) 먼저, 그다음 오래된 것부터
+    summary, idx_key = [], f"gtfs/index/{ctx.shard}.json"
+    idx = ctx.store.get_json(idx_key, {}) or {}
+    try:
+        _gtfs_loop(ctx, feeds, done, idx, summary)
+    finally:  # 시간·한도로 멈춰도 보관 목록·요약은 남긴다
+        if idx:
+            ctx.store.put_json(idx_key, idx)
+        if summary:
+            ctx.emit('transit_feeds', summary)
+
+
+def _gtfs_loop(ctx, feeds, done, idx, summary):
+    for f in feeds:
+        ctx.tick()
         if not _due(done, f['id'], 7):
             continue
         try:
-            rows, info = parse_gtfs(ctx.http.get(f['url']), ctx.src, f)
+            z = ctx.http.get(f['url'])
+            rows, info = parse_gtfs(z, ctx.src, f)
         except (Blocked, zipfile.BadZipFile, IOError, KeyError) as e:
             ctx.note(f"feed {f['id']} skip: {type(e).__name__}"); done[f['id']] = today(); continue
         if rows:
             ctx.emit('transit', rows)
-        summary.append({'id': f'mobility_gtfs:{f["id"]}', 'feed': f['id'], 'cc': f['cc'], 'city': f['city'], 'prov': f['provider'], 'flic': f['license'][:120], **info})
+        if f['target']:  # (11/15) 원본 zip 을 라이선스별 폴더에 보관 — 앱 팀이 구간 '노선 근거'·'시간표' 등급에 쓴다(docs/TRANSIT_GRADES.md)
+            key = f"gtfs/{lic_class(f['license'])}/{f['id']}/{today()}.zip"
+            ctx.store.put(key, z)
+            idx[f['id']] = {'city': f['target'], 'key': key, 'license': f['license'][:200], 'lic_class': lic_class(f['license']), 'provider': f['provider'],
+                            'cc': f['cc'], 'bbox': f['bbox'], 'bytes': len(z), 'sha256': hashlib.sha256(z).hexdigest(), 'fetched': today(), **info}
+            ctx.counts['gtfs_archived'] = ctx.counts.get('gtfs_archived', 0) + 1
+        summary.append({'id': f'mobility_gtfs:{f["id"]}', 'feed': f['id'], 'cc': f['cc'], 'city': f['city'], 'prov': f['provider'], 'flic': f['license'][:120],
+                        **({'target': f['target']} if f['target'] else {}), **info})
         done[f['id']] = today()
-    if summary:
-        ctx.emit('transit_feeds', summary)
 
 
 # ---------- 대만 관광서 ----------
@@ -683,5 +733,68 @@ def open_dataset(ctx):
         ctx.tick()
 
 
-REGISTRY = {f.__name__: f for f in (wikivoyage, gtfs, taiwan, advisories_ca, advisories_uk, holidays_lib, overture, fsq, wikidata_seeds, crawl, discover, open_dataset)}
+# ---------- 사진 층(11/15) — Wikidata P18 → Commons(CC0·CC BY·CC BY-SA) + 한국 TourAPI firstimage(공공누리 1·3유형) ----------
+def _gs(*args, stdin=None, timeout=1800):
+    return subprocess.run(['gcloud', 'storage', *args], input=stdin, capture_output=True, timeout=timeout)
+
+
+def _gs_json(path):
+    r = _gs('cat', path)
+    try:
+        return json.loads(r.stdout) if r.returncode == 0 and r.stdout else None
+    except ValueError:
+        return None
+
+
+def photos(ctx):
+    """조각 = 세계 타일 지역(tools/world_regions.json 이름). 그 지역 타일 → tools/photo_layer.py → Storage collect/v1/layers/photos-<지역>.json.gz.
+    위키미디어 요청은 photo_layer(pop_build) 가 직접 한다(1.2초 간격·429 Retry-After·캐시). 캐시는 조각마다 Storage cache/photos/ 에 두고 이어 쓴다."""
+    if not ctx.store.gs:
+        raise Stop('NO_GCS')
+    bucket = ctx.store.root[5:].split('/', 1)[0]
+    region, base = ctx.shard, f'gs://{bucket}/places/v1'
+    ver = (_gs_json(f'{base}/manifest.json') or {}).get('version')
+    man = (_gs_json(f'{base}/{ver}/regions/{region}.json') or _gs_json(f'{base}/{ver}/parts/{region}.json')) if ver else None
+    files = [t.get('file') for t in (man or {}).get('tiles') or [] if isinstance(t.get('file'), str) and t['file'].startswith('w-') and '/' not in t['file']]
+    if not files:
+        ctx.note(f'{region}: 타일 없음(판 {ver})'); return
+    w = tempfile.mkdtemp(prefix='ph_')
+    for k in ('tiles', 'hours', 'kto', 'cache'):
+        os.makedirs(os.path.join(w, k))
+    _gs('cp', '-q', '-I', os.path.join(w, 'tiles') + '/', stdin='\n'.join(f'{base}/{ver}/tiles/{f}' for f in files).encode())
+    lt = (_gs_json(f'{base}/layers.json') or {}).get('version')
+    regs = json.load(open(os.path.join(TOOLS, 'layers_regions.json'), encoding='utf-8'))
+    hs = [f'{base}/{lt}/hours_src/hours-{k}.json.gz' for k, v in regs.items() if not k.startswith('_') and v.get('world') == region] if lt else []
+    if hs:
+        _gs('cp', '-q', '-I', os.path.join(w, 'hours') + '/', stdin='\n'.join(hs).encode())
+    if region == 'korea':
+        _gs('cp', '-q', f'{base}/layers_extra/kto_*.json.gz', os.path.join(w, 'kto') + '/')
+    ck = f'cache/photos/{region}.tar.gz'
+    b = ctx.store.get(ck)
+    if b:
+        tarfile.open(fileobj=io.BytesIO(b)).extractall(os.path.join(w, 'cache'), filter='data')
+    out = os.path.join(w, f'photos-{region}.json.gz')
+    left = max(60, int(ctx.deadline - time.time()) - 240)
+    env = dict(os.environ, POP_CACHE=os.path.join(w, 'cache'), TL_WIKI_UA=ctx.reg.get('user_agent') or 'TripRoutie-collector/1.0')
+    cmd = [sys.executable, os.path.join(TOOLS, 'photo_layer.py'), out, region, os.path.join(w, 'tiles'), '--hours', os.path.join(w, 'hours'), '--kto', os.path.join(w, 'kto')]
+    try:
+        r = subprocess.run(cmd, env=env, capture_output=True, text=True, timeout=left)
+        ctx.note(((r.stdout or r.stderr or '').strip().splitlines() or ['no output'])[-1])
+        done = r.returncode == 0
+    except subprocess.TimeoutExpired:
+        done = False
+        ctx.note('TIME — 캐시만 저장, 다음 회차에 이어서')
+    bio = io.BytesIO()
+    with tarfile.open(fileobj=bio, mode='w:gz') as t:
+        t.add(os.path.join(w, 'cache'), arcname='.')
+    ctx.store.put(ck, bio.getvalue())
+    if done and os.path.exists(out):
+        ctx.store.put(f'layers/photos-{region}.json.gz', open(out, 'rb').read())
+        ctx.counts['photos'] = len(json.loads(gzip.decompress(open(out, 'rb').read())).get('rows') or {})
+    shutil.rmtree(w, ignore_errors=True)
+    if not done:
+        raise Stop('TIME')
+
+
+REGISTRY = {f.__name__: f for f in (wikivoyage, gtfs, taiwan, advisories_ca, advisories_uk, holidays_lib, overture, fsq, wikidata_seeds, crawl, discover, open_dataset, photos)}
 DISCOVERY = {'wikidata_seeds', 'crawl', 'discover'}  # 매시 예산의 30% 몫

@@ -92,6 +92,18 @@ sources:
     script: gtfs
     shards: 8
     status: active
+    # (11/15) 보관 대상 도시 — 피드 bbox 가 겹치면 원본 zip 을 Storage collect/v1/gtfs/<라이선스 갈래>/<피드>/<날짜>.zip 에 보관하고 먼저 받는다.
+    targets:
+      - {city: seoul, bbox: [126.76, 37.41, 127.19, 37.71]}
+      - {city: busan, bbox: [128.85, 35.03, 129.31, 35.33]}
+      - {city: kyoto, bbox: [135.62, 34.88, 135.86, 35.15]}
+      - {city: tokyo, bbox: [139.00, 35.50, 139.95, 35.90]}
+      - {city: osaka, bbox: [135.35, 34.55, 135.65, 34.80]}
+      - {city: paris, bbox: [2.10, 48.70, 2.60, 49.00]}
+      - {city: bangkok, bbox: [100.30, 13.55, 100.95, 14.00]}
+    # 자동 판정(license_open)에 걸리지 않지만 대표가 허락한 라이선스 주소 조각. 비어 있으면 아무것도 더 받지 않는다.
+    # 후보: "Licence_Mobilit" — 일드프랑스 모빌리테(IDFM, 파리 지하철·RER·버스 전체, tdg-80921/80931/83316). 허락하면 이 줄을 목록에 넣는다.
+    extra_licenses: []
   - id: taiwan_tourism
     name: 대만 교통부 관광서 관광자료(景點 - 觀光資訊資料庫, data.gov.tw 7777)
     kind: dump
@@ -168,6 +180,20 @@ sources:
     script: open_dataset
     shards: 4
     status: active
+  - id: commons_photos
+    name: 장소 사진 층 — Wikidata P18 → Wikimedia Commons(CC0·CC BY·CC BY-SA) + 한국 TourAPI firstimage(공공누리 1·3유형)  (11/15)
+    kind: api
+    url: https://www.wikidata.org/w/api.php · https://commons.wikimedia.org/w/api.php
+    license: "사진마다 — CC0-1.0 · CC-BY · CC-BY-SA(판 무관)만 싣고, 행마다 photo_license·photo_credit(저작자)·photo_page 를 남긴다. 한국: KOGL 제1·3유형(3유형 no_modify)"
+    attribution: "사진: 저작자 · 라이선스 (위키미디어 공용) / 사진: 한국관광공사 · 공공누리 제N유형"
+    license_url: https://commons.wikimedia.org/wiki/Commons:Reusing_content_outside_Wikimedia
+    robots: "API 사용(robots 대상 아님). Wikimedia API 예절: 식별 UA(이 등록부 user_agent), 한 번에 한 요청(시간당 조각 1개 — run.HEAVY_CAP), 1.2초 간격, 429 면 Retry-After"
+    refresh: weekly
+    daily_limit: 1
+    interval_s: 1
+    script: photos
+    shards: [korea, japan, taiwan_hk_mo, sea_mainland, sea_islands, europe_west, europe_south, europe_central, europe_north, us_west, us_east, us_hi_ak, oceania, micronesia, china, mongolia_central_asia, europe_southeast, canada, mexico_caribbean, south_asia, middle_east, africa_north, africa_sub, south_america, russia]
+    status: active
   # ---- 후보: 확인이 끝나지 않아 받지 않는다 ----
   - {id: nager_date, name: Nager.Date 공휴일 API, kind: api, url: "https://date.nager.at/api/v3", license: "미확인(코드 MIT 로 알려짐, 자료 라이선스·약관 페이지 확인 못 함)", status: candidate}
   - {id: transitland, name: Transitland GTFS 아카이브, kind: api, url: "https://transit.land/api/v2", license: "피드별 — API 키·약관 확인 필요", secret: TRANSITLAND_KEY, status: candidate}
@@ -176,7 +202,6 @@ sources:
   - {id: jnto_jta, name: 일본 JNTO·관광청 오픈데이터, kind: dump, url: "", license: "공식 오픈데이터 위치·라이선스 확인 못 함", status: candidate}
   - {id: us_state_travel, name: 미국 국무부 여행경보 RSS, kind: feed, url: "https://travel.state.gov/_res/rss/TAsTWs.xml", license: "미국 정부 저작물(공공영역)로 알려짐 — robots 확인 결과 불명확", status: candidate}
   - {id: kr_mofa_alert, name: 외교부 국가·지역별 여행경보(data.go.kr), kind: api, url: "https://apis.data.go.kr/1262000/", license: "공공누리 — data.go.kr 활용신청 필요", secret: DATA_GO_KR_KEY, status: candidate}
-  - {id: commons_photos, name: Wikimedia Commons 사진(라이선스별), kind: api, url: "https://commons.wikimedia.org/w/api.php", license: "사진마다(CC BY/BY-SA/CC0/PD) — 인기 층 pop_* 에서 이미 처리", status: candidate}
   - {id: osm, name: OpenStreetMap(places-layers 가 이미 처리), kind: dump, url: "https://download.geofabrik.de", license: ODbL-1.0, refresh: monthly, status: external, note: "places-layers.yml 이 수동 실행으로 갱신 — 월 1회 권장"}
 catalogs:  # 발견기 질의 대상(응답이 CKAN 모양이 아니면 그 회차는 건너뜀)
   - {id: open_canada, kind: ckan, url: "https://open.canada.ca/data/api/action/package_search"}

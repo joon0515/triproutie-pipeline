@@ -18,7 +18,7 @@
 """
 import argparse, base64, datetime, glob, gzip, hashlib, json, os, subprocess, sys
 
-OK_SCHEMA = {'popularity-1': 'popularity', 'amenities-1': 'amenities', 'lockers-1': 'lockers', 'names-1': 'names', 'tourapi-1': 'tourapi', 'collect-1': 'collect'}
+OK_SCHEMA = {'popularity-1': 'popularity', 'amenities-1': 'amenities', 'lockers-1': 'lockers', 'names-1': 'names', 'tourapi-1': 'tourapi', 'collect-1': 'collect', 'hours-1': 'hours', 'photos-1': 'photos'}  # hours·photos: 11/15
 MAX_BYTES = 8 * 1024 * 1024  # 앱의 파일 크기 상한(타일과 같음)
 
 
@@ -65,6 +65,15 @@ def describe(fn):
                 la += a; lo += b; ys.append(la / 1e5); xs.append(lo / 1e5)
             e['bbox'] = [round(min(xs), 4), round(min(ys), 4), round(max(xs), 4), round(max(ys), 4)]
         e['license'] = 'mixed (sources/registry.yaml)'
+    if kind in ('hours', 'photos'):  # 영업시간 층(hours_osm.py + hours_merge.py) · 사진 층(photo_layer.py) — rows 는 {장소 id: {...}}
+        bb = j.get('bbox')
+        if isinstance(bb, list) and len(bb) == 4 and all(isinstance(x, (int, float)) for x in bb):
+            e['bbox'] = bb
+        e['license'] = j.get('license') or 'mixed'
+        if kind == 'hours':
+            e['with_oh'] = sum(1 for r in rows.values() if isinstance(r, dict) and r.get('oh'))
+        else:
+            e['region'] = j.get('region')
     if kind == 'popularity':
         e['packs'] = sorted((j.get('report') or {}).keys()) or None
         e['photos'] = sum(1 for r in rows.values() if isinstance(r, dict) and 'photo' in r)

@@ -47,3 +47,12 @@ IN_TAG=2026-11-20 IN_GROUPS=priority python3 scripts/layers_plan.py     # matrix
 bash -n scripts/run_layers_region.sh && bash -n scripts/finalize_layers.sh
 python3 scripts/publish_layers.py --tag t --dir <층 폴더> --bucket b --tools <canonical_fix.py 폴더> --dry-run
 ```
+
+## 11/15 추가 — 영업시간 층(hours-1)·사진 층(photos-1), 자동 실행
+- 일정: `places-layers.yml` 이 **매월 2일**(UTC 17:40) 전 지역(all, 라오스 `la` 추가로 29개) 다시 만들고, **매주 월요일**(UTC 19:10) `mode=merge` 로 빌드 없이 최신 판에 공식 사이트 영업시간·사진 층을 다시 합쳐 서명한다. 수동 실행은 그대로(tag 를 비우면 `L-<날짜>`).
+- 영업시간: 지역 빌드가 `tools/hours_osm.py` 로 세계 타일 행 ↔ OSM(opening_hours·wikidata, 80m+이름) 을 맞춰 `places/v1/<tag>/hours_src/` 에 올리고,
+  finalize 가 `tools/hours_merge.py` 로 세계 수집 가공본(`collect/v1/processed/out/<run>/col_*` — 공식 사이트 JSON-LD openingHours·Wikivoyage)을 **같은 `oh` 칸**에 합친다(공식 > OSM > 그 밖, 다르면 `hd=1`).
+  행 `{oh, src, url?, osm?, q?, hd?}`. OSM 층이 없는 나라는 `hours-col-<cc>.json.gz`.
+- 사진: 수집 순환(collect, 매시)의 `commons_photos` 출처가 세계 타일 지역마다 `tools/photo_layer.py` 를 돌려 `collect/v1/layers/photos-<지역>.json.gz` 를 만들고 finalize 가 함께 싣는다.
+  행 `{photo_url, photo_thumb, photo_credit, photo_license, photo_license_url?, photo_author?, photo_page?, photo_src: tourapi|commons, no_modify?}`. 한국은 TourAPI(공공누리 1·3유형) 먼저, 그다음 Commons(CC0·CC BY·CC BY-SA).
+- 앱: `places/v1/layers.json` 의 `kind: hours | photos` 항목(bbox 포함)을 읽는 코드는 앱 팀 몫(s62 tl_place_layers 에 두 종류 추가).

@@ -18,8 +18,9 @@ if [ -n "$SPLIT" ]; then
 else
   python3 tools/osm_amenities.py "$W/out/amenities-$R.json.gz" "$W"/pbf/*.osm.pbf > /dev/null
 fi
-# 이름 보충 층: 그 지역 세계 타일(같은 장소 id)에 OSM 의 한글 이름·읽는 법·영문 이름을 붙인다.
-if [ "${IN_NAMES:-yes}" = "yes" ] && [ -n "$WORLD" ]; then
+# 세계 타일(같은 장소 id) 받기 — world 가 적힌 지역만. 이름 보충 층(names=false 가 아니면)과 영업시간 층(hours_osm.py, 11/15)이 같이 쓴다.
+NAMES_OK=$(python3 -c "import json,sys;print('' if json.load(open('tools/layers_regions.json'))[sys.argv[1]].get('names', True) is False else '1')" "$R")
+if [ -n "$WORLD" ]; then
   WT="${IN_WORLD_TAG:-}"
   if [ -z "$WT" ]; then
     WT=$(gcloud storage cat "gs://$GCS_BUCKET/places/v1/manifest.json" 2>/dev/null | python3 -c "import json,sys;print(json.load(sys.stdin).get('version',''))" || true)
@@ -27,11 +28,22 @@ if [ "${IN_NAMES:-yes}" = "yes" ] && [ -n "$WORLD" ]; then
   if [ -n "$WT" ]; then
     python3 scripts/region_tiles.py "$WORLD" "$WT" "$R" > "$W/tiles.txt" || true
     if [ -s "$W/tiles.txt" ]; then
-      gcloud storage cp -q $(cat "$W/tiles.txt") "$W/tiles/" >/dev/null 2>&1 || true
-      if ls "$W"/tiles/w-*.json.gz >/dev/null 2>&1; then
-        python3 tools/names_osm.py "$W/out/names-$R.json.gz" "$(ls "$W"/tiles/w-*.json.gz | paste -sd, -)" "$W"/pbf/*.osm.pbf > /dev/null || true
-      fi
+      # 타일이 많으면(유럽·미국) 인자 길이 한도를 넘지 않게 목록 파일로 받는다
+      gcloud storage cp -q -I "$W/tiles/" < "$W/tiles.txt" >/dev/null 2>&1 || true
     fi
+  fi
+fi
+TILES=""
+if ls "$W"/tiles/w-*.json.gz >/dev/null 2>&1; then TILES=$(ls "$W"/tiles/w-*.json.gz | paste -sd, -); fi
+# 이름 보충 층: 그 지역 세계 타일에 OSM 의 한글 이름·읽는 법·영문 이름을 붙인다(일본만 — names=false 인 지역은 건너뜀).
+if [ "${IN_NAMES:-yes}" = "yes" ] && [ -n "$NAMES_OK" ] && [ -n "$TILES" ]; then
+  python3 tools/names_osm.py "$W/out/names-$R.json.gz" "$TILES" "$W"/pbf/*.osm.pbf > /dev/null || true
+fi
+# 영업시간 층 원본(OSM opening_hours + wikidata 태그 → 타일 id). layers/ 가 아니라 hours_src/ 에 올리고, finalize 가 공식 사이트 값과 합쳐 layers/hours-*.json.gz 로 낸다.
+if [ -n "$TILES" ]; then
+  mkdir -p "$W/hours"
+  if python3 tools/hours_osm.py "$W/hours/hours-$R.json.gz" "$TILES" "$W"/pbf/*.osm.pbf | tail -1; then
+    gcloud storage cp -q "$W/hours/hours-$R.json.gz" "gs://$GCS_BUCKET/places/v1/$TAG/hours_src/" >/dev/null 2>&1 || echo "region $R: hours upload failed"
   fi
 fi
 N=$(ls "$W"/out/*.json.gz 2>/dev/null | wc -l)

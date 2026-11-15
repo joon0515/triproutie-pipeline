@@ -303,6 +303,25 @@ def load_prio():
         return set()
 
 
+def is_front(a, c):
+    """(11/15) 앱 감사(X_audit): 경주·제주 검색 풀의 영업시간 보유율이 3~19% → 같은 종류 안에서 맨 앞에.
+    제주 = 시도 50. 경주 = 경북(47) 의 법정동 시군구 130(옛 areacode 35·sigungu 2), 주소에 '경주시'가 있어도 경주로 본다."""
+    if a == '50':
+        return True
+    sg = str(c.get('sigungu') or '')
+    return (a == '47' and sg in ('130', '47130')) or (c.get('areacode_old') == '35' and sg == '2') or '경주시' in (c.get('addr') or '')
+
+
+def front_tier(a, c, in_prio):
+    """같은 종류 안의 순서: 0 경주·제주 → 1 앱에 있는 소도시 → 2 앱에 있는 서울·부산 → 3 앱에 없는 소도시 → 4 그 밖의 서울·부산.
+    (11/15 전: 앱에 있는 곳 → 소도시 → 서울·부산. 경주·제주를 맨 앞에, 앱에 있는 곳 안에서는 소도시를 먼저 — 대도시는 이미 일정 풀 영업시간 93~98%)"""
+    if is_front(a, c):
+        return 0
+    if in_prio:
+        return 1 if a not in BIG else 2
+    return 3 if a not in BIG else 4
+
+
 def queue(store, st, prio, step):
     """이번 회차에 아직 안 받은 카드들을 우선순위대로. step = 'detail'(detailIntro2) | 'info'(detailInfo2, 12·28만)."""
     P = st['pass']; mark, fk = ('dpass', 'dfail') if step == 'detail' else ('ipass', 'ifail')
@@ -313,7 +332,7 @@ def queue(store, st, prio, step):
                 continue
             if step == 'info' and c['type'] not in NEED_INFO:
                 continue
-            L.append((DETAIL_ORDER.get(c['type'], 3), cid not in prio, a in BIG, int(cid) if cid.isdigit() else 0, a, cid))
+            L.append((DETAIL_ORDER.get(c['type'], 3), front_tier(a, c, cid in prio), int(cid) if cid.isdigit() else 0, a, cid))
     L.sort()
     return [(a, cid) for *_, a, cid in L]
 

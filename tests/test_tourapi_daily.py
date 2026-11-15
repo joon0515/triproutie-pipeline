@@ -135,13 +135,24 @@ class TestFailures(Base):
         self.assertEqual(stop, 'LISTFAIL'); self.assertEqual(f.urls, 4); self.assertEqual(st['task'], 0)
 
     def test_twenty_consecutive_fails(self):
-        f = Fake(bad=PRIO); st, stop, _ = self.go(f, 900)
-        self.assertEqual(stop, 'FAIL20'); self.assertEqual(st['calls'], 98 + 20)
+        f = Fake(bad={f'5012{i:05d}' for i in range(5)}); st, stop, _ = self.go(f, 900)  # 11/15: 제주·경주가 큐 맨 앞(front_tier 0)
+        self.assertEqual(stop, 'FAIL20'); self.assertEqual(st['calls'], 98 + 4 + 20)  # 경주(47·시군구 130) 음식점 4곳이 먼저 성공 → 제주 5곳에서 20회 연속 실패
+
+
+class TestFront(unittest.TestCase):
+    def test_front_tier(self):  # 11/15: 경주·제주 → 앱에 있는 소도시 → 앱에 있는 서울·부산 → 그 밖
+        self.assertEqual(T.front_tier('50', {}, False), 0)
+        self.assertEqual(T.front_tier('47', {'sigungu': '130'}, False), 0)
+        self.assertEqual(T.front_tier('47', {'sigungu': '2', 'areacode_old': '35'}, False), 0)
+        self.assertEqual(T.front_tier('47', {'sigungu': '170', 'addr': '경상북도 안동시'}, True), 1)
+        self.assertEqual(T.front_tier('11', {}, True), 2)
+        self.assertEqual(T.front_tier('47', {'sigungu': '170'}, False), 3)
+        self.assertEqual(T.front_tier('26', {}, False), 4)
 
 
 class TestOutputs(Base):
     def test_photos_and_layers(self):
-        st, _, s = self.go(Fake(), 200)
+        st, _, s = self.go(Fake(), 420)  # 11/15: 제주 관광지 300곳이 먼저 → 서울 PRIO 까지 닿게 한도를 늘림
         rows = s.area('11')
         for c in rows.values():
             if c['cpy'] in ('Type1', 'Type3'):
