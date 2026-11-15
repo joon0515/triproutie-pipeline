@@ -4,3 +4,7 @@
 - `private_enc/` — 분류·필터·랭킹·큐레이션·음역 사전 묶음의 **암호문**(AES-256-GCM, 데이터 키는 KMS RSA 로 감쌈; 서비스 계정만 풀 수 있음).
 - 인증: Workload Identity Federation(키 파일 없음). 비밀: FSQ_TOKEN 하나. 설정: `SETUP_KO.md`, `cloudshell_setup.sh`.
 - 데이터 출처 표시: Overture Maps Foundation(CDLA-Permissive-2.0), Foursquare OS Places(Apache-2.0, NOTICE), AllThePlaces(CC0).
+- `.github/workflows/tourapi_daily.yml` — 매일 00:20 KST(+수동). 한국관광공사 TourAPI 4.0(KorService2) 전국 17개 시도·모든 시군구 × 관광지·문화시설·레포츠·숙박·쇼핑·음식점을 하루 900회 안에서 이어받기(`scripts/tourapi_daily.py`, 모의 시험 `tests/test_tourapi_daily.py`).
+  - 비밀: `DATA_GO_KR_KEY`(저장소 Actions secret, 없으면 GCP Secret Manager 같은 이름을 시도). 한도 바꾸기: 변수 `TOURAPI_DAILY_LIMIT`.
+  - 저장소에는 `tourapi/state.json`(작업 위치·오늘 호출 수)만 커밋. 내용은 Storage 비공개: `tourapi/v1/store/area_*.json`(누적), `tourapi/v1/agg_tourapi.json`(앱 데이터 모양), `places/v1/layers_extra/kto_<시도>.json.gz`(schema `tourapi-1` — 다음 places-layers 실행 때 서명 목록에 실림).
+  - 사진은 공공누리 제1·3유형만(3유형 `no_modify`, 자르기 금지), 출처 '한국관광공사 TourAPI 4.0' 을 파일·목록 attribution 에 표기.
