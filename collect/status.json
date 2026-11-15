@@ -30,9 +30,9 @@
   },
   "fsq_os_places": {
    "failing": 0,
-   "ok_today": 8,
-   "rows_last": 9992800,
-   "shards": 8
+   "ok_today": 11,
+   "rows_last": 10058263,
+   "shards": 11
   },
   "holidays_lib": {
    "failing": 0,
@@ -55,7 +55,7 @@
   "open_dataset": {
    "failing": 0,
    "ok_today": 1,
-   "rows_last": 11006,
+   "rows_last": 671,
    "shards": 2
   },
   "wikidata_official": {
@@ -65,5 +65,5 @@
    "shards": 1
   }
  },
- "updated": "2026-11-15T09:39Z"
+ "updated": "2026-11-15T10:20Z"
 }
