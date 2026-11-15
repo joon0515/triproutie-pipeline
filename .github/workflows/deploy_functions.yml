@@ -89,7 +89,7 @@ jobs:
         run: |
           case "$REQUIRE_APP_CHECK" in true|false) ;; *) echo "::error::REQUIRE_APP_CHECK 는 true/false"; exit 1;; esac
           case "$GEO_COORD" in ""|true|false) ;; *) echo "::error::GEO_COORD 는 true/false/빈칸"; exit 1;; esac
-          { echo "REQUIRE_APP_CHECK=$REQUIRE_APP_CHECK"; [ -n "$GEO_UA" ] && printf 'GEO_UA="%s"\n' "${GEO_UA//\"/}"; true; } > .env
+          { echo "REQUIRE_APP_CHECK=$REQUIRE_APP_CHECK"; u="${GEO_UA:-TripRoutie-geoLookup/1.0}"; printf 'GEO_UA="%s"\n' "${u//\"/}"; } > .env
           if grep -qE '^(DATA_GO_KR_KEY|JUSO_KEY|JUSO_COORD_KEY)=' .env; then echo "::error::.env 에 Secret 이름"; exit 1; fi
           cat .env
       - name: deploy (이름 지정만, --force 없음)
