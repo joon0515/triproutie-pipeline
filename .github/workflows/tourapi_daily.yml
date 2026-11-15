@@ -1,0 +1,46 @@
+# 트립루티 tourapi-daily — 한국관광공사 TourAPI 4.0(KorService2) 전국(17개 시도·모든 시군구) 수집을 하루 한도(900회) 안에서 이어받기.
+# 매일 00:20 KST + 수동 실행. 장소 내용은 Firebase Storage 비공개 경로에만(tourapi/v1/store·agg, places/v1/layers_extra/kto_*.json.gz).
+# 저장소에는 작은 상태 파일 tourapi/state.json(작업 위치·오늘 호출 수)만 커밋한다. 산출 데이터는 GitHub(Release·artifact·cache·로그)에 남기지 않음.
+name: tourapi-daily
+on:
+  schedule:
+    - cron: "20 15 * * *"     # UTC 15:20 = KST 00:20 (data.go.kr 일 한도는 KST 자정에 초기화)
+  workflow_dispatch: {}
+permissions:
+  contents: write          # tourapi/state.json 커밋 전용
+  id-token: write          # Workload Identity Federation(OIDC) 전용
+concurrency:
+  group: tourapi-daily
+  cancel-in-progress: false
+env:
+  GCS_BUCKET: ${{ vars.GCS_BUCKET || 'trip-mate-0vum9k.firebasestorage.app' }}
+jobs:
+  collect:
+    if: github.repository == 'joon0515/triproutie-pipeline' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+      - uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ vars.GCP_WIF_PROVIDER || 'projects/222914945328/locations/global/workloadIdentityPools/github-pool/providers/github-provider' }}
+          service_account: ${{ vars.GCP_SA_EMAIL || 'pipeline-uploader@trip-mate-0vum9k.iam.gserviceaccount.com' }}
+      - uses: google-github-actions/setup-gcloud@v2
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: test (mock, no key)
+        run: python3 -m unittest tests/test_tourapi_daily.py 2>/dev/null
+      - name: collect-and-upload
+        env:
+          TOURAPI_KEY: ${{ secrets.DATA_GO_KR_KEY }}
+          TOURAPI_DAILY_LIMIT: ${{ vars.TOURAPI_DAILY_LIMIT || '900' }}
+        run: |
+          if [ -z "$TOURAPI_KEY" ]; then
+            # 저장소 secret 이 없으면 GCP Secret Manager 의 DATA_GO_KR_KEY 를 읽어 본다(서비스 계정에 secretAccessor 가 있을 때만 됨). 값은 가리고 출력하지 않는다.
+            TOURAPI_KEY="$(gcloud secrets versions access latest --secret=DATA_GO_KR_KEY --project=trip-mate-0vum9k 2>/dev/null || true)"
+            [ -n "$TOURAPI_KEY" ] && echo "::add-mask::$TOURAPI_KEY"
+            export TOURAPI_KEY
+          fi
+          [ -n "$TOURAPI_KEY" ] || { echo "키 없음: 저장소 Settings → Secrets and variables → Actions 에 DATA_GO_KR_KEY 추가"; exit 1; }
+          bash scripts/run_tourapi_daily.sh

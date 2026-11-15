@@ -13,12 +13,12 @@
     gs://<bucket>/places/v1/<tag>/layers/<파일>            층 파일(gzip JSON)
     gs://<bucket>/places/v1/<tag>/layers.json              서명된 manifest
     gs://<bucket>/places/v1/layers.json                    최신 판을 가리키는 사본(되돌리기 = 이전 판 manifest 로 덮어쓰기)
-받는 층: schema 가 'popularity-1'(pop_build.py·food_score.py) · 'amenities-1'(osm_amenities.py) · 'lockers-1' · 'names-1'(names_osm.py — 이름 보충) 인 gzip JSON. 그 밖의 파일은 거부한다.
+받는 층: schema 가 'popularity-1'(pop_build.py·food_score.py) · 'amenities-1'(osm_amenities.py) · 'lockers-1' · 'names-1'(names_osm.py — 이름 보충) · 'tourapi-1'(tourapi_daily.py — 한국관광공사) 인 gzip JSON. 그 밖의 파일은 거부한다.
 키·토큰·장소 내용은 출력하지 않는다(파일 이름·크기·개수만).
 """
 import argparse, base64, datetime, glob, gzip, hashlib, json, os, subprocess, sys
 
-OK_SCHEMA = {'popularity-1': 'popularity', 'amenities-1': 'amenities', 'lockers-1': 'lockers', 'names-1': 'names'}
+OK_SCHEMA = {'popularity-1': 'popularity', 'amenities-1': 'amenities', 'lockers-1': 'lockers', 'names-1': 'names', 'tourapi-1': 'tourapi'}
 MAX_BYTES = 8 * 1024 * 1024  # 앱의 파일 크기 상한(타일과 같음)
 
 
@@ -46,6 +46,13 @@ def describe(fn):
         if isinstance(bb, list) and len(bb) == 4 and all(isinstance(x, (int, float)) for x in bb):
             e['bbox'] = bb
         e['license'] = 'ODbL-1.0'
+    if kind == 'tourapi':  # 한국관광공사 TourAPI 4.0(tourapi_daily.py) — 시도 1개 = 파일 1개, rows 는 {'kto:<cid>': {...}}
+        pts = [r for r in rows.values() if isinstance(r, dict) and 'lat' in r]
+        if pts:
+            e['bbox'] = [round(min(r['lon'] for r in pts), 4), round(min(r['lat'] for r in pts), 4), round(max(r['lon'] for r in pts), 4), round(max(r['lat'] for r in pts), 4)]
+        e['license'] = 'KOGL'
+        e['area'] = j.get('area')
+        e['photos'] = sum(1 for r in rows.values() if isinstance(r, dict) and 'photo' in r)
     if kind == 'popularity':
         e['packs'] = sorted((j.get('report') or {}).keys()) or None
         e['photos'] = sum(1 for r in rows.values() if isinstance(r, dict) and 'photo' in r)
@@ -57,7 +64,7 @@ def build_manifest(tag, files, now=None):
     return {'schema': 'places-layers-1', 'version': tag, 'created_at': now.strftime('%Y-%m-%dT%H:%M:%SZ'), 'path': f'places/v1/{tag}/layers/',
             'layers': [describe(f) for f in files], 'disabled': False, 'revoked': [],
             'expires': (now + datetime.timedelta(days=90)).strftime('%Y-%m-%dT%H:%M:%SZ'),
-            'attribution': {'ko': '인기 점수: 위키백과 조회수·Wikidata (CC0) · 사진: 위키미디어 공용(사진마다 저작자·라이선스 표기) · 편의시설·이름 보충: © OpenStreetMap contributors (ODbL 1.0)'}}
+            'attribution': {'ko': '인기 점수: 위키백과 조회수·Wikidata (CC0) · 사진: 위키미디어 공용(사진마다 저작자·라이선스 표기) · 편의시설·이름 보충: © OpenStreetMap contributors (ODbL 1.0) · 한국 관광지 정보·사진: 한국관광공사 TourAPI 4.0 (공공누리 제1·3유형, 출처표시)'}}
 
 
 def main():
