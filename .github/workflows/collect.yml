@@ -103,3 +103,32 @@ jobs:
           else
             gh issue comment "$(gh issue list --state open --search "$T in:title" --json number -q '.[0].number')" --body-file "$RUNNER_TEMP/alert.md"
           fi
+
+  # GitHub 예약(schedule)이 이 저장소에서 한 번도 안 돌아서(11/15 확인), 수집이 끝나면 스스로 다음 회차를 건다.
+  # workflow_dispatch 는 GITHUB_TOKEN 으로도 새 실행을 만든다(GitHub 문서). 끄려면 저장소 변수 CHAIN_OFF=1.
+  chain:
+    needs: [plan, collect, summary]
+    if: ${{ always() && vars.CHAIN_OFF != '1' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 65
+    permissions:
+      actions: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+    steps:
+      - name: 가공(process) — 수집 직후 한 번
+        run: gh workflow run process.yml --ref main
+      - name: 1시간 간격 맞추기
+        run: |
+          st=$(gh api repos/$GH_REPO/actions/runs/${{ github.run_id }} -q .run_started_at)
+          wait=$(( $(date -d "$st" +%s) + 3600 - $(date +%s) ))
+          echo "다음 회차까지 ${wait}s"; if [ $wait -gt 0 ] && [ $wait -le 3600 ]; then sleep $wait; fi
+      - name: 다음 수집 걸기
+        run: gh workflow run collect.yml --ref main
+      - name: TourAPI 하루 1회 (KST 00시대 이후, 오늘 실행 없을 때만)
+        run: |
+          today=$(TZ=Asia/Seoul date +%F); h=$(TZ=Asia/Seoul date +%H)
+          last=$(gh run list -w tourapi_daily.yml -L 1 --json createdAt -q '.[0].createdAt' 2>/dev/null)
+          lastk=$( [ -n "$last" ] && TZ=Asia/Seoul date -d "$last" +%F || echo none)
+          if [ "$lastk" != "$today" ] && [ "$h" -ge 0 ]; then gh workflow run tourapi_daily.yml --ref main && echo "tourapi 걸음"; else echo "tourapi 오늘 이미 실행($lastk)"; fi
