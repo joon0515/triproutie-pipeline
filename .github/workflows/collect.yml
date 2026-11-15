@@ -36,7 +36,7 @@ jobs:
         with: {python-version: "3.12"}
       - run: pip install -q pyyaml holidays >/dev/null
       - name: test (mock, no network)
-        run: python3 -W ignore -m unittest tests/test_collect.py 2>&1 | tail -3
+        run: python3 -W ignore -m unittest tests/test_collect.py tests/test_fill.py 2>&1 | tail -3
       - id: p
         env:
           HAS_FSQ_TOKEN: ${{ secrets.FSQ_TOKEN != '' }}

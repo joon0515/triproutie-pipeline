@@ -19,7 +19,7 @@ import collectors as C  # noqa: E402
 REG = os.path.join(HERE, '..', '..', 'sources', 'registry.yaml')
 MAX_JOBS, DISC_SHARE = 18, 0.3
 REFRESH_DAYS = {'hourly': 0, 'daily': 1, 'weekly': 7, 'monthly': 1}  # monthly 는 날마다 새 릴리스만 확인(수집기가 같으면 곧 끝냄)
-HEAVY_CAP = {'overture_places': 4, 'fsq_os_places': 3, 'wikivoyage': 2}  # 한 시간에 같은 큰 출처 조각 상한(러너 디스크·메모리)
+HEAVY_CAP = {'overture_places': 4, 'fsq_os_places': 3, 'wikivoyage': 2, 'commons_photos': 1}  # 사진: 위키미디어 '한 번에 한 요청' — 한 시간에 조각 1개  # 한 시간에 같은 큰 출처 조각 상한(러너 디스크·메모리)
 
 
 def load_registry(path=REG):
@@ -53,18 +53,18 @@ def plan(reg, index, env=os.environ, max_jobs=MAX_JOBS):
         if s.get('secret') and env.get('HAS_' + s['secret']) != 'true':
             continue
         need = REFRESH_DAYS.get(s.get('refresh', 'daily'), 1)
-        for sh in shards(s):
+        for rk, sh in enumerate(shards(s)):
             st = index.get(f"{s['id']}/{sh}", {})
             if st.get('req_date') == today() and st.get('req', 0) >= int(s.get('daily_limit', 500)):
                 continue  # 오늘 한도 다 씀
             if need and _days_since(st.get('last_ok')) < need:
                 continue
-            (disc if s['script'] in C.DISCOVERY else col).append((st.get('last_ok') or '', s['id'], sh))
+            (disc if s['script'] in C.DISCOVERY else col).append((st.get('last_ok') or '', s['id'], rk, sh))  # rk: 등록부에 적힌 조각 순서(첫 회차에 앞쪽부터)
     nd = max(1, int(max_jobs * DISC_SHARE)) if disc else 0
     pick, used = [], {}
 
     def take(lst, n):
-        for _, sid, sh in sorted(lst):
+        for _, sid, _rk, sh in sorted(lst):
             if n <= 0:
                 break
             if used.get(sid, 0) >= HEAVY_CAP.get(sid, 99):
@@ -75,7 +75,7 @@ def plan(reg, index, env=os.environ, max_jobs=MAX_JOBS):
     take(disc, nd)
     take(col, max_jobs - len(pick))
     if len(pick) < max_jobs:  # 수집 몫이 남으면 발견에 더 준다(놀리지 않음)
-        rest = [x for x in disc if {'source': x[1], 'shard': x[2]} not in pick]
+        rest = [x for x in disc if {'source': x[1], 'shard': x[3]} not in pick]
         take(rest, max_jobs - len(pick))
     return pick
 

@@ -12,6 +12,16 @@ BOX = {  # 층 지역 → [서, 남, 동, 북]
 }
 
 
+def _cc(region):
+    """tools/layers_regions.json 의 cc(나라 꼬리 목록). 없으면 None(=그 world 지역 타일 전부)."""
+    try:
+        here = os.path.dirname(os.path.abspath(__file__))
+        v = json.load(open(os.path.join(here, '..', 'tools', 'layers_regions.json'), encoding='utf-8')).get(region) or {}
+        return {c.upper() for c in v.get('cc') or []} or None
+    except Exception:
+        return None
+
+
 def overlap(a, b):
     return not (a[2] < b[0] or a[0] > b[2] or a[3] < b[1] or a[1] > b[3])
 
@@ -28,9 +38,12 @@ def main(world, tag, region):
     if man is None:
         return 1
     box = BOX.get(region)
+    cc = _cc(region)
     for t in man.get('tiles') or []:
         f, bb = t.get('file'), t.get('bbox')
         if not isinstance(f, str) or not f.startswith('w-') or '/' in f or '..' in f:
+            continue
+        if cc and f.split('_', 1)[-1].split('.', 1)[0].upper() not in cc:  # w-<셀>_<cc>.json.gz — 그 지역 나라 타일만(11/15)
             continue
         if box and isinstance(bb, list) and len(bb) == 4 and not overlap(bb, box):
             continue
