@@ -85,7 +85,7 @@ def decode_tile(j):
     out, la, lo = [], 0, 0
     for i in range(len(j.get('id') or [])):
         la += j['dla'][i]; lo += j['dlo'][i]
-        out.append((j['id'][i], la / 1e5, lo / 1e5, [norm_name(j[k][i]) for k in ('nm', 'ko', 'en', 'ja', 'zh') if k in j and j[k][i]]))
+        out.append((j['id'][i], la / 1e5, lo / 1e5, [norm_name(j[k][i]) for k in ('nm', 'ko', 'en', 'ja', 'zh') if isinstance(j.get(k), list) and i < len(j[k]) and j[k][i]]))
     return out
 
 
