@@ -1,4 +1,5 @@
-# 트립루티 tourapi-daily — 한국관광공사 TourAPI 4.0(KorService2) 전국(17개 시도·모든 시군구) 수집을 하루 한도(900회) 안에서 이어받기.
+# 트립루티 tourapi-daily — 한국관광공사 TourAPI 4.0(KorService2) 전국(16개 시도·269개 시군구) 수집을 하루 한도(900회) 안에서 이어받기.
+# 1단계 목록 전부(첫날, 약 130회) → 2단계 소개(관광지·음식점 먼저) → 3단계 요금. 매 실행 끝에 층 파일을 layers_extra/ 에 바로 올린다.
 # 매일 00:20 KST + 수동 실행. 장소 내용은 Firebase Storage 비공개 경로에만(tourapi/v1/store·agg, places/v1/layers_extra/kto_*.json.gz).
 # 저장소에는 작은 상태 파일 tourapi/state.json(작업 위치·오늘 호출 수)만 커밋한다. 산출 데이터는 GitHub(Release·artifact·cache·로그)에 남기지 않음.
 name: tourapi-daily
