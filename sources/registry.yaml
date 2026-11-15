@@ -1,0 +1,186 @@
+# 트립루티 출처 등록부 — 여기 status: active 인 것만 수집한다. candidate 는 확인이 끝나기 전까지 받지 않는다.
+# 확인(2026-11-15, 118기): 약관·라이선스 페이지 또는 공식 API 의 라이선스 표기를 직접 보고, robots.txt 를 받아 봤다.
+# robots 는 수집 때마다 실시간으로 다시 확인한다(common.Http). 금지 목록(인스타그램·틱톡·네이버·카카오·구글·타벨로그·트립어드바이저·비공식 API)은
+# 등록하지 않으며, 링크·씨앗에 섞여 와도 common.forbidden 이 자동으로 버린다.
+# 칸: id · name · kind(api|dump|feed|crawl|lib) · url · license · attribution · robots(확인 결과) · refresh(hourly|daily|weekly|monthly)
+#     daily_limit(조각당 하루 요청 수) · interval_s(같은 사이트 요청 간격, 최소 1초) · script(scripts/collect/collectors.py 의 함수) · shards · secret(필요한 Secret 이름)
+version: 1
+user_agent: "TripRoutie-collector/1.0 (+https://github.com/joon0515/triproutie-pipeline)"
+sources:
+  - id: overture_places
+    name: Overture Maps Places (GeoParquet, 월간 릴리스)
+    kind: dump
+    url: s3://overturemaps-us-west-2/release/<release>/theme=places/type=place/
+    license: "CDLA-Permissive-2.0 / Apache-2.0(Foursquare) / CC0-1.0(AllThePlaces) — 레코드별 sources[].license"
+    attribution: "© Overture Maps Foundation (CDLA-Permissive-2.0) · Foursquare 출처 레코드: Copyright 2024 Foursquare Labs, Inc. (Apache-2.0) · 레코드별 sources 속성 유지"
+    license_url: https://docs.overturemaps.org/attribution/
+    robots: "S3 공개 버킷(익명 읽기, robots 대상 아님). 공식 문서가 익명 S3 접근을 안내"
+    refresh: monthly
+    daily_limit: 1
+    interval_s: 1
+    script: overture
+    shards: countries          # tools/world_regions.json 의 지역×나라 상자별
+    status: active
+  - id: fsq_os_places
+    name: Foursquare Open Source Places (Iceberg 카탈로그, 월간)
+    kind: dump
+    url: https://catalog.h3-hub.foursquare.com/iceberg  (places.datasets.places_os)
+    license: Apache-2.0
+    attribution: "Copyright 2024 Foursquare Labs, Inc. Licensed under the Apache License, Version 2.0"
+    license_url: https://docs.foursquare.com/data-products/docs/access-fsq-os-places
+    robots: "공식 Iceberg 카탈로그(토큰 접속, robots 대상 아님). 옛 공개 S3 는 PMTiles 만 남음. Hugging Face 판은 연락처 동의가 필요해 쓰지 않음"
+    refresh: monthly
+    daily_limit: 1
+    interval_s: 1
+    script: fsq
+    shards: countries
+    secret: FSQ_TOKEN           # places-world 가 이미 쓰는 것과 같은 Secret
+    status: active
+  - id: wikivoyage
+    name: Wikivoyage 덤프 (see/do/eat/drink/sleep/buy listing 틀)
+    kind: dump
+    url: https://dumps.wikimedia.org/<lang>wikivoyage/latest/<lang>wikivoyage-latest-pages-articles.xml.bz2
+    license: CC-BY-SA-4.0
+    attribution: "Wikivoyage contributors (CC BY-SA 4.0) — 문서 주소로 링크. 본문 설명문은 싣지 않고 사실값(이름·좌표·시간·요금·공식 주소)만"
+    license_url: https://en.wikivoyage.org/w/api.php?action=query&meta=siteinfo&siprop=rightsinfo
+    robots: "dumps.wikimedia.org/robots.txt 없음(404 = 허용). 덤프 서버 권장: 동시 연결 2개 이하"
+    refresh: monthly
+    daily_limit: 4
+    interval_s: 5
+    script: wikivoyage
+    shards: [en, de, fr, ja, zh, it, es, nl, ru, pl]
+    status: active
+  - id: wikidata_official
+    name: Wikidata(QLever 공개 SPARQL 끝점) — 박물관·공항·관광지의 공식 웹사이트(P856)·좌표·다국어 이름 (웹 탐색 씨앗)
+    kind: api
+    url: https://qlever.dev/api/wikidata
+    license: CC0-1.0
+    attribution: "Wikidata (CC0)"
+    license_url: https://www.wikidata.org/wiki/Wikidata:Licensing
+    robots: "query.wikidata.org/robots.txt 가 Disallow /sparql → 쓰지 않음. qlever.dev(프라이부르크대 QLever) robots.txt 없음(404 = 허용)·API 200 확인. 쿼리 1개씩 5초 간격"
+    refresh: weekly
+    daily_limit: 60
+    interval_s: 5
+    script: wikidata_seeds
+    status: active
+  - id: official_sites
+    name: 공식 사이트 구조화 데이터(schema.org JSON-LD·microdata) — Wikidata P856 씨앗
+    kind: crawl
+    url: "(사이트마다 다름)"
+    license: "사실값만(이름·주소·좌표·영업시간·요금·공식 전화·행사 일정). 본문 글·사진은 복사하지 않고 링크만"
+    attribution: "각 공식 사이트(주소 링크)"
+    robots: "사이트마다 매번 실시간 확인. 403 → 7일, 429 → Retry-After(최소 1일) 쉼"
+    refresh: hourly
+    daily_limit: 3000
+    interval_s: 1
+    timeout_s: 20
+    retries: 1
+    script: crawl
+    shards: 6
+    status: active
+  - id: mobility_gtfs
+    name: Mobility Database 카탈로그 → 공개 GTFS (정류장·노선)
+    kind: feed
+    url: https://files.mobilitydatabase.org/feeds_v2.csv
+    license: "카탈로그 CC0. 피드마다 urls.license — 열린 라이선스로 판정된 피드만 받음(그 피드의 라이선스·제공자를 행마다 기록)"
+    attribution: "Mobility Database (CC0) · 각 교통 사업자(피드별 라이선스)"
+    license_url: https://github.com/MobilityData/mobility-database-catalogs
+    robots: "files.mobilitydatabase.org — 실시간 확인"
+    refresh: weekly
+    daily_limit: 120
+    interval_s: 3
+    script: gtfs
+    shards: 8
+    status: active
+  - id: taiwan_tourism
+    name: 대만 교통부 관광서 관광자료(景點 - 觀光資訊資料庫, data.gov.tw 7777)
+    kind: dump
+    url: https://media.taiwan.net.tw/XMLReleaseAll_public/v2.0/Zh_tw/Attraction-json.zip
+    license: OGDL-Taiwan-1.0 (政府資料開放授權條款-第1版, CC BY 4.0 호환)
+    attribution: "交通部觀光署 觀光資訊資料庫 (政府資料開放授權條款-第1版)"
+    license_url: https://data.gov.tw/dataset/7777
+    robots: "실시간 확인"
+    refresh: daily
+    daily_limit: 3
+    interval_s: 5
+    script: taiwan
+    status: active
+  - id: advisories_ca
+    name: 캐나다 정부 국가별 여행 권고(Country Travel Advice and Advisories)
+    kind: feed
+    url: https://data.international.gc.ca/travel-voyage/index-updated.json
+    license: OGL-Canada-2.0 (ca-ogl-lgo)
+    attribution: "Contains information licensed under the Open Government Licence – Canada"
+    license_url: https://open.canada.ca/data/en/dataset/bef2ebb3-ca9a-485f-aaff-5dc36eb89426
+    robots: "data.international.gc.ca/robots.txt 없음(404 = 허용)"
+    refresh: daily
+    daily_limit: 3
+    interval_s: 5
+    script: advisories_ca
+    status: active
+  - id: advisories_uk
+    name: 영국 외무부(FCDO) 여행 권고 — GOV.UK Content API
+    kind: api
+    url: https://www.gov.uk/api/content/foreign-travel-advice
+    license: OGL-UK-3.0
+    attribution: "Contains public sector information licensed under the Open Government Licence v3.0 (FCDO)"
+    license_url: https://www.nationalarchives.gov.uk/doc/open-government-licence/version/3/
+    robots: "www.gov.uk/robots.txt — /api/content 막지 않음(일부 봇만 전체 차단). 실시간 확인"
+    refresh: daily
+    daily_limit: 260
+    interval_s: 1
+    script: advisories_uk
+    status: active
+  - id: holidays_lib
+    name: 공휴일 — python-holidays 라이브러리(네트워크 없음, 약 150개 나라)
+    kind: lib
+    url: https://pypi.org/project/holidays/
+    license: MIT
+    attribution: "python-holidays (MIT)"
+    robots: "네트워크 요청 없음"
+    refresh: weekly
+    daily_limit: 1
+    interval_s: 1
+    script: holidays_lib
+    status: active
+  - id: catalog_discover
+    name: 오픈데이터 카탈로그 발견기(CKAN·data.europa.eu·Mobility Database 신규 피드)
+    kind: api
+    url: "open.canada.ca · catalog.data.gov · data.gov.uk · data.europa.eu (catalogs 아래)"
+    license: "메타데이터만 읽음. 찾은 데이터셋은 라이선스 자동 판정 → 열린 것만 active"
+    attribution: "각 카탈로그"
+    robots: "실시간 확인"
+    refresh: daily
+    daily_limit: 200
+    interval_s: 2
+    script: discover
+    status: active
+  - id: open_dataset
+    name: 발견기가 찾아 열린 라이선스로 판정한 데이터셋(CSV·JSON·GeoJSON) 일반 수집
+    kind: dump
+    url: "(discovered.json 의 각 자원)"
+    license: "데이터셋마다(행마다 기록)"
+    attribution: "데이터셋마다"
+    robots: "실시간 확인"
+    refresh: hourly
+    daily_limit: 300
+    interval_s: 2
+    script: open_dataset
+    shards: 4
+    status: active
+  # ---- 후보: 확인이 끝나지 않아 받지 않는다 ----
+  - {id: nager_date, name: Nager.Date 공휴일 API, kind: api, url: "https://date.nager.at/api/v3", license: "미확인(코드 MIT 로 알려짐, 자료 라이선스·약관 페이지 확인 못 함)", status: candidate}
+  - {id: transitland, name: Transitland GTFS 아카이브, kind: api, url: "https://transit.land/api/v2", license: "피드별 — API 키·약관 확인 필요", secret: TRANSITLAND_KEY, status: candidate}
+  - {id: datatourisme, name: 프랑스 DATAtourisme, kind: feed, url: "https://www.datatourisme.fr", license: "Licence Ouverte 2.0 로 알려짐 — 가입 후 흐름(flux) 만들기 필요", status: candidate}
+  - {id: sg_datagov, name: 싱가포르 data.gov.sg (관광 데이터셋), kind: api, url: "https://api-production.data.gov.sg/v2/public/api/datasets", license: "Singapore Open Data Licence 로 알려짐 — 관광 데이터셋 고르기 전", status: candidate}
+  - {id: jnto_jta, name: 일본 JNTO·관광청 오픈데이터, kind: dump, url: "", license: "공식 오픈데이터 위치·라이선스 확인 못 함", status: candidate}
+  - {id: us_state_travel, name: 미국 국무부 여행경보 RSS, kind: feed, url: "https://travel.state.gov/_res/rss/TAsTWs.xml", license: "미국 정부 저작물(공공영역)로 알려짐 — robots 확인 결과 불명확", status: candidate}
+  - {id: kr_mofa_alert, name: 외교부 국가·지역별 여행경보(data.go.kr), kind: api, url: "https://apis.data.go.kr/1262000/", license: "공공누리 — data.go.kr 활용신청 필요", secret: DATA_GO_KR_KEY, status: candidate}
+  - {id: commons_photos, name: Wikimedia Commons 사진(라이선스별), kind: api, url: "https://commons.wikimedia.org/w/api.php", license: "사진마다(CC BY/BY-SA/CC0/PD) — 인기 층 pop_* 에서 이미 처리", status: candidate}
+  - {id: osm, name: OpenStreetMap(places-layers 가 이미 처리), kind: dump, url: "https://download.geofabrik.de", license: ODbL-1.0, refresh: monthly, status: external, note: "places-layers.yml 이 수동 실행으로 갱신 — 월 1회 권장"}
+catalogs:  # 발견기 질의 대상(응답이 CKAN 모양이 아니면 그 회차는 건너뜀)
+  - {id: open_canada, kind: ckan, url: "https://open.canada.ca/data/api/action/package_search"}
+  - {id: data_gov_us, kind: ckan, url: "https://catalog.data.gov/api/3/action/package_search"}
+  - {id: data_gov_uk, kind: ckan, url: "https://data.gov.uk/api/action/package_search"}
+  - {id: data_europa, kind: europa, url: "https://data.europa.eu/api/hub/search/search"}
+discover_terms: [tourism, tourist attractions, museums, travel, hotels, events, festivals, gtfs, campsites, viewpoints]
