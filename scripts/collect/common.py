@@ -4,6 +4,7 @@
 User-Agent 에는 저장소 주소를 연락처로 싣는다. 개인정보(사람 이름·개인 메일·개인 전화)는 받지 않는다 — 업체·기관의 공식 전화만.
 """
 import datetime, gzip, hashlib, io, json, math, os, re, subprocess, time, unicodedata, urllib.error, urllib.parse, urllib.request
+import http.client
 import urllib.robotparser
 
 UA = 'TripRoutie-collector/1.0 (+https://github.com/joon0515/triproutie-pipeline)'
@@ -36,10 +37,16 @@ class Blocked(Exception):
     pass
 
 
+_URL_BAD = re.compile(r'[\x00-\x20\x7f]')
+
+
 def iri_to_uri(url):
     """한글·전각 등 비ASCII 주소를 요청 가능한 형태로(호스트는 IDNA, 경로·쿼리는 퍼센트 인코딩)."""
+    url = url.strip()
     try:
-        url.encode('ascii'); return url
+        url.encode('ascii')
+        if not _URL_BAD.search(url):  # 11/17: 영문 주소라도 빈칸·제어 문자가 있으면 아래에서 퍼센트 인코딩(http.client InvalidURL 방지)
+            return url
     except UnicodeEncodeError:
         pass
     sp = urllib.parse.urlsplit(url)
@@ -252,6 +259,8 @@ class Http:
                     raise
             except (urllib.error.URLError, OSError, TimeoutError):
                 pass
+            except (http.client.InvalidURL, ValueError):  # 요청할 수 없는 주소 — 다시 해도 같으니 이 주소만 건너뜀(조각 전체를 죽이지 않음)
+                raise IOError('bad url')
             if t + 1 < self.retries:
                 self.sleep(min(60, 5 * 2 ** t))
         raise IOError('fetch failed')

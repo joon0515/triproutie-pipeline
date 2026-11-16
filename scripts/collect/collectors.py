@@ -553,7 +553,7 @@ def crawl_site(ctx, qid, seed, max_pages=15):
             body = ctx.http.get(u, accept='text/html')
         except Blocked:
             return None, events  # robots·차단 → 이 사이트는 그만
-        except IOError:
+        except (IOError, ValueError):  # ValueError = 깨진 주소(예: 잘못된 호스트) — 그 쪽만 건너뜀
             continue
         if len(body) > 3_000_000:
             continue
@@ -671,7 +671,7 @@ COLS = {'nm': ('name', 'nom', 'title', 'titel', 'nome', 'nombre', 'naam', 'site_
 
 
 def _pick(cols, want):
-    low = {c.lower().strip(): c for c in cols if not PERSONAL.search(c)}
+    low = {c.lower().strip(): c for c in cols if isinstance(c, str) and not PERSONAL.search(c)}  # 11/17: 열 이름 없는 칸(csv 남는 칸 = None) 건너뜀
     for w in want:
         if w in low:
             return low[w]

@@ -237,5 +237,44 @@ def REG_URL(sid):
     return next(s for s in REG['sources'] if s['id'] == sid)['url']
 
 
+class BadInput(unittest.TestCase):
+    """11/17: 조각 전체를 죽이던 두 입력 — 빈칸이 든 영문 주소(official_sites), 열 이름 없는 칸(open_dataset)."""
+
+    def test_ascii_url_with_space_is_encoded(self):
+        self.assertEqual(K.iri_to_uri('https://a.example/SITUS BIKINISLOT/anime'), 'https://a.example/SITUS%20BIKINISLOT/anime')
+        self.assertEqual(K.iri_to_uri('https://a.example/x.php?A PREFEITURA='), 'https://a.example/x.php?A%20PREFEITURA=')
+        self.assertEqual(K.iri_to_uri('https://a.example/a%20b?q=1&r=2'), 'https://a.example/a%20b?q=1&r=2')  # 이미 인코딩된 것은 그대로
+        self.assertEqual(K.iri_to_uri(' https://a.example/ok '), 'https://a.example/ok')
+
+    def test_invalid_url_is_skipped_not_retried(self):
+        import http.client
+        calls = []
+
+        def w(url, headers):
+            calls.append(url)
+            if url.endswith('/robots.txt'):
+                raise urllib.error.HTTPError(url, 404, 'x', {}, None)
+            raise http.client.InvalidURL("URL can't contain control characters.")
+        h = K.Http(src(), {}, {}, opener=w, sleep=lambda s: None)
+        with self.assertRaises(IOError):
+            h.get('https://a.example/x')
+        self.assertEqual([c for c in calls if not c.endswith('/robots.txt')], ['https://a.example/x'])
+
+    def test_crawl_site_survives_link_with_space(self):
+        import types
+        root = 'https://s.example/'
+        w = Web({root: b'<html><a href="/RDCweb/N Toon.html">a</a><a href="/ok">b</a></html>', 'https://s.example/ok': b'<html></html>',
+                 'https://s.example/RDCweb/N%20Toon.html': b'<html></html>'})
+        ctx = types.SimpleNamespace(http=K.Http(src(daily_limit=50), {}, {}, opener=w, sleep=lambda s: None))
+        best, events = C.crawl_site(ctx, 'Q1', {'url': root})
+        self.assertIn('https://s.example/RDCweb/N%20Toon.html', w.calls)
+        self.assertIn('https://s.example/ok', w.calls)
+        self.assertFalse(any(' ' in c for c in w.calls))
+
+    def test_pick_ignores_unnamed_column(self):
+        self.assertEqual(C._pick(['Name', None, 'lat'], C.COLS['nm']), 'Name')
+        self.assertIsNone(C._pick([None], C.COLS['nm']))
+
+
 if __name__ == '__main__':
     unittest.main()
