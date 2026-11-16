@@ -6,13 +6,13 @@
  "sources": {
   "advisories_ca": {
    "failing": 0,
-   "ok_today": 1,
+   "ok_today": 0,
    "rows_last": 230,
    "shards": 1
   },
   "advisories_uk": {
    "failing": 0,
-   "ok_today": 1,
+   "ok_today": 0,
    "rows_last": 226,
    "shards": 1
   },
@@ -30,13 +30,13 @@
   },
   "fsq_os_places": {
    "failing": 0,
-   "ok_today": 50,
-   "rows_last": 41338092,
-   "shards": 50
+   "ok_today": 3,
+   "rows_last": 41775039,
+   "shards": 53
   },
   "holidays_lib": {
    "failing": 0,
-   "ok_today": 1,
+   "ok_today": 0,
    "rows_last": 501,
    "shards": 1
   },
@@ -48,22 +48,22 @@
   },
   "official_sites": {
    "failing": 5,
-   "ok_today": 6,
+   "ok_today": 0,
    "rows_last": 0,
    "shards": 6
   },
   "open_dataset": {
    "failing": 1,
-   "ok_today": 1,
+   "ok_today": 0,
    "rows_last": 671,
    "shards": 2
   },
   "wikidata_official": {
    "failing": 0,
-   "ok_today": 1,
+   "ok_today": 0,
    "rows_last": 5617,
    "shards": 1
   }
  },
- "updated": "2026-11-15T23:22Z"
+ "updated": "2026-11-16T00:26Z"
 }
