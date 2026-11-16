@@ -123,8 +123,10 @@ def main():
     tmp = os.environ.get('TMPDIR', '/tmp')
     open(f'{tmp}/layers_body.json', 'w', encoding='utf-8').write(body)
     q = a.kms_key.split('/')
-    subprocess.run(['gcloud', 'kms', 'asymmetric-sign', f'--project={q[1]}', f'--location={q[3]}', f'--keyring={q[5]}', f'--key={q[7]}', f'--version={q[9]}',
-                    f'--input-file={tmp}/layers_body.json', f'--signature-file={tmp}/layers_sig.bin'], check=True, capture_output=True)
+    r = subprocess.run(['gcloud', 'kms', 'asymmetric-sign', f'--project={q[1]}', f'--location={q[3]}', f'--keyring={q[5]}', f'--key={q[7]}', f'--version={q[9]}',
+                    f'--input-file={tmp}/layers_body.json', f'--signature-file={tmp}/layers_sig.bin'], capture_output=True, text=True)
+    if r.returncode:
+        sys.exit('kms sign failed: body ' + str(len(body.encode())) + ' bytes; ' + r.stderr.strip()[-400:])
     man['sig'] = base64.b64encode(open(f'{tmp}/layers_sig.bin', 'rb').read()).decode()
     json.dump(man, open(f'{tmp}/layers_manifest.json', 'w', encoding='utf-8'), ensure_ascii=False)
     subprocess.run(cmds[0], check=True, capture_output=True)  # 파일 먼저, manifest 는 나중(앱이 없는 파일을 가리키는 manifest 를 보지 않게)
