@@ -1,0 +1,55 @@
+# 트립루티 fx-daily — 참고 환율을 하루 1번 받아 Firebase Storage 에 JSON 1장으로 둔다. 키·비밀값 없음.
+# 출처: Frankfurter v2(중앙은행 공시 기준 환율, 실시간 시세 아님). 앱은 이 파일만 읽고 화면에 '참고 환율 · 기준일 ○○'을 적는다.
+# 저장 위치: places/v1/fx/latest.json — storage.rules 의 places/{ver}/** (로그인 사용자 읽기)가 그대로 적용되어 규칙 변경이 없다.
+# 실패하면 파일을 건드리지 않는다 → 앱은 마지막 파일을 계속 쓰고 기준일이 화면에 보인다.
+name: fx-daily
+on:
+  schedule:
+    - cron: "10 21 * * *"     # UTC 21:10 = KST 06:10
+  workflow_dispatch: {}
+  pull_request:
+    paths: ["scripts/fx_daily.py", "tests/test_fx_daily.py", ".github/workflows/fx_daily.yml"]
+permissions:
+  contents: read
+  id-token: write          # Workload Identity Federation(OIDC) 전용
+concurrency:
+  group: fx-daily
+  cancel-in-progress: false
+env:
+  GCS_BUCKET: ${{ vars.GCS_BUCKET || 'trip-mate-0vum9k.firebasestorage.app' }}
+  FX_OBJECT: places/v1/fx/latest.json
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: test (no network, no key)
+        run: python3 -m unittest tests/test_fx_daily.py
+  publish:
+    needs: test
+    if: github.repository == 'joon0515/triproutie-pipeline' && github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ vars.GCP_WIF_PROVIDER || 'projects/222914945328/locations/global/workloadIdentityPools/github-pool/providers/github-provider' }}
+          service_account: ${{ vars.GCP_SA_EMAIL || 'pipeline-uploader@trip-mate-0vum9k.iam.gserviceaccount.com' }}
+      - uses: google-github-actions/setup-gcloud@v2
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: fetch-and-upload
+        run: |
+          set -uo pipefail
+          W="$RUNNER_TEMP/fx"; mkdir -p "$W"; G="gs://$GCS_BUCKET/$FX_OBJECT"
+          gcloud storage cp -q "$G" "$W/prev.json" >/dev/null 2>&1 || echo "prev: 없음(처음 실행)"
+          PREV=(); [ -f "$W/prev.json" ] && PREV=(--prev "$W/prev.json")
+          python3 scripts/fx_daily.py --out "$W/latest.json" "${PREV[@]}" || { echo "::warning::fx 받기 실패 — 어제 파일 유지"; exit 1; }
+          gcloud storage cp -q --content-type=application/json --cache-control="private, max-age=3600" "$W/latest.json" "$G"
+          echo "uploaded $FX_OBJECT"
