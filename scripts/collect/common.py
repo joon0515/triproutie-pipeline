@@ -121,6 +121,49 @@ class Store:
                     out.append(k)
         return sorted(out)
 
+    # ---- 여러 파일 한꺼번에(gcloud 를 파일마다 부르지 않게 — 파일 수천 개면 그것만으로 몇 시간) ----
+    def pull(self, keys, dest, strict=True):
+        """keys 를 로컬 폴더 dest 로 한 번에 받는다(파일 이름만 남김 — 이름이 겹치지 않는 묶음만). 돌려줌 = {key: 로컬 경로}.
+        strict 면 하나라도 못 받았을 때 IOError(못 받은 누적본을 '없음'으로 알고 덮어쓰지 않게)."""
+        os.makedirs(dest, exist_ok=True)
+        keys = list(keys)
+        if self.gs and keys:
+            subprocess.run(['gcloud', 'storage', 'cp', '-q', '-I', dest.rstrip('/') + '/'], input='\n'.join(self._p(k) for k in keys).encode(), capture_output=True)
+        elif keys:
+            for k in keys:
+                if os.path.exists(self._p(k)):
+                    with open(self._p(k), 'rb') as f, open(os.path.join(dest, os.path.basename(k)), 'wb') as g:
+                        while True:
+                            b = f.read(1 << 20)
+                            if not b:
+                                break
+                            g.write(b)
+        out = {k: os.path.join(dest, os.path.basename(k)) for k in keys if os.path.exists(os.path.join(dest, os.path.basename(k)))}
+        if strict and len(out) != len(set(keys)):
+            raise IOError(f'pull: {len(set(keys)) - len(out)}개 파일을 받지 못함({keys[0].rsplit("/", 1)[0]})')
+        return out
+
+    def push(self, paths, prefix):
+        """로컬 파일들을 <root>/<prefix>/<파일 이름> 으로 한 번에 올린다."""
+        paths = list(paths)
+        if not paths:
+            return
+        if self.gs:
+            subprocess.run(['gcloud', 'storage', 'cp', '-q', '-I', self._p(prefix.strip('/')) + '/'], input='\n'.join(paths).encode(), check=True, capture_output=True)
+            return
+        for p in paths:
+            with open(p, 'rb') as f:
+                self.put(f"{prefix.strip('/')}/{os.path.basename(p)}", f.read())
+
+    def delete(self, keys):
+        keys = list(keys)
+        if self.gs and keys:
+            subprocess.run(['gcloud', 'storage', 'rm', '-q', '-I'], input='\n'.join(self._p(k) for k in keys).encode(), capture_output=True)
+        elif keys:
+            for k in keys:
+                if os.path.exists(self._p(k)):
+                    os.remove(self._p(k))
+
     def get_json(self, key, default=None):
         b = self.get(key)
         if b is None:
