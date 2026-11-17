@@ -18,7 +18,7 @@
   },
   "catalog_discover": {
    "failing": 0,
-   "ok_today": 1,
+   "ok_today": 0,
    "rows_last": 0,
    "shards": 1
   },
@@ -30,9 +30,9 @@
   },
   "fsq_os_places": {
    "failing": 0,
-   "ok_today": 69,
-   "rows_last": 86732784,
-   "shards": 119
+   "ok_today": 0,
+   "rows_last": 86928125,
+   "shards": 122
   },
   "holidays_lib": {
    "failing": 0,
@@ -47,16 +47,16 @@
    "shards": 8
   },
   "official_sites": {
-   "failing": 4,
-   "ok_today": 2,
-   "rows_last": 22,
+   "failing": 3,
+   "ok_today": 1,
+   "rows_last": 48,
    "shards": 6
   },
   "open_dataset": {
    "failing": 1,
-   "ok_today": 1,
-   "rows_last": 834,
-   "shards": 3
+   "ok_today": 0,
+   "rows_last": 1268,
+   "shards": 4
   },
   "wikidata_official": {
    "failing": 0,
@@ -65,5 +65,5 @@
    "shards": 1
   }
  },
- "updated": "2026-11-16T22:38Z"
+ "updated": "2026-11-17T00:09Z"
 }
