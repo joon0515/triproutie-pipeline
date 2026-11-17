@@ -50,31 +50,37 @@ class StorageGuard(unittest.TestCase):
             shutil.rmtree(d)
 
 
-def rep(date, n, ko, h, photo, desc_any=None):
+def rep(date, n, ko, h, photo, desc_any=None, itin=None):
     lay = {'places': {'n': n, 'ko': ko, 'en': n // 2, 'ja': 0, 'zh_Hans': 0, 'zh_Hant': 0, 'h': h, 'photo': photo}}
+    if itin:
+        lay['itinerary'] = {'n': itin, 'ko': ko, 'en': itin // 2, 'ja': 0, 'zh_Hans': 0, 'zh_Hant': 0, 'h': h, 'photo': photo}
     if desc_any is not None:
         lay['desc'] = {'all': {'n': n, 'any': desc_any, 'ko': desc_any, 'en': 0, 'ja': 0, 'zh_Hans': 0, 'zh_Hant': 0}}
+        if itin:
+            lay['desc']['itinerary'] = {'n': itin, 'any': desc_any, 'ko': desc_any, 'en': 0, 'ja': 0, 'zh_Hans': 0, 'zh_Hant': 0}
     return {'date': date, 'layers': lay}
 
 
 class Trend(unittest.TestCase):
     def setUp(self):
         self.d = tempfile.mkdtemp()
-        for r in (rep('2026-11-10', 1000, 100, 10, 5), rep('2026-11-17', 2000, 300, 40, 20, 100), rep('2026-11-18', 2000, 400, 60, 20, 200)):
+        for r in (rep('2026-11-10', 1000, 100, 10, 5), rep('2026-11-17', 2000, 300, 40, 20, 100, itin=1000), rep('2026-11-18', 2000, 400, 60, 20, 200, itin=1000)):
             json.dump(r, open(os.path.join(self.d, r['date'] + '.json'), 'w'))
         open(os.path.join(self.d, 'junk.txt'), 'w').write('x')
 
     def tearDown(self):
         shutil.rmtree(self.d)
 
-    def test_table_rates_and_trend(self):
+    def test_table_rates_and_trend_both_bases(self):
         pts = CT.load(self.d)
         self.assertEqual([p['date'] for p in pts], ['2026-11-10', '2026-11-17', '2026-11-18'])
         md = CT.table(pts, now='T')
-        self.assertIn('| 2026-11-18 | 2,000 | 20.0% | 50.0% | 0.0% | 0.0% | 0.0% | 3.0% | 1.0% | 10.0% |', md)
-        self.assertIn('| 이름 ko | 20.0% | +5.0%p | +10.0%p | - |', md)  # 1일 전 15%, 7일 전(11/10 이하 가장 가까운 날) 10%, 30일 전 없음
-        self.assertIn('| 게시 장소 수 | 2,000 | +0 | +1,000 | - |', md)
-        self.assertIn('| 소개(1개 언어+) | 10.0% | +5.0%p | - | - |', md)
+        self.assertIn('| 2026-11-18 | 2,000 | 20.0% | 50.0% | 0.0% | 0.0% | 0.0% | 3.0% | 1.0% | 10.0% |', md)   # 전체 기준
+        self.assertIn('| 2026-11-18 | 1,000 | 40.0% | 50.0% | 0.0% | 0.0% | 0.0% | 6.0% | 2.0% | 20.0% |', md)   # 일정 장소 기준
+        self.assertIn('| 2026-11-10 | - | - |', md)  # 11/10 보고에는 일정 기준이 없었다
+        self.assertIn('| 이름 ko | 40.0% | +10.0%p | - | - | 20.0% | +5.0%p | +10.0%p | - |', md)
+        self.assertIn('| 장소 수 | 1,000 | +0 | - | - | 2,000 | +0 | +1,000 | - |', md)
+        self.assertLess(md.index('일정 장소 기준'), md.index('전체 기준'))  # 주 지표가 먼저
         self.assertTrue(md.startswith(CT.START) and md.rstrip().endswith(CT.END))
 
     def test_update_replaces_only_block(self):
@@ -91,6 +97,25 @@ class Trend(unittest.TestCase):
     def test_coverage_doc_has_block(self):
         md = open(os.path.join(ROOT, 'docs', 'COVERAGE.md'), encoding='utf-8').read()
         self.assertEqual((md.count(CT.START), md.count(CT.END)), (1, 1))
+
+
+class ItineraryBase(unittest.TestCase):
+    def test_itin_of(self):
+        import coverage as CV
+        for c in ('museum', 'ramenrestaurant', 'cafe', 'hotel', 'airport', 'trainstation', 'ferryterminal', 'busstation'):
+            self.assertTrue(CV.itin_of(c), c)
+        for c in ('bench', 'streetlamp', 'busstop', 'tramstop', 'platform', 'parking', 'gasstation', 'atm', 'toilet', 'bicyclestation'):
+            self.assertFalse(CV.itin_of(c), c)
+
+    def test_meter_counts_both(self):
+        import coverage as CV
+        m = CV.Meter()
+        m.add_layer({'schema': 'collect-1', 'dataset': 'places', 'cc': 'JP', 'cats': ['museum', 'bench', 'busstop', 'trainstation'],
+                     'id': ['a', 'b', 'c', 'd'], 'c': [0, 1, 2, 3], 'dla': [3500000, 0, 0, 0], 'dlo': [13900000, 0, 0, 0],
+                     'ko': ['박물관', None, None, '역'], 'en': [None] * 4, 'ja': [None] * 4, 'zh': [None] * 4, 'h': [None] * 4})
+        r = m.result()
+        self.assertEqual((r['places']['n'], r['itinerary']['n']), (4, 2))
+        self.assertEqual((r['places']['ko'], r['itinerary']['ko']), (2, 2))
 
 
 class Incremental(unittest.TestCase):
@@ -196,7 +221,7 @@ class RateLimits(unittest.TestCase):
     def test_every_source_we_call_declares_limits(self):
         reg = yaml.safe_load(open(os.path.join(ROOT, 'sources', 'registry.yaml'), encoding='utf-8'))
         for s in reg['sources']:
-            if s.get('status') == 'active' or s['id'] in ('tourapi', 'osm', 'commons_sdc'):
+            if s.get('status') == 'active' or s['id'] in ('tourapi', 'osm', 'commons_sdc', 'wikidata_dump'):
                 self.assertGreaterEqual(int(s.get('daily_limit') or 0), 1, s['id'])
                 self.assertTrue(s.get('interval_s') or s.get('max_parallel'), s['id'])
             if s.get('status') == 'active':

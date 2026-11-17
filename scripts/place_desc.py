@@ -436,7 +436,12 @@ def run(store, bucket=None, extra_dir=None, out=None, budget_min=45.0, http=None
     src = next(s for s in reg['sources'] if s['id'] == 'wikidata_official')
     assert src.get('status') == 'active' and 'descriptions' in (src.get('fields') or []), 'registry wikidata_official 에 descriptions 가 없음'
     seeds = gather(store, bucket, extra_dir, clock() + budget_min * 60 * 0.3, clock)
+    # (11/18 233기) 씨앗 QID 를 남긴다 — wikidata-dump.yml(scripts/wd_dump.py)이 같은 씨앗으로 주간 덤프를 훑는다(223기 이름 층과 같은 조인)
+    store.put_json('processed/desc/qids.json.gz', {'built': today(), 'q': sorted(int(q[1:]) for q in seeds.q), 'prio': sorted(int(q[1:]) for q in seeds.prio)})
     cache = store.get_json('processed/desc/wd.json.gz', {}) or {}
+    for q, v in (store.get_json('processed/desc/wd_dump.json.gz', None) or {}).items():  # 덤프 조인 결과(받은 날 = 덤프 날짜) — 더 새것만 덮어 씀
+        if q not in cache or len(cache[q]) < 3 or cache[q][0] < v[0]:
+            cache[q] = v
     todo = order_qids(seeds, cache)
     st = store.get_json('processed/desc/state.json', {}) or {}
     if http is None:

@@ -14,20 +14,26 @@ COLS = (('ko', '이름 ko'), ('en', '이름 en'), ('ja', '이름 ja'), ('zh_Hans
 DESC_LANGS = ('ko', 'en', 'ja', 'zh_Hans', 'zh_Hant')
 
 
+BASES = (('itin', '일정 장소 기준(명소·식당·숙소·교통 거점 — 일정 생성기가 쓰는 범주)'), ('all', '전체 기준(벤치·정류장 등 포함 게시 장소 전부)'))
+
+
 def point(rep):
-    """보고 하나 → {'date', 'n', 칸: 비율(0~1) 또는 None}."""
+    """보고 하나 → {'date', 'itin': {n, 칸: 비율}, 'all': {...}}. 일정 기준은 coverage.py 의 itinerary(11/18~), 없으면 None."""
     lay = rep.get('layers') or {}
-    pl = lay.get('places') or {}
-    n = pl.get('n') or 0
-    p = {'date': rep.get('date'), 'n': n if pl else None}
-    for k, _ in COLS:
-        if k == 'desc':
-            d = (lay.get('desc') or {}).get('all') or {}
-            p[k] = (d.get('any', 0) / d['n']) if d.get('n') else None
-            for s in DESC_LANGS:
-                p['desc_' + s] = (d.get(s, 0) / d['n']) if d.get('n') else None
-        else:
-            p[k] = (pl.get(k, 0) / n) if n else None
+    dsc = lay.get('desc') or {}
+    p = {'date': rep.get('date')}
+    for base, pk, dk in (('all', 'places', 'all'), ('itin', 'itinerary', 'itinerary')):
+        pl, d = lay.get(pk) or {}, dsc.get(dk) or {}
+        n = pl.get('n') or 0
+        q = {'n': n if pl else None}
+        for k, _ in COLS:
+            if k == 'desc':
+                q[k] = (d.get('any', 0) / d['n']) if d.get('n') else None
+                for sl in DESC_LANGS:
+                    q['desc_' + sl] = (d.get(sl, 0) / d['n']) if d.get('n') else None
+            else:
+                q[k] = (pl.get(k, 0) / n) if n else None
+        p[base] = q
     return p
 
 
@@ -65,21 +71,35 @@ def ago(pts, days):
 def table(pts, days=14, now=None):
     L = [START, '## 8. 매일 채움률·추세 (자동 — coverage-report 가 날마다 바꾼다, 손으로 고치지 않는다)',
          f"갱신 {now or datetime.datetime.now(datetime.timezone.utc).strftime('%Y-%m-%dT%H:%MZ')} · 원천: Storage `collect/v1/coverage/<날짜>.json`(개수·비율만) · "
-         '분모 = 그날 게시 판의 장소 수 전체 · 이름은 그 언어로 적힌 원천 값만(번역·간체↔번체 변환 안 셈) · 영업시간은 알아듣는 값만 · 소개는 1개 언어 이상', '']
+         '이름은 그 언어로 적힌 원천 값만(번역·간체↔번체 변환 안 셈) · 영업시간은 알아듣는 값만 · 소개는 1개 언어 이상. '
+         '**주 지표는 일정 장소 기준**(11/18 — 전체 8천만여 곳에는 벤치·가로등·정류장이 섞여 비율이 0%대로 묻힌다). 전체 기준도 함께 남긴다.', '']
     if not pts:
         return '\n'.join(L + ['- 아직 측정값이 없다(coverage-report 첫 실행 뒤 채워진다).', END]) + '\n'
-    L += ['### 8-1. 최근 채움률', '| 날짜 | 게시 장소 | ' + ' | '.join(c for _, c in COLS) + ' |', '|---' * (len(COLS) + 2) + '|']
-    for p in reversed(pts[-days:]):
-        L.append(f"| {p['date']} | {format(p['n'], ',') if p['n'] is not None else '-'} | " + ' | '.join(pct(p[k]) for k, _ in COLS) + ' |')
     cur = pts[-1]
     refs = [(f'{d}일 전', ago(pts, d)) for d in (1, 7, 30)]
-    L += ['', f"### 8-2. 증가 추세 (오늘 {cur['date']} 기준)", '| 칸 | 오늘 | ' + ' | '.join(f'{nm} 대비' for nm, _ in refs) + ' |', '|---' * (len(refs) + 2) + '|']
+    for i, (base, title) in enumerate(BASES, 1):
+        L += [f'### 8-{i}. 최근 채움률 — {title}', '| 날짜 | 장소 | ' + ' | '.join(c for _, c in COLS) + ' |', '|---' * (len(COLS) + 2) + '|']
+        for p in reversed(pts[-days:]):
+            q = p[base]
+            L.append(f"| {p['date']} | {format(q['n'], ',') if q['n'] is not None else '-'} | " + ' | '.join(pct(q[k]) for k, _ in COLS) + ' |')
+        L.append('')
+    hdr = ' | '.join(f'{nm} 대비' for nm, _ in refs)
+    L += [f"### 8-3. 증가 추세 (오늘 {cur['date']} 기준)", f'| 칸 | 일정 기준 오늘 | {hdr} | 전체 기준 오늘 | {hdr} |', '|---' * (2 * len(refs) + 3) + '|']
     nd = lambda a, b: f"{a - b:+,}" if a is not None and b is not None else '-'
-    L.append(f"| 게시 장소 수 | {format(cur['n'], ',') if cur['n'] is not None else '-'} | " + ' | '.join(nd(cur['n'], r['n'] if r else None) for _, r in refs) + ' |')
+    cnt = lambda q: format(q['n'], ',') if q['n'] is not None else '-'
+    row = ['장소 수']
+    for base, _ in BASES:
+        row += [cnt(cur[base])] + [nd(cur[base]['n'], r[base]['n'] if r else None) for _, r in refs]
+    L.append('| ' + ' | '.join(row) + ' |')
     for k, c in COLS:
-        L.append(f"| {c} | {pct(cur[k])} | " + ' | '.join(dpp(cur[k], r[k] if r else None) for _, r in refs) + ' |')
-    if any(cur.get('desc_' + s) is not None for s in DESC_LANGS):
-        L += ['', '- 소개 언어별(오늘): ' + ' · '.join(f"{s} {pct(cur.get('desc_' + s))}" for s in DESC_LANGS)]
+        row = [c]
+        for base, _ in BASES:
+            row += [pct(cur[base][k])] + [dpp(cur[base][k], r[base][k] if r else None) for _, r in refs]
+        L.append('| ' + ' | '.join(row) + ' |')
+    for base, title in BASES:
+        q = cur[base]
+        if any(q.get('desc_' + sl) is not None for sl in DESC_LANGS):
+            L.append(f"- 소개 언어별(오늘, {title.split('(')[0]}): " + ' · '.join(f"{sl} {pct(q.get('desc_' + sl))}" for sl in DESC_LANGS))
     return '\n'.join(L + ['', END]) + '\n'
 
 
