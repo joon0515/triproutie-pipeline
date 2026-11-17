@@ -1,0 +1,64 @@
+# 일정 패턴 학습기 — 허용된 출처(docs/PATTERNS_POLICY.md)에서 하루 일정의 '숫자 분포'만 만든다. 하루 1번.
+# 언제: 예약(KST 04:41) + collect 실행이 끝날 때마다(workflow_run) — 다만 오늘(KST) 이미 성공했으면 바로 끝낸다.
+# collect.yml 은 고치지 않는다(별도 워크플로라 실패해도 수집·가공을 막지 않음). 끄려면 저장소 변수 PATTERNS_OFF=1.
+# 결과: gs://<bucket>/patterns/v1/{patterns.*.json, itinerary_model_patch*.json, samples/, state.json} — 숫자만. 글·주소·영상 ID 없음.
+name: patterns
+on:
+  schedule:
+    - cron: "41 19 * * *"
+  workflow_run:
+    workflows: [collect]
+    types: [completed]
+  workflow_dispatch:
+    inputs:
+      force: {description: "오늘 이미 돌았어도 다시", type: boolean, default: false}
+permissions:
+  contents: read
+  id-token: write
+  actions: read
+concurrency:
+  group: patterns
+  cancel-in-progress: false
+env:
+  STORE: gs://${{ vars.GCS_BUCKET || 'trip-mate-0vum9k.firebasestorage.app' }}/patterns/v1
+jobs:
+  learn:
+    if: github.repository == 'joon0515/triproutie-pipeline' && vars.PATTERNS_OFF != '1'
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    continue-on-error: true
+    steps:
+      - name: 오늘 이미 성공했나
+        id: once
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          today=$(TZ=Asia/Seoul date +%F)
+          n=$(gh run list -w patterns.yml -s success -L 20 --json createdAt -q '.[].createdAt' | while read t; do TZ=Asia/Seoul date -d "$t" +%F; done | grep -c "^$today$" || true)
+          if [ "${{ inputs.force }}" != "true" ] && [ "$n" -gt 0 ]; then echo "skip=1" >> "$GITHUB_OUTPUT"; echo "오늘 이미 성공 $n회 — 건너뜀"; fi
+      - if: steps.once.outputs.skip != '1'
+        uses: actions/checkout@v4
+      - if: steps.once.outputs.skip != '1'
+        uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ vars.GCP_WIF_PROVIDER || 'projects/222914945328/locations/global/workloadIdentityPools/github-pool/providers/github-provider' }}
+          service_account: ${{ vars.GCP_SA_EMAIL || 'pipeline-uploader@trip-mate-0vum9k.iam.gserviceaccount.com' }}
+      - if: steps.once.outputs.skip != '1'
+        uses: google-github-actions/setup-gcloud@v2
+      - if: steps.once.outputs.skip != '1'
+        uses: actions/setup-python@v5
+        with: {python-version: "3.12"}
+      - if: steps.once.outputs.skip != '1'
+        run: pip install -q pyyaml >/dev/null
+      - if: steps.once.outputs.skip != '1'
+        name: test (mock, no network)
+        run: python3 -W ignore -m unittest tests/test_patterns.py 2>&1 | tail -3
+      - if: steps.once.outputs.skip != '1'
+        name: 장소 자료(종류 맞추기용, 선택) — 저장소 변수 PATTERNS_GAZ_PREFIX(gs://… 폴더)가 있을 때만
+        run: |
+          mkdir -p "$RUNNER_TEMP/gaz"
+          [ -n "${{ vars.PATTERNS_GAZ_PREFIX }}" ] && gcloud storage cp -q -r "${{ vars.PATTERNS_GAZ_PREFIX }}" "$RUNNER_TEMP/gaz/" || echo "장소 자료 없음 — 낱말 규칙으로만 종류 판정"
+      - if: steps.once.outputs.skip != '1'
+        name: learn
+        run: python3 scripts/patterns/learn.py run --store "$STORE" --gazetteer-dir "$RUNNER_TEMP/gaz" | tee -a "$GITHUB_STEP_SUMMARY"
