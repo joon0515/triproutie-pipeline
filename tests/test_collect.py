@@ -205,7 +205,7 @@ class Flow(unittest.TestCase):
         self.assertEqual(tw['matched_world'], 1)  # 太魯閣 은 앱 타일에 이미 있음 → wid
         self.assertEqual(tw['multi_src'], 1); self.assertEqual(tw['official'], 1)
         lat = store.get_json('processed/latest.json')
-        j = store.get_json(f"processed/out/{run}/col_TW_0.json.gz")
+        j = next(j for j in (store.get_json(f"processed/out/{run}/{f}") for f in lat['files'] if f.startswith('col_TW_')) if 'o' in j['rk'])  # 층 파일은 0.5° 칸 단위(docs/SCALE.md)
         i = j['rk'].index('o')
         self.assertEqual((j['tr'][i], j['h'][i], j['hd'][i]), (2, 'Tu-Su 09:00-18:30', 1))  # 공식 시간이 이기고 '시간 다름'
         self.assertIn('col_info_advisory.json.gz', lat['files'])

@@ -29,6 +29,9 @@ from common import LANGS, Store, bad_text, forbidden, norm_name, now, today, val
 PLACE_SETS = {'places', 'official', 'transit'}
 INFO_SETS = {'advisory', 'holidays', 'transit_feeds'}
 PART_ROWS = 50000
+TILE_DEG = 0.5       # 층 파일 한 개가 덮는 칸(위도 0.5° 줄 × 경도 0.5° 칸) — 앱이 도시 근처 파일만 받게(docs/SCALE.md)
+CELL_FLUSH = 10000   # 칸이 바뀔 때 이만큼 모였으면 파일을 끊는다(작은 칸은 옆 칸과 한 파일로)
+PUB_PULL = 40        # 게시 때 층 파일을 한 번에 받는 수(받아 검사·기술한 뒤 곧 지움 — 러너 디스크 14GB)
 R50 = 50.0
 CELL = 0.0005  # 약 55m 격자(이웃 9칸을 본다)
 REGIONS = json.load(open(os.path.join(HERE, '..', '..', 'tools', 'world_regions.json'), encoding='utf-8'))
@@ -491,9 +494,11 @@ def country(R, cc, inbox, legacy):
         store.delete(batch)  # 띠에 다 반영한 뒤에만 대기함을 비운다(중간에 죽으면 다시 반영 — id 기준이라 결과 같음)
         if len(batch) < len(inbox):
             return country(R, cc, [k for k in inbox if k not in set(batch)], None)
-    # 층 파일: 띠 순서(= 위도 순)로 흘려 읽어 5만 행씩
+    # 층 파일: 위도 0.5° 줄마다 경도 0.5° 칸으로 나눠(디스크 Spool) 칸 순서로 5만 행씩. 파일 하나의 범위가 줄 하나·이웃 칸 몇 개로 좁아
+    # 앱은 도시 상자와 겹치는 파일만 받는다(예전: 위도 순이라 큰 나라에서는 파일 하나가 나라 동서 전체를 덮었다).
     bands = sorted(f for f in have if f.startswith('c_'))
     ld, files, part, st = R.tmp('layers'), [], [], {'places': 0, 'matched_world': 0, 'multi_src': 0, 'official': 0}
+    per = max(1, round(TILE_DEG * 1e5 / BAND_E5))  # 줄 하나 = 띠 몇 개
 
     def emit():
         f = f'col_{cc}_{len(files)}.json.gz'
@@ -501,17 +506,28 @@ def country(R, cc, inbox, legacy):
             g.write(gzip.compress(dumps(to_layer(cc, part)).encode(), 6))
         files.append(f); part.clear()
 
-    for i in range(0, len(bands), 40):
-        got = store.pull([f'{pre}/{f}' for f in bands[i:i + 40]], R.tmp('cb'))
-        for f in bands[i:i + 40]:
+    strips = {}
+    for f in bands:
+        strips.setdefault(int(f[2:6]) // per, []).append(f)
+    for _, bl in sorted(strips.items()):
+        cs = Spool(R.tmp('cells'), lambda k: f'x_{k:05d}.jsonl.gz')
+        got = store.pull([f'{pre}/{f}' for f in bl], R.tmp('cb'))
+        for f in bl:
             for m in jl_read(got[f'{pre}/{f}']):
+                cs.add(int((m['lon'] + 180) // TILE_DEG), dumps(m))
+            os.remove(got[f'{pre}/{f}'])
+        cs.flush()
+        for k in sorted(cs.counts):
+            if len(part) >= CELL_FLUSH:
+                emit()
+            for m in sorted(jl_read(cs.path(k)), key=lambda m: (m['lat'], m['lon'])):
                 st['places'] += 1; st['matched_world'] += bool(m.get('wid')); st['multi_src'] += m['tr'] >= 2; st['official'] += m.get('rank') == 'official'
                 part.append(m)
                 if len(part) >= PART_ROWS:
                     emit()
-            os.remove(got[f'{pre}/{f}'])
-    if part:
-        emit()
+        if part:
+            emit()
+        shutil.rmtree(cs.d, ignore_errors=True)
     store.push([os.path.join(ld, f) for f in files], f'processed/out/{R.run}')
     shutil.rmtree(ld, ignore_errors=True)
     for f in [f for f in R.paths if f.startswith(f'col_{cc}_')]:
@@ -718,22 +734,37 @@ def publish(store, bucket, kms_key, dry_run=False, tools='tools', current_dir=No
     hist = store.get_json('published/history.json', []) or []
     if hist and hist[-1]['run'] == latest['run']:
         return None, []  # 이미 게시한 판
-    # 층 파일은 한꺼번에 받아 두고(로컬 파일), 관문은 하나씩 읽어 검사한다 — 전부를 메모리에 올리지 않는다
+    # 층 파일을 PUB_PULL 개씩 받아 검사·기술(describe)하고 곧 지운다 — 2억 행이면 층 파일이 10GB 를 넘어 러너 디스크(14GB)에 다 둘 수 없다.
+    # 수집 층은 Storage 안에서 바로 복사(서버 쪽)해 게시하므로 러너를 거치지 않는다.
+    sys.path.insert(0, os.path.join(HERE, '..'))
+    import publish_layers as PL
     paths = layer_paths(latest)
+    files = list(latest['files'])
     ld = tempfile.mkdtemp(dir=os.environ.get('RUNNER_TEMP') or None)
-    by_dir = {}
-    for f in latest['files']:
-        by_dir.setdefault(paths[f].rsplit('/', 1)[0], []).append(paths[f])
-    for ks in by_dir.values():
-        store.pull(ks, ld, strict=False)
+    entries = {}
 
     def load(f):
         p = os.path.join(ld, f)
-        return json.loads(gzip.decompress(open(p, 'rb').read())) if os.path.exists(p) else {}
+        if not os.path.exists(p):
+            i = files.index(f)
+            store.pull([paths[x] for x in files[i:i + PUB_PULL] if not os.path.exists(os.path.join(ld, x))], ld, strict=False)
+        if not os.path.exists(p):
+            return {}
+        try:
+            if f not in entries:
+                entries[f] = PL.describe(p)
+            return json.loads(gzip.decompress(open(p, 'rb').read()))
+        except ValueError as e:
+            return {'_err': str(e)}
+        finally:
+            os.remove(p)
 
     errs = gate_stream(latest['files'], load, hist[-1]['counts'] if hist else {}, latest['counts'])
     if errs:
         return None, errs
+    missing = [f for f in files if f not in entries]
+    if missing:
+        return None, [f'층 파일 기술 실패 {len(missing)}개: ' + ', '.join(missing[:5])]
     tag = 'c' + latest['run']
     d = tempfile.mkdtemp(dir=os.environ.get('RUNNER_TEMP') or None)
     if current_dir:  # 시험: 지금 판의 층 파일이 든 폴더
@@ -748,9 +779,9 @@ def publish(store, bucket, kms_key, dry_run=False, tools='tools', current_dir=No
             if names:
                 subprocess.run(['gcloud', 'storage', 'cp', '-q', *[f"gs://{bucket}/{m['path']}{n}" for n in names], d], check=True, capture_output=True)
         subprocess.run(['gcloud', 'storage', 'cp', '-q', f'gs://{bucket}/places/v1/layers_extra/*.json.gz', d], capture_output=True)
-    for f in latest['files']:
-        os.replace(os.path.join(ld, f), os.path.join(d, f))
-    cmd = [sys.executable, os.path.join(HERE, '..', 'publish_layers.py'), '--tag', tag, '--dir', d, '--bucket', bucket, '--tools', tools]
+    ex = os.path.join(ld, 'extra_entries.json')
+    json.dump({'entries': [entries[f] for f in files], 'sources': {f: store._p(paths[f]) for f in files}}, open(ex, 'w', encoding='utf-8'))
+    cmd = [sys.executable, os.path.join(HERE, '..', 'publish_layers.py'), '--tag', tag, '--dir', d, '--bucket', bucket, '--tools', tools, '--extra', ex]
     cmd += ['--dry-run'] if dry_run else ['--kms-key', kms_key]
     r = subprocess.run(cmd, capture_output=True, text=True)
     if r.returncode != 0:

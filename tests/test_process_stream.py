@@ -74,7 +74,7 @@ class Stream(unittest.TestCase):
             want = P.cluster_band(merged, P.Index())
             self.assertEqual(len(got[cc]), len(want)); self.assertEqual(st['countries'][cc]['places'], len(want))
             self.assertEqual(sorted(g[0] for g in got[cc]), sorted(m['id'] for m in want))
-            self.assertEqual([(g[1], g[2]) for g in got[cc]], sorted((g[1], g[2]) for g in got[cc]))  # 위도·경도 순
+            self.assertEqual(len(set(g[0] for g in got[cc])), len(got[cc]))  # 같은 곳이 두 파일에 나뉘어 실리지 않음(파일 안 순서·칸 범위는 test_scale.py)
             self.assertEqual(st['countries'][cc]['multi_src'], 200); self.assertEqual(st['countries'][cc]['raw'], 600)
         self.assertGreater(len({P.band_of(r['lat']) for r in allrows['JP'].values()}), 10)  # 실제로 여러 띠
         self.assertEqual(store.list('processed/inbox/'), [])  # 대기함은 비워짐

@@ -91,10 +91,10 @@ def describe(fn):
     return {k: v for k, v in e.items() if v is not None}
 
 
-def build_manifest(tag, files, now=None):
+def build_manifest(tag, files, now=None, extra=()):
     now = now or datetime.datetime.utcnow()
     return {'schema': 'places-layers-1', 'version': tag, 'created_at': now.strftime('%Y-%m-%dT%H:%M:%SZ'), 'path': f'places/v1/{tag}/layers/',
-            'layers': [describe(f) for f in files], 'disabled': False, 'revoked': [],
+            'layers': sorted([describe(f) for f in files] + list(extra), key=lambda e: e['file']), 'disabled': False, 'revoked': [],
             'expires': (now + datetime.timedelta(days=90)).strftime('%Y-%m-%dT%H:%M:%SZ'),
             'attribution': {'ko': '인기 점수: 위키백과 조회수·Wikidata (CC0) · 사진: 위키미디어 공용(사진마다 저작자·라이선스 표기) · 편의시설·이름 보충: © OpenStreetMap contributors (ODbL 1.0) · 한국 관광지 정보·사진: 한국관광공사 TourAPI 4.0 (공공누리 제1·3유형, 출처표시) · 세계 수집 층(col_*): Overture Maps Foundation(CDLA-Permissive-2.0 등 레코드별) · Foursquare Labs(Apache-2.0) · Wikivoyage(CC BY-SA 4.0) · Wikidata(CC0) · 각국 공공데이터(출처별 라이선스, 행마다 lic)'}}
 
@@ -144,32 +144,39 @@ def main():
     ap.add_argument('--kms-key', default='')
     ap.add_argument('--tools', default='tools', help='canonical_fix.py 가 있는 폴더(파이프라인 저장소의 tools/)')
     ap.add_argument('--dry-run', action='store_true')
+    ap.add_argument('--extra', default='', help='{entries: [describe() 결과], sources: {파일: gs://… 원본}} — 러너에 받지 않고 Storage 안에서 복사해 싣는 층(process.py 수집 층)')
     a = ap.parse_args()
     if not all(c.isalnum() or c in '._-' for c in a.tag) or not (1 <= len(a.tag) <= 40):
         sys.exit('tag 은 영문·숫자·._- 40자 이내')
     sys.path.insert(0, a.tools)
     from canonical_fix import canon_value, canonical  # 타일 manifest 와 같은 정규 JSON(서명 검증이 이것과 맞아야 한다)
     files = sorted(glob.glob(os.path.join(a.dir, '*.json.gz')))
-    if not files:
+    ex = json.load(open(a.extra, encoding='utf-8')) if a.extra else {'entries': [], 'sources': {}}
+    clash = {os.path.basename(f) for f in files} & set(ex['sources'])
+    if clash:
+        sys.exit(f'같은 이름의 층이 두 곳에서 옴: {sorted(clash)[:5]}')
+    if not files and not ex['entries']:
         sys.exit('층 파일이 없음')
-    flat = canon_value(build_manifest(a.tag, files))
+    flat = canon_value(build_manifest(a.tag, files, extra=ex['entries']))
     man, blobs = split_manifest(flat, canonical)
     man = canon_value(man)
     body = canonical(man)
     dest = f'gs://{a.bucket}/places/v1/{a.tag}'
-    print(f'층 {len(files)}개, 합계 {sum(e["size"] for e in flat["layers"]):,} bytes, manifest 본문 {len(body.encode()):,} bytes'
+    print(f'층 {len(files) + len(ex["entries"])}개(Storage 안 복사 {len(ex["entries"])}개), 합계 {sum(e["size"] for e in flat["layers"]):,} bytes, manifest 본문 {len(body.encode()):,} bytes'
           + (f' (2단 목록 {len(blobs)}개에 {sum(p["n"] for p in man["parts"])}개 항목, 한 장이면 {len(canonical(flat).encode()):,} bytes)' if blobs else ''))
-    for e in flat['layers']:
+    for e in flat['layers'][:300]:  # 수천 개면 앞 300개만
         print(f'  {e["kind"]:<11} {e["file"]:<44} n={e["n"]:<7} {e["size"]:>9,} bytes')
     if len(body.encode()) + 200 > ROOT_MAX:  # 서명·올리기 전에 멈춘다(+200 = sig 칸). 앱이 읽는 종류가 이만큼 늘면 그 종류도 2단으로 빼야 한다(앱 변경 필요)
         by = {}
         for e in man['layers']:
             by[e['kind']] = by.get(e['kind'], 0) + len(canonical(e).encode()) + 1
         sys.exit(f'뿌리 목록 본문 {len(body.encode()):,} bytes > 상한 {ROOT_MAX - 200:,} (KMS 서명·앱 읽기 한도 64 KiB). 종류별 bytes: {by}')
-    cmds = [['gcloud', 'storage', 'cp', '-q', *files, f'{dest}/layers/']]
+    cmds = [['gcloud', 'storage', 'cp', '-q', *files, f'{dest}/layers/']] if files else []
     if a.dry_run:
         print('[dry-run] 서명·업로드 안 함. 실행할 명령:')
-        print('  ' + ' '.join(cmds[0][:4]) + f' <{len(files)} files> {dest}/layers/')
+        print(f'  gcloud storage cp -q <{len(files)} files> {dest}/layers/')
+        if ex['sources']:
+            print(f'  gcloud storage cp -q -I {dest}/layers/   <Storage 안 복사 {len(ex["sources"])}개>')
         print(f'  gcloud kms asymmetric-sign … --input-file=body.json --signature-file=sig.bin   (키: {"지정됨" if a.kms_key else "미지정"})')
         if blobs:
             print(f'  gcloud storage cp -q <{len(blobs)} part lists> {dest}/layer_parts/')
@@ -189,7 +196,13 @@ def main():
     json.dump(man, open(f'{tmp}/layers_manifest.json', 'w', encoding='utf-8'), ensure_ascii=False, separators=(',', ':'))  # 빈칸 없이(파일 크기 = 본문 + sig)
     if os.path.getsize(f'{tmp}/layers_manifest.json') > ROOT_MAX:
         sys.exit('뿌리 목록 파일이 상한을 넘음: ' + str(os.path.getsize(f'{tmp}/layers_manifest.json')) + ' bytes')
-    subprocess.run(cmds[0], check=True, capture_output=True)  # 파일 먼저, manifest 는 나중(앱이 없는 파일을 가리키는 manifest 를 보지 않게)
+    if cmds:
+        subprocess.run(cmds[0], check=True, capture_output=True)  # 파일 먼저, manifest 는 나중(앱이 없는 파일을 가리키는 manifest 를 보지 않게)
+    if ex['sources']:  # 수집 층: Storage → Storage 복사(서버 쪽, 러너 디스크를 거치지 않음). 원본 이름 = 층 파일 이름
+        bad = [f for f, src in ex['sources'].items() if os.path.basename(src) != f]
+        if bad:
+            sys.exit(f'원본 이름과 층 이름이 다름: {bad[:5]}')
+        subprocess.run(['gcloud', 'storage', 'cp', '-q', '-I', f'{dest}/layers/'], input='\n'.join(ex['sources'].values()).encode(), check=True, capture_output=True)
     if blobs:  # 2단 목록은 층 파일 다음, 뿌리 목록보다 먼저
         pd = os.path.join(tmp, 'layers_parts_' + a.tag); os.makedirs(pd, exist_ok=True)
         for n, b in blobs.items():
@@ -197,7 +210,7 @@ def main():
         subprocess.run(['gcloud', 'storage', 'cp', '-q', *[os.path.join(pd, n) for n in sorted(blobs)], f'{dest}/layer_parts/'], check=True, capture_output=True)
     for dst in (f'{dest}/layers.json', f'gs://{a.bucket}/places/v1/layers.json'):
         subprocess.run(['gcloud', 'storage', 'cp', '-q', f'{tmp}/layers_manifest.json', dst], check=True, capture_output=True)
-    print('layers manifest ok:', len(files), 'files,', len(blobs), 'part lists, root', len(body.encode()), 'bytes')
+    print('layers manifest ok:', len(flat['layers']), 'files,', len(blobs), 'part lists, root', len(body.encode()), 'bytes')
     return 0
 
 
