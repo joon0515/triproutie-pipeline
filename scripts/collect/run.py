@@ -10,6 +10,7 @@
 상태: 조각마다 Storage state/<출처>/<조각>.json (하루 요청 수·이어받기 위치·연속 실패). 저장소에는 summary 의 작은 status.json 만 커밋.
 """
 import argparse, datetime, json, os, subprocess, sys, tempfile, time
+import traceback
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
@@ -123,7 +124,9 @@ def job(reg, store, source, shard, budget_min=50, opener=None, sleep=time.sleep)
     except Blocked as e:
         stop = 'BLOCKED:' + str(e)
     except Exception as e:  # 다른 출처는 계속(조각 하나만 실패)
-        err = f'{type(e).__name__}: {str(e)[:160]}'
+        fr = traceback.extract_tb(e.__traceback__)  # 어디서 났는지(파일:줄)만 — 값·주소는 싣지 않음. 우리 코드의 마지막 줄을 고른다
+        tb = [f for f in fr if os.path.dirname(os.path.abspath(f.filename)) == HERE][-1:] or fr[-1:]
+        err = f'{type(e).__name__}: {str(e)[:160]}' + (f' @{os.path.basename(tb[0].filename)}:{tb[0].lineno}' if tb else '')
     st['last_run'] = now().isoformat()
     st['req_date'] = st.get('date')
     if err:
