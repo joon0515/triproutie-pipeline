@@ -53,7 +53,7 @@ jobs:
         run: pip install -q pyyaml >/dev/null
       - if: steps.once.outputs.skip != '1'
         name: test (mock, no network)
-        run: python3 -W ignore -m unittest tests/test_patterns.py 2>&1 | tail -3
+        run: set -o pipefail; python3 -W ignore -m unittest tests/test_patterns.py 2>&1 | tail -3
       - if: steps.once.outputs.skip != '1'
         name: 장소 자료(종류 맞추기용, 선택) — 저장소 변수 PATTERNS_GAZ_PREFIX(gs://… 폴더)가 있을 때만
         run: |
