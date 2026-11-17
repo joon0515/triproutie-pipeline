@@ -11,7 +11,9 @@ UA = 'TripRoutie-collector/1.0 (+https://github.com/joon0515/triproutie-pipeline
 ROBOTS_NAME = 'TripRoutie-collector'
 # 금지 목록(대표 결정): 인스타그램·틱톡·네이버·카카오·구글·타벨로그·트립어드바이저. 씨앗·링크·출처 어디서든 자동 제외.
 FORBIDDEN = ('instagram.com', 'cdninstagram.com', 'tiktok.com', 'tiktokcdn.com', 'naver.com', 'naver.me', 'naver.net', 'pstatic.net',
-             'kakao.com', 'kakaocdn.net', 'daum.net', 'kko.to', 'tabelog.com', 'goo.gl', 'g.page', 'g.co', 'youtube.com', 'youtu.be')
+             'kakao.com', 'kakaocdn.net', 'daum.net', 'kko.to', 'tabelog.com', 'goo.gl', 'g.page', 'g.co', 'youtube.com', 'youtu.be',
+             'hko.gov.hk', 'weather.gov.hk',  # 홍콩천문대: 상업 목적은 사전 서면 허락 필요(registry.yaml banned)
+             'tistory.com', 'blog.me', 'brunch.co.kr', 'velog.io', 'blogspot.com', 'ameblo.jp', 'hatenablog.com', 'note.com')  # 블로그: 허락 근거 없음
 FORBIDDEN_LABELS = ('google', 'tripadvisor', 'tabelog', 'instagram', 'tiktok', 'naver', 'kakao')  # google.co.jp · tripadvisor.fr 등 모든 나라 도메인
 LANGS = ('ko', 'en', 'ja', 'zh')  # + nm(현지 이름) = 앱 타일과 같은 5개 이름 칸
 BLOCK_COOL_DAYS = 7  # 403 을 받은 사이트는 7일 쉼

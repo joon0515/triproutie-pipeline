@@ -13,6 +13,9 @@ const NO_RE = /^[A-Z0-9]{2,3}\d{1,4}[A-Z]?$/; // IATA(KE703)·ICAO 콜사인(KAL
 
 const ICN_DEV_LIMIT = 500, ICN_COLLECT_BUDGET = 400, ICN_ONDEMAND_CAP = 90; // 400+90=490 < 500
 const KAC_ONDEMAND_CAP = 300, KAC_RT_CAP = 300, ADSB_CAP = 200;              // 공사 개발 한도 5,000/일 각각
+// 약관·상업 사용 허락을 못 찾은 조회처(adsbdb·hexdb — 2026-11-17 출처 점검 31·32번). 운영자의 서면 허락을 받아 이 값을 true 로 바꾸기 전에는
+// 환경 변수(FLIGHT_ADSBDB_OK·FLIGHT_HEXDB_OK)를 켜도 호출하지 않는다. 시험: test_noterms.js
+const NOTERMS_OK = false;
 const USER_PER_DAY = 20, WINDOW_BACK = 3, WINDOW_FWD = 6, PRUNE_DAYS = 120, CONFIRM_MIN = 2;
 
 const kstDay = (ms) => new Date(ms + 9 * 3600e3).toISOString().slice(0, 10);
@@ -158,7 +161,7 @@ function makeFreeFlight(deps) {
   }
   // ④ adsbdb: 공항만(+거리로 표준 비행시간). 저장·공유 없음(노선 자료 복사·DB 편입 금지 문구).
   async function adsbdb(no, date, nowMs) {
-    if (env('FLIGHT_ADSBDB_OK') !== '1') return null;
+    if (!NOTERMS_OK || env('FLIGHT_ADSBDB_OK') !== '1') return null;
     if (!(await incr(`flight_sched/_day_${kstDay(nowMs)}_adsbdb`, num('FLIGHT_ADSB_CAP', ADSB_CAP), nowMs))) return null;
     let r; try { r = await deps.fetch('https://api.adsbdb.com/v0/callsign/' + encodeURIComponent(no), { headers: { accept: 'application/json' }, signal: AbortSignal.timeout(6000) }); } catch (_) { return null; }
     if (!r.ok) return null; let j; try { j = await r.json(); } catch (_) { return null; }
@@ -180,7 +183,7 @@ function makeFreeFlight(deps) {
   }
   // ④-1 hexdb.io: 약관 문구를 못 찾음(사용 허락 불명) → 기본 꺼짐(FLIGHT_HEXDB_OK=1). 저장·공유 없음. 응답 모양은 문서만 보고 짬(미확인).
   async function hexdb(no, date, nowMs) {
-    if (env('FLIGHT_HEXDB_OK') !== '1') return null;
+    if (!NOTERMS_OK || env('FLIGHT_HEXDB_OK') !== '1') return null;
     if (!(await incr(`flight_sched/_day_${kstDay(nowMs)}_hexdb`, num('FLIGHT_HEXDB_CAP', 200), nowMs))) return null;
     let r; try { r = await deps.fetch('https://hexdb.io/api/v2/routes/' + encodeURIComponent(no), { headers: { accept: 'application/json' }, signal: AbortSignal.timeout(6000) }); } catch (_) { return null; }
     if (!r.ok) return null; let j; try { j = await r.json(); } catch (_) { return null; }
@@ -217,7 +220,7 @@ function makeFreeFlight(deps) {
     let h = hitOf(((await loadSched(no)) || {}).variants, wd);
     if (h) { const out = pub(no, date, h, 'sched'); return { ok: true, flight: await maybeEstimate(out) }; }
     // 키 없으면 아래 공공 단계는 각자 조용히 null. 사용자당 하루 상한은 외부 호출 단계 전에 한 번만.
-    const wantExternal = !!(key() && (env('FLIGHT_URL_KAC_SCHED') || env('FLIGHT_URL_ICN_FLT') || env('FLIGHT_URL_KAC_RT'))) || env('FLIGHT_ADSBDB_OK') === '1' || env('FLIGHT_PAID') === '1';
+    const wantExternal = !!(key() && (env('FLIGHT_URL_KAC_SCHED') || env('FLIGHT_URL_ICN_FLT') || env('FLIGHT_URL_KAC_RT'))) || (NOTERMS_OK && env('FLIGHT_ADSBDB_OK') === '1') || env('FLIGHT_PAID') === '1';
     if (wantExternal && user && user.uid && !(await incr(`flight_sched/_u_${kstDay(nowMs)}_${uidHash(user.uid)}`, USER_PER_DAY, nowMs))) return { ok: false, reason: 'limit' };
     for (const step of [kacSched, icnByFlight, kacRealtime]) {
       let f = null; try { f = await step(no, date, nowMs); } catch (_) { f = null; }
@@ -306,4 +309,4 @@ function makeFreeFlight(deps) {
   return { lookup, handle, collectDaily, collectHkg, confirm };
 }
 
-module.exports = { makeFreeFlight, parseIcnRow, parseKacSched, itemsOf, hhmm, blockMin, km, mergeVariant, ICN_COLLECT_BUDGET, ICN_ONDEMAND_CAP, ICN_DEV_LIMIT };
+module.exports = { makeFreeFlight, NOTERMS_OK, parseIcnRow, parseKacSched, itemsOf, hhmm, blockMin, km, mergeVariant, ICN_COLLECT_BUDGET, ICN_ONDEMAND_CAP, ICN_DEV_LIMIT };
