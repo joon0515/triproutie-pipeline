@@ -9,8 +9,8 @@ SPLIT=$(python3 -c "import json,sys;print('1' if json.load(open('tools/layers_re
 i=0
 for U in $URLS; do
   i=$((i+1))
-  # 추출본 서버 예절: 한 번에 하나, 실패하면 60초 쉬고 3번까지. 식별되는 User-Agent.
-  curl -fsSL --retry 3 --retry-delay 60 -A "triproutie-pipeline (github actions; places-layers)" -o "$W/pbf/$i.osm.pbf" "$U"
+  # 추출본 서버 예절: 한 번에 하나, 실패하면 60초 쉬고 3번까지(11/18: 접속 실패도 다시 — 11/17 지역 5곳이 curl (7) 로 끝남). 식별되는 User-Agent.
+  curl -fsSL --retry 3 --retry-delay 60 --retry-connrefused --retry-all-errors -A "triproutie-pipeline (github actions; places-layers)" -o "$W/pbf/$i.osm.pbf" "$U"
 done
 # 편의시설 층. split 지역(큰 나라)은 위도·경도 4도 칸으로 나눠 파일 하나가 앱 상한(8MB)을 넘지 않게 한다.
 if [ -n "$SPLIT" ]; then
@@ -35,6 +35,9 @@ if [ -n "$WORLD" ]; then
 fi
 TILES=""
 if ls "$W"/tiles/w-*.json.gz >/dev/null 2>&1; then TILES=$(ls "$W"/tiles/w-*.json.gz | paste -sd, -); fi
+# (11/18) 그 지역 나라의 수집 층(게시 장소, col_<cc>_*) 주소 — 이름·영업시간 층이 타일 id 와 함께 수집 층 id 로도 싣는다(파일은 40개씩 받아 곧 지움)
+COLS_ARG=()
+if python3 scripts/region_cols.py "$R" > "$W/cols.txt" 2>/dev/null && [ -s "$W/cols.txt" ]; then COLS_ARG=(--cols "$W/cols.txt"); echo "region $R: col files $(wc -l < "$W/cols.txt")"; fi
 # 이름 보충 층: 그 지역 세계 타일에 OSM 의 한글 이름·읽는 법·영문 이름을 붙인다(일본만 — names=false 인 지역은 건너뜀).
 if [ "${IN_NAMES:-yes}" = "yes" ] && [ -n "$NAMES_OK" ] && [ -n "$TILES" ]; then
   python3 tools/names_osm.py "$W/out/names-$R.json.gz" "$TILES" "$W"/pbf/*.osm.pbf > /dev/null || true
@@ -42,7 +45,7 @@ fi
 # 영업시간 층 원본(OSM opening_hours + wikidata 태그 → 타일 id). layers/ 가 아니라 hours_src/ 에 올리고, finalize 가 공식 사이트 값과 합쳐 layers/hours-*.json.gz 로 낸다.
 if [ -n "$TILES" ]; then
   mkdir -p "$W/hours"
-  if python3 tools/hours_osm.py "$W/hours/hours-$R.json.gz" "$TILES" "$W"/pbf/*.osm.pbf | tail -1; then
+  if python3 tools/hours_osm.py "$W/hours/hours-$R.json.gz" "$TILES" "$W"/pbf/*.osm.pbf "${COLS_ARG[@]}" | tail -1; then
     gcloud storage cp -q "$W/hours/hours-$R.json.gz" "gs://$GCS_BUCKET/places/v1/$TAG/hours_src/" >/dev/null 2>&1 || echo "region $R: hours upload failed"
     # (11/17) 판과 상관없는 최신 사본. 수집 게시(c<날짜시각> 판)가 최신 판이 된 뒤의 merge 는 그 판에 hours_src 가 없어 여기서 가져온다.
     gcloud storage cp -q "$W/hours/hours-$R.json.gz" "gs://$GCS_BUCKET/places/v1/hours_src/" >/dev/null 2>&1 || echo "region $R: hours latest copy failed"
@@ -61,7 +64,7 @@ fi
 # 수집 게시(process)가 넘겨 싣도록 layers_extra/ 에 둔다. 지난번 조각 수가 달랐을 수 있어 이 지역 파일을 먼저 지운다.
 if [ -n "$TILES" ]; then
   mkdir -p "$W/names5"
-  if python3 tools/names5_osm.py "$W/names5" "$R" "$TILES" "$W"/pbf/*.osm.pbf | tail -1 && ls "$W"/names5/names-osm-*.json.gz >/dev/null 2>&1; then
+  if python3 tools/names5_osm.py "$W/names5" "$R" "$TILES" "$W"/pbf/*.osm.pbf "${COLS_ARG[@]}" | tail -1 && ls "$W"/names5/names-osm-*.json.gz >/dev/null 2>&1; then
     gcloud storage rm -q "gs://$GCS_BUCKET/places/v1/layers_extra/names-osm-$R-[0-9][0-9].json.gz" >/dev/null 2>&1 || true
     gcloud storage cp -q "$W"/names5/names-osm-*.json.gz "gs://$GCS_BUCKET/places/v1/layers_extra/" >/dev/null 2>&1 || echo "region $R: names-osm extra copy failed"
   else
