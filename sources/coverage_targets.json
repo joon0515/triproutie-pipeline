@@ -1,0 +1,20 @@
+{
+ "checked": "2026-11-17",
+ "note": "공개 출처별 전세계 장소 수(분모). 공식 문서·릴리스 노트에서 직접 읽은 값만 count 에 적는다. 못 읽은 것은 null(= 미확인). 구글 값은 공개 문구 인용일 뿐 구글 데이터를 받거나 저장하지 않는다.",
+ "sources": [
+  {"id": "overture_places", "name": "Overture Maps Places", "count": 88400000, "as_of": "2026-10-21.0", "license": "CDLA-Permissive-2.0 (레코드별 sources[].license)", "layer": "main",
+   "url": "https://docs.overturemaps.org/blog/2026/10/21/release-notes/", "quote": "Places grew 8.5% to 88.4 million features", "note": "우리 수집기는 confidence >= 0.6 · 영업 중만 받는다 — 받은 수는 이보다 적다"},
+  {"id": "fsq_os_places", "name": "Foursquare Open Source Places", "count": null, "as_of": null, "license": "Apache-2.0", "layer": "main",
+   "url": "https://docs.foursquare.com/data-products/docs/access-fsq-os-places", "note": "공식 문서 2곳에 총수가 없다(2026-11-17). 2024-11 발표 때 '100M+' 로 알려졌으나 공식 페이지에서 다시 확인하지 못함 → 분모는 우리가 받은 행 수로 대신한다"},
+  {"id": "wikidata", "name": "Wikidata (좌표 있는 항목)", "count": null, "as_of": null, "license": "CC0-1.0", "layer": "main",
+   "url": "https://www.wikidata.org/wiki/Wikidata:Statistics", "note": "통계 페이지를 열지 못함(2026-11-17) → 미확인. 장소 수보다 이름 다국어·공식 사이트·사진 속성의 출처로 쓴다"},
+  {"id": "wikivoyage", "name": "Wikivoyage listing (10개 언어)", "count": null, "as_of": null, "license": "CC-BY-SA-4.0", "layer": "share-alike 분리",
+   "url": "https://dumps.wikimedia.org/", "note": "총수 공식 값 없음 — 받은 행 수로 잰다"},
+  {"id": "osm", "name": "OpenStreetMap (편의시설·영업시간·이름 층)", "count": null, "as_of": null, "license": "ODbL-1.0", "layer": "share-alike 분리(places-layers)",
+   "url": "https://www.openstreetmap.org/copyright", "note": "장소 층(col_*)에 섞지 않는다. 영업시간·이름 보충 층으로만"},
+  {"id": "kto_tourapi", "name": "한국관광공사 TourAPI 4.0", "count": null, "as_of": null, "license": "KOGL 1·3유형", "layer": "tourapi 층",
+   "url": "https://www.data.go.kr/data/15101578/openapi.do", "note": "tourapi/state.json 의 목록 수로 잰다"}
+ ],
+ "google_reference": {"count": 200000000, "as_of": "2022-12-14", "url": "https://mapsplatform.google.com/resources/blog/how-google-maps-platform-uses-aiml-and-community-contributions-keep-its-points-interest-date/",
+  "quote": "over 200 million businesses and places around the world", "note": "구글 공식 블로그 문구(‘이상’이므로 실제는 더 크다). 나라·도시·속성별 값은 공개된 것이 없다 → 비교 불가"}
+}

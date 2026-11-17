@@ -1,0 +1,72 @@
+# 커버리지 — '구글 지도 수준' 목표를 재는 법과 첫 측정값 (2026-11-17, 196기)
+
+대표 지시(11/17): 허용된 공개 자료 전부를 한 달 안에 담고, 도시별 격차를 매일 수치로.
+**변하지 않는 선**: 구글 데이터는 받지도 저장하지도 않는다. 라이선스 근거가 있는 출처만, robots 준수, 금지 도메인·우회 금지, share-alike(ODbL·CC BY-SA) 자료는 분리 층으로만.
+
+## 1. 목표 정의 (잴 수 있는 지표 3개)
+| 지표 | 정의 | 100% 의 뜻 | 어디서 재나 |
+|---|---|---|---|
+| **A. 수집률** | 출처별 (받은 조각 ÷ 전체 조각), (받은 행 ÷ 그 출처의 공개 총수) | 등록된 출처의 최신 릴리스를 전부 받음 | `collect/status.json` → `scripts/coverage.py` |
+| **B. 게시율** | 게시된 장소 수 ÷ **공개 출처 합집합** | 받은 것이 전부 묶여(같은 곳 1행) 앱 목록에 실림 | 최신 가공 판의 `col_*.json.gz` 를 직접 읽음 |
+| **C. 속성 채움** | 종류(명소·식당·숙소·교통)·나라·도시별로 이름 4개 언어·영업시간·사진·전화·웹이 있는 비율 | 종류마다 목표값(4절) | 같음 + 영업시간·사진 층 |
+
+- **합집합 분모는 범위로 적는다.** 출처끼리 얼마나 겹치는지는 가공(같은 이름 + 50 m)이 끝나야 안다. 하한 = 가장 큰 출처 하나, 상한 = 출처 합.
+  총수를 공식 문서에서 못 읽은 출처는 우리가 받은 행 수로 대신한다. share-alike 출처(OSM·Wikivoyage)는 장소 층 분모에 넣지 않는다(분리 층).
+- 종류는 앱 분류 낱말을 `coverage.type_of` 가 명소·식당·숙소·교통·그 밖으로 가른다(낱말 포함 어림 — 시험 `tests/test_coverage.py`).
+- 도시는 `sources/coverage_cities.json` 의 상자 30개(대략값, 추가 자유).
+
+## 2. 분모 — 쓸 수 있는 공개 출처별 전세계 장소 수 (2026-11-17 확인)
+| 출처 | 라이선스 | 전세계 장소 수 | 근거 | 층 |
+|---|---|---|---|---|
+| Overture Maps Places `2026-10-21.0` | CDLA-Permissive-2.0(레코드별) | **8,840만** | 릴리스 노트 "Places grew 8.5% to 88.4 million features" — https://docs.overturemaps.org/blog/2026/10/21/release-notes/ | 장소 층 |
+| Foursquare OS Places | Apache-2.0 | **미확인**(공식 문서 2곳에 총수 없음). 우리가 받은 행 8,987만(229 조각 중 149) | https://docs.foursquare.com/data-products/docs/access-fsq-os-places | 장소 층 |
+| Wikidata(좌표 있는 항목) | CC0 | **미확인**(통계 페이지를 열지 못함) | https://www.wikidata.org/wiki/Wikidata:Statistics | 속성(이름·공식 사이트·사진) |
+| Wikivoyage listing 10개 언어 | CC BY-SA 4.0 | 공식 총수 없음 — 받은 행으로 잼 | https://dumps.wikimedia.org/ | 분리(사실값만) |
+| OpenStreetMap | ODbL 1.0 | 미확인(taginfo 는 robots 가 막아 열지 않음) | https://www.openstreetmap.org/copyright | 분리(편의시설·영업시간·이름 층) |
+| 한국관광공사 TourAPI | 공공누리 1·3유형 | `tourapi/state.json` 목록 수 | https://www.data.go.kr/data/15101578/openapi.do | tourapi 층 |
+| 각국 공공데이터 | 출처마다 | `docs/OPEN_DATA.md` | | 장소 층(행마다 lic) |
+
+기계가 읽는 표: `sources/coverage_targets.json`(숫자는 날짜·원문과 함께만 적는다 — 시험이 지킨다).
+
+## 3. 구글 지도 대비 격차를 가늠하는 법
+- 구글의 장소 수로 공개된 것은 공식 블로그 문구 하나다: **"over 200 million businesses and places around the world"**(2022-12-14) —
+  https://mapsplatform.google.com/resources/blog/how-google-maps-platform-uses-aiml-and-community-contributions-keep-its-points-interest-date/
+  '이상'이고 4년 전 값이라 실제는 더 크다. → 우리 게시 수 ÷ 2억은 **위쪽으로 치우친 참고값**으로만 적는다.
+- 나라별·도시별·속성별(영업시간·사진·전화 채움) 구글 값은 공개된 것이 없다 → **비교 불가**. 구글 API·화면에서 세거나 표본을 뽑아 견주는 일은 하지 않는다(저장·긁기 금지).
+- 그래서 매일 보는 숫자는 **공개 출처 합집합 대비 비율(지표 B)** 과 **속성 채움(지표 C)** 이다. 장소 수는 공개 출처 합집합이 상한이고, 그 합집합이 구글의 얼마인지는 위 참고값으로만 가늠한다:
+  합집합 0.9억~1.8억 ÷ 2억 이상 = **45%~89% 를 넘지 못한다.**
+
+## 4. 속성 목표(지표 C) — 한 달 안에 되는 것과 안 되는 것
+| 속성 | 출처(허용된 것만) | 한 달 목표 | 구글 수준이 되나 |
+|---|---|---|---|
+| 이름 현지어 | 모든 출처 | 100% (필수 칸) | 됨 |
+| 이름 ko·en·ja·zh | Overture names.common · Wikidata 라벨 · OSM name:* (분리 층) | 명소 60% / 그 밖은 있는 만큼 | 큰 명소만. 가게 이름 번역은 출처가 없다 |
+| 웹 | Overture websites · Foursquare website · Wikidata P856 | 출처가 준 만큼(측정 후 고정) | 부분 |
+| 전화 | Foursquare tel(이번에 추가) · 공식 사이트 구조화 데이터 | 출처가 준 만큼 | 부분 |
+| 영업시간 | OSM opening_hours(분리 층, 월 1회) · 공식 사이트 schema.org(하루 최대 1.8만 사이트) · TourAPI | 명소 중 공식 사이트 있는 곳 우선 | **안 됨** — 공개 덤프 2종(Overture·Foursquare OS)에 영업시간 칸이 없다 |
+| 사진 | Wikidata P18 → Wikimedia Commons(CC0·BY·BY-SA, 저작자 표기) · TourAPI(공공누리) | 명소 위주 | **안 됨** — 가게 사진의 열린 출처가 없다 |
+
+정직하게: **장소 '수'는 며칠이면 공개 합집합의 100% 에 닿는다(THROUGHPUT.md). 영업시간·사진은 출처가 없어 한 달 뒤에도 구글 수준이 아니다.** 일일 보고가 이 차이를 종류별·도시별 숫자로 보여 준다.
+
+## 5. 첫 측정값 (2026-11-17, `python3 scripts/coverage.py` — 저장소의 `collect/status.json` 08:22Z 기준)
+| 지표 | 값 |
+|---|---|
+| 합집합 분모 | 89,871,645 ~ 178,271,645 |
+| 받은 원본 행 | **89,871,645 = 상한 분모의 50.4%** |
+| A. Foursquare OS Places | 조각 149/229(65%), 89,871,645행, 실패 중 0 |
+| A. Overture Places | 조각 2/229(1%), 0행 ÷ 8,840만 = **0.0%** |
+| A. 그 밖 | Wikidata 공식 사이트 씨앗 5,617 · 공개 데이터셋 1,268 · 여행 권고 456 · 공휴일 501 · 공식 사이트 15(조각 6개 중 4개 연속 실패) |
+| B. 게시율 | **미측정** — 이 작업 환경에는 Storage 읽기 권한이 없다. `coverage-report` 워크플로 첫 실행이 채운다 |
+| C. 속성 채움 | **미측정**(같은 이유) |
+
+Foursquare 는 조각의 65% 에서 이미 8,987만 행이라, 다 받으면 1억 행을 넘을 것이다(그때 분모도 함께 커진다).
+
+## 6. 매일 보고
+`.github/workflows/coverage-report.yml` — 매일 UTC 20:47(+수동). 최신 가공 판의 층 파일을 40개씩 받아 읽고 지운 뒤,
+이슈 **'커버리지 일일 보고'** 하나에 댓글로 누적한다(목표 대비·출처별·종류별·나라 상위 25·도시 30·Storage 용량·어제 대비 증감).
+같은 내용의 JSON 은 Storage `collect/v1/coverage/<날짜>.json`. 저장소에는 커밋하지 않고, 장소 내용은 어디에도 찍지 않는다(개수·비율만).
+
+## 7. 알려진 한계
+- 종류 가르기는 낱말 어림이다(Foursquare 분류 1,000여 개를 표로 맞춘 것이 아님). 틀린 낱말은 `type_of` 에 더한다.
+- 사진·영업시간 층은 장소 id(또는 타일 id `wid`)가 맞는 것만 센다.
+- Overture 수집기는 `confidence ≥ 0.6`·영업 중만 받으므로 Overture 수집률은 100% 가 되지 않는다(받은 수가 곧 우리 기준의 전부).
