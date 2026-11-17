@@ -1,0 +1,8 @@
+{
+ "note": "지역 순환 우선순위(11/18 233기). 같은 조건(마지막 성공 날짜가 같음 — 처음 받는 조각끼리 등)이면 앞 단계 나라부터. 사용자 검색 수 파일(Storage collect/v1/demand.json, {\"cc\": {\"JP\": 1234, ...}})이 있으면 그 수가 많은 나라가 맨 앞이다(앱 로그를 나라별 개수로만 모은 것 — 사람·검색어 없음). 없으면 아래 단계만 쓴다.",
+ "basis": "단계 0 = 앱 일정 모델 도시(scripts/patterns/cities.json 39곳)의 나라, 단계 1 = 커버리지 보고 도시 상자(sources/coverage_cities.json 30곳)의 나라, 그 밖 = 전 세계(등록부 순서)",
+ "tiers": [
+  ["KR", "JP", "TW", "HK", "MO", "CN"],
+  ["TH", "VN", "SG", "PH", "ID", "MY", "GU", "US", "FR", "GB", "IT", "ES", "CZ", "TR", "AE", "AU"]
+ ]
+}

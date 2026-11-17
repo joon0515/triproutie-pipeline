@@ -1,0 +1,29 @@
+{
+ "note": "증분·갱신 주기(11/18 233기). 이미 모은 것은 건너뛰고(변경분만), days 가 지난 것만 다시 받는다. 자주 바뀌는 것은 짧게, 이름은 길게. 숫자를 바꾸면 다음 실행부터 적용된다. 코드: common.refresh_days(kind, 기본값).",
+ "fields": {
+  "hours": {
+   "days": 14,
+   "where": "공식 사이트 schema.org 영업시간·전화(collectors.crawl, 사이트별 done 날짜) — 영업시간은 계절·휴무로 자주 바뀐다"
+  },
+  "desc": {
+   "days": 30,
+   "where": "Wikidata 설명·라벨 캐시(place_desc.REFRESH_DAYS) — 같은 질의가 이름 라벨도 가져오므로 Wikidata 이름은 이 주기로 함께 갱신"
+  },
+  "photos": {
+   "days": 90,
+   "where": "Commons 사진 라이선스·저작자(place_names.C_REFRESH)"
+  },
+  "names": {
+   "days": 180,
+   "where": "이름 갱신 상한(이보다 오래 두지 않음). 실제로는 Wikidata 라벨이 desc 질의와 함께 30일, OSM name:* 가 places-layers 월 1회 full 로 더 자주 갱신된다 — 이름만 따로 다시 묻는 요청은 만들지 않는다"
+  },
+  "datasets": {
+   "days": 30,
+   "where": "공개 데이터셋 파일(collectors.open_dataset)"
+  },
+  "gtfs": {
+   "days": 7,
+   "where": "GTFS 피드(collectors.gtfs)"
+  }
+ }
+}

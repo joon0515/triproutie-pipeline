@@ -28,14 +28,14 @@ import argparse, datetime, glob, gzip, hashlib, html, json, os, re, shutil, subp
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.join(HERE, '..')
 sys.path.insert(0, os.path.join(HERE, 'collect'))
-from common import Blocked, Http, Stop, Store, bad_text, norm_name, today  # noqa: E402
+from common import Blocked, Http, Stop, Store, bad_text, norm_name, refresh_days, today  # noqa: E402
 
 SLOTS = ('ko', 'en', 'ja', 'zh_Hans', 'zh_Hant')
 WD_TAGS = {'ko': ('ko',), 'en': ('en',), 'ja': ('ja',), 'zh_Hans': ('zh-hans', 'zh-cn', 'zh-sg', 'zh-my'), 'zh_Hant': ('zh-hant', 'zh-tw', 'zh-hk', 'zh-mo')}
 ALL_TAGS = tuple(t for ts in WD_TAGS.values() for t in ts) + ('zh',)
 QID = re.compile(r'(?:^|[:/])(Q[1-9]\d{0,9})$')
 BATCH = 250          # SPARQL VALUES 하나에 넣는 QID 수(주소 길이 약 4KB, qlever 응답 약 11초 — 11/17 실측)
-REFRESH_DAYS = 30
+REFRESH_DAYS = refresh_days('desc', 30)  # 설명·라벨 캐시 갱신 주기(sources/refresh_policy.json)
 MIN_LEN = 4
 MAX_SENT = 120
 NSH = 32             # desc-wd 파일 수(id 해시로 나눔 — 파일 하나가 앱 상한 8MB 를 넘지 않게. 넘으면 두 배로)

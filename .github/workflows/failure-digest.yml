@@ -4,7 +4,7 @@
 name: failure-digest
 on:
   workflow_run:
-    workflows: [collect, process, places-layers, places-world, tourapi-daily, coverage-report, watch-sources, guards, fx-daily, climate-normals, deploy-functions, patterns]   # 워크플로 name: 값(파일 이름 아님)
+    workflows: [collect, process, places-layers, places-world, tourapi-daily, coverage-report, watch-sources, guards, fx-daily, climate-normals, deploy-functions, patterns, watchdog]   # 워크플로 name: 값(파일 이름 아님)
     types: [completed]
 permissions:
   issues: write
@@ -31,10 +31,11 @@ jobs:
           JOBS=$(gh api "repos/$GH_REPO/actions/runs/$RUN_ID/jobs?per_page=100" -q '[.jobs[]|select(.conclusion=="failure")|.name]|join(", ")' 2>/dev/null | cut -c1-300)
           printf -- '- %s · **%s** (%s, %s) 실패 작업: %s — %s\n' "$(date -u +%FT%H:%MZ)" "$NAME" "$BRANCH" "$EVENT" "${JOBS:-?}" "$URL" > "$RUNNER_TEMP/line.md"
           T="자동화 실패 모음"
-          N="$(gh issue list --state open --search "\"$T\" in:title" --json number,title -q "[.[]|select(.title==\"$T\")][0].number")"
+          # REST 만(11/18 233기 — 예전 이슈 목록 명령은 GraphQL 이라 gh api 로 바꿈). watchdog 의 3회 연속 실패 줄도 같은 이슈로 온다.
+          N="$(gh api "repos/$GH_REPO/issues?state=open&per_page=100" -q "[.[]|select(.title==\"$T\" and (has(\"pull_request\")|not))][0].number // empty")"
           if [ -z "$N" ]; then
             { echo "워크플로 실패를 한 줄씩 모은다(자동). 고친 뒤 닫으면 다음 실패 때 새로 열린다."; echo; cat "$RUNNER_TEMP/line.md"; } > "$RUNNER_TEMP/body.md"
-            gh issue create --title "$T" --body-file "$RUNNER_TEMP/body.md"
+            gh api "repos/$GH_REPO/issues" -f title="$T" -F body=@"$RUNNER_TEMP/body.md" > /dev/null
           else
-            gh issue comment "$N" --body-file "$RUNNER_TEMP/line.md"
+            gh api "repos/$GH_REPO/issues/$N/comments" -F body=@"$RUNNER_TEMP/line.md" > /dev/null
           fi
