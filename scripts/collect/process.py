@@ -503,7 +503,9 @@ def country(R, cc, inbox, legacy):
     def emit():
         f = f'col_{cc}_{len(files)}.json.gz'
         with open(os.path.join(ld, f), 'wb') as g:
-            g.write(gzip.compress(dumps(to_layer(cc, part)).encode(), 6))
+            lay = to_layer(cc, part)
+            scrub_forbidden(lay, fix=True)  # 누적본에 금지 목록이 늘기 전 링크가 남아 있어도 층에는 싣지 않는다
+            g.write(gzip.compress(dumps(lay).encode(), 6))
         files.append(f); part.clear()
 
     strips = {}
@@ -755,6 +757,7 @@ def publish(store, bucket, kms_key, dry_run=False, tools='tools', current_dir=No
     files = list(latest['files'])
     ld = tempfile.mkdtemp(dir=os.environ.get('RUNNER_TEMP') or None)
     entries, scrubbed = {}, {}
+    fixd = tempfile.mkdtemp(dir=os.environ.get('RUNNER_TEMP') or None)
 
     def load(f):
         p = os.path.join(ld, f)
@@ -769,8 +772,9 @@ def publish(store, bucket, kms_key, dry_run=False, tools='tools', current_dir=No
             if n and f not in entries:
                 scrubbed[f] = n
                 open(p, 'wb').write(gzip.compress(dumps(j).encode(), 6))
-                if not dry_run:
-                    store.push([p], paths[f].rsplit('/', 1)[0])
+                q = os.path.join(fixd, hashlib.sha1(paths[f].rsplit('/', 1)[0].encode()).hexdigest()[:12])
+                os.makedirs(q, exist_ok=True)
+                shutil.copyfile(p, os.path.join(q, f))  # 올리기는 관문 통과 뒤 폴더마다 한 번에(파일마다 gcloud 를 부르면 30분 한도를 넘김)
             if f not in entries:
                 entries[f] = PL.describe(p)
             return j
@@ -785,6 +789,14 @@ def publish(store, bucket, kms_key, dry_run=False, tools='tools', current_dir=No
     missing = [f for f in files if f not in entries]
     if missing:
         return None, [f'층 파일 기술 실패 {len(missing)}개: ' + ', '.join(missing[:5])]
+    if scrubbed and not dry_run:
+        by = {}
+        for f in scrubbed:
+            by.setdefault(paths[f].rsplit('/', 1)[0], []).append(f)
+        for pre, fs in by.items():
+            q = os.path.join(fixd, hashlib.sha1(pre.encode()).hexdigest()[:12])
+            store.push([os.path.join(q, f) for f in fs], pre)
+    shutil.rmtree(fixd, ignore_errors=True)
     tag = 'c' + latest['run']
     d = tempfile.mkdtemp(dir=os.environ.get('RUNNER_TEMP') or None)
     if current_dir:  # 시험: 지금 판의 층 파일이 든 폴더

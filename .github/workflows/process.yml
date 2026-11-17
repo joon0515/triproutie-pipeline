@@ -93,7 +93,7 @@ jobs:
     needs: merge
     if: ${{ !cancelled() && needs.merge.result == 'success' && github.event.inputs.publish != 'no' }}
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 60  # 관문만 22분대(11/17) + 금지 링크 정리·서명·복사
     steps:
       - uses: actions/checkout@v4
       - uses: google-github-actions/auth@v2
