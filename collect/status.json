@@ -24,15 +24,15 @@
   },
   "commons_photos": {
    "failing": 0,
-   "ok_today": 0,
-   "rows_last": 0,
+   "ok_today": 1,
+   "rows_last": 11791,
    "shards": 1
   },
   "fsq_os_places": {
    "failing": 0,
-   "ok_today": 66,
-   "rows_last": 91428081,
-   "shards": 188
+   "ok_today": 72,
+   "rows_last": 91447635,
+   "shards": 194
   },
   "holidays_lib": {
    "failing": 0,
@@ -71,5 +71,5 @@
    "shards": 1
   }
  },
- "updated": "2026-11-17T16:11Z"
+ "updated": "2026-11-17T17:11Z"
 }
