@@ -1,0 +1,67 @@
+# 트립루티 커버리지 일일 보고 — 하루 1번(+수동). 최신 가공 판의 층 파일을 40개씩 받아 읽고(받은 파일은 곧 지움) 숫자만 남긴다.
+# 결과: 이슈 '커버리지 일일 보고' 하나에 댓글로 누적 + Storage collect/v1/coverage/<날짜>.json(어제와 견주기용). 저장소에는 커밋하지 않는다.
+# 장소 내용은 로그·이슈·artifact·cache 에 남기지 않는다(개수·비율만). 구글 데이터는 받지 않는다 — 구글 값은 sources/coverage_targets.json 의 공개 문구 인용뿐.
+name: coverage-report
+on:
+  schedule:
+    - cron: "47 20 * * *"     # UTC 20:47 = KST 05:47
+  workflow_dispatch: {}
+permissions:
+  contents: read
+  id-token: write
+  issues: write
+concurrency:
+  group: coverage-report
+  cancel-in-progress: false
+env:
+  GCS_BUCKET: ${{ vars.GCS_BUCKET || 'trip-mate-0vum9k.firebasestorage.app' }}
+  STORE: gs://${{ vars.GCS_BUCKET || 'trip-mate-0vum9k.firebasestorage.app' }}/collect/v1
+jobs:
+  report:
+    if: github.repository == 'joon0515/triproutie-pipeline' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 150
+    steps:
+      - uses: actions/checkout@v4
+      - uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ vars.GCP_WIF_PROVIDER || 'projects/222914945328/locations/global/workloadIdentityPools/github-pool/providers/github-provider' }}
+          service_account: ${{ vars.GCP_SA_EMAIL || 'pipeline-uploader@trip-mate-0vum9k.iam.gserviceaccount.com' }}
+      - uses: google-github-actions/setup-gcloud@v2
+      - uses: actions/setup-python@v5
+        with: {python-version: "3.12"}
+      - run: pip install -q pyyaml >/dev/null
+      - name: test
+        run: python3 -W ignore -m unittest tests/test_coverage.py 2>&1 | tail -3
+      - name: 영업시간·사진 층(작다)과 어제 보고 받기
+        run: |
+          mkdir -p "$RUNNER_TEMP/side"
+          P=$(gcloud storage cat "gs://$GCS_BUCKET/places/v1/layers.json" 2>/dev/null | python3 -c "import json,sys;m=json.load(sys.stdin);print('\n'.join('gs://$GCS_BUCKET/'+m['path']+e['file'] for e in m.get('layers',[]) if e.get('kind') in ('hours','photos','popularity','tourapi')))" 2>/dev/null || true)
+          [ -z "$P" ] || echo "$P" | gcloud storage cp -q -I "$RUNNER_TEMP/side/" || true
+          Y=$(date -u -d yesterday +%F); gcloud storage cp -q "$STORE/coverage/$Y.json" "$RUNNER_TEMP/prev.json" 2>/dev/null || true
+      - name: Storage 용량(이름·크기만)
+        run: |
+          python3 - <<'PY' > "$RUNNER_TEMP/storage.json"
+          import json, os, subprocess
+          b, out = os.environ['GCS_BUCKET'], {}
+          for name, p in (('수집 원본 raw', 'collect/v1/raw'), ('가공 띠 bands', 'collect/v1/processed/bands'), ('가공 층 out', 'collect/v1/processed/out'), ('게시 places/v1', 'places/v1')):
+              r = subprocess.run(['gcloud', 'storage', 'du', '-s', f'gs://{b}/{p}'], capture_output=True, text=True)
+              try:
+                  out[name] = f"{int(r.stdout.split()[0]) / 2**30:.2f} GiB"
+              except Exception:
+                  out[name] = '미측정'
+          print(json.dumps(out, ensure_ascii=False))
+          PY
+      - name: measure
+        run: |
+          python3 scripts/coverage.py --store "$STORE" --side "$RUNNER_TEMP/side" --prev "$RUNNER_TEMP/prev.json" --storage "$RUNNER_TEMP/storage.json" \
+            --json "$RUNNER_TEMP/cov.json" --md "$RUNNER_TEMP/cov.md" >> "$GITHUB_STEP_SUMMARY"
+          gcloud storage cp -q "$RUNNER_TEMP/cov.json" "$STORE/coverage/$(date -u +%F).json"
+      - name: 이슈 하나에 누적
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          T="커버리지 일일 보고"
+          head -c 60000 "$RUNNER_TEMP/cov.md" > "$RUNNER_TEMP/body.md"
+          N="$(gh issue list --state open --search "\"$T\" in:title" --json number,title -q "[.[]|select(.title==\"$T\")][0].number")"
+          if [ -z "$N" ]; then gh issue create --title "$T" --body-file "$RUNNER_TEMP/body.md"; else gh issue comment "$N" --body-file "$RUNNER_TEMP/body.md"; fi
