@@ -13,9 +13,10 @@
  3. 신호를 모아 점수를 낸다: 교차 등장 수 · Overture confidence · Wikidata sitelinks · 위키 문서 존재 · 관광공사 등재 ·
     블로그·영상 학습 통계의 종류별 언급 비율(숫자 분포만) · 같은 나라·같은 종류 안 상대 순위.
  4. 파일(장소 내용은 로그에 쓰지 않음 — 개수만):
+    (파일마다 gzip 6 MiB 이하로 나눈다 — 게시 상한 8 MiB)
     rec-<cc>-NN.json.gz        schema rec-1: {장소 id: [점수, 교차 수, conf×100|null, sitelinks|null, 위키 0/1, 관광공사 0/1|null, 언급 비율×100|null, 순위 백분위]}
-    names-ovt-<cc>.json.gz     schema names-2: Overture names.rules(variant language) 의 ko·en·ja·zh_Hans·zh_Hant — 우리 장소에 붙임(CDLA-Permissive-2.0)
-    col_ovtadd_<cc>.json.gz    schema collect-1: 우리에게 없는 일정 대상 장소(Overture confidence ≥ ADD_MIN_CONF), 행마다 lic·src. 가공(process)이 같은 id 를
+    names-ovt-<cc>-NN.json.gz  schema names-2: Overture names.rules(variant language) 의 ko·en·ja·zh_Hans·zh_Hant — 우리 장소에 붙임(CDLA-Permissive-2.0)
+    col_ovtadd_<cc>-NN.json.gz schema collect-1: 우리에게 없는 일정 대상 장소(Overture confidence ≥ ADD_MIN_CONF), 행마다 lic·src. 가공(process)이 같은 id 를
                                실으면 다음 실행부터 여기서 빠진다(같은 곳 1행).
  출처별 라이선스와 표시 문구는 파일 머리(licenses·credit)와 행의 lic 칸에 함께 둔다.
 """
@@ -410,28 +411,40 @@ def write(path, obj):
     os.replace(path + '.tmp', path)
 
 
-def emit(out, cc, rec, names_rows, adds, per_file=400000):
-    files = []
-    keys = sorted(rec)
-    for n, i in enumerate(range(0, len(keys), per_file)):
-        p = os.path.join(out, f'rec-{cc}-{n:02d}.json.gz')
-        write(p, {**head('rec-1', cc, 'trip_routie_rec', {'fields': FIELDS, 'method': 'docs/RECOMMEND_INDEX.md',
-                                                         'label': {'ko': '트립루티 추천 지수', 'en': 'TripRoutie Pick Score', 'ja': 'TripRoutie おすすめ指数',
-                                                                   'zh_Hans': 'TripRoutie 推荐指数', 'zh_Hant': 'TripRoutie 推薦指數'}}),
-                  'rows': {k: rec[k] for k in keys[i:i + per_file]}})
-        files.append(p)
+MAX_GZ = 6 * 1024 * 1024  # 게시 파일 상한(publish_layers MAX_BYTES 8 MiB)보다 작게 — 넘으면 행을 반으로 나눠 다시 쓴다
+
+
+def write_split(out, stem, items, make, first=200000):
+    """items(목록) → stem-NN.json.gz 여러 개, 파일마다 gzip 6 MiB 이하. make(조각) → 문서."""
+    files, i, n, k = [], 0, first, 0
+    while i < len(items):
+        part = items[i:i + n]
+        b = gzip.compress(json.dumps(make(part), ensure_ascii=False, separators=(',', ':')).encode(), 6)
+        if len(b) > MAX_GZ and n > 1000:
+            n //= 2
+            continue
+        p = os.path.join(out, f'{stem}-{k:02d}.json.gz')
+        open(p + '.tmp', 'wb').write(b); os.replace(p + '.tmp', p)
+        files.append(p); i += len(part); k += 1
+    return files
+
+
+def emit(out, cc, rec, names_rows, adds, first=200000):
+    files = write_split(out, f'rec-{cc}', sorted(rec), lambda ks: {
+        **head('rec-1', cc, 'trip_routie_rec', {'fields': FIELDS, 'method': 'docs/RECOMMEND_INDEX.md',
+                                                'label': {'ko': '트립루티 추천 지수', 'en': 'TripRoutie Pick Score', 'ja': 'TripRoutie おすすめ指数',
+                                                          'zh_Hans': 'TripRoutie 推荐指数', 'zh_Hant': 'TripRoutie 推薦指數'}}),
+        'rows': {k: rec[k] for k in ks}}, first)
     if names_rows:
-        p = os.path.join(out, f'names-ovt-{cc}.json.gz')
-        langs = {k: sum(1 for v in names_rows.values() if v.get(k)) for k in SLOTS}
-        write(p, {**head('names-2', cc, 'overture_places', {'license': 'CDLA-Permissive-2.0', 'page': 'https://docs.overturemaps.org/attribution/', 'langs': langs}),
-                  'rows': names_rows})
-        files.append(p)
+        def nm_doc(ks):
+            rows = {k: names_rows[k] for k in ks}
+            return {**head('names-2', cc, 'overture_places', {'license': 'CDLA-Permissive-2.0', 'page': 'https://docs.overturemaps.org/attribution/',
+                                                               'langs': {s: sum(1 for v in rows.values() if v.get(s)) for s in SLOTS}}), 'rows': rows}
+        files += write_split(out, f'names-ovt-{cc}', sorted(names_rows), nm_doc, first)
     if adds:
         sys.path.insert(0, os.path.join(HERE, 'collect'))
         from process import to_layer
-        p = os.path.join(out, f'col_ovtadd_{cc}.json.gz')
-        write(p, to_layer(cc, adds))
-        files.append(p)
+        files += write_split(out, f'col_ovtadd_{cc}', adds, lambda part: to_layer(cc, part), first)
     return files
 
 

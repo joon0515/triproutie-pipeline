@@ -54,6 +54,9 @@ jobs:
       - name: upload(layers_extra · 요약)
         run: |
           cd "$RUNNER_TEMP/rec"
+          # 이번에 만든 나라의 지난 파일을 먼저 지운다(조각 수가 바뀔 수 있음)
+          for C in $(ls rec-*.json.gz 2>/dev/null | sed -E 's/^rec-([A-Z]{2})-.*/\1/' | sort -u); do
+            for P in "rec-$C-" "names-ovt-$C" "col_ovtadd_$C"; do gcloud storage rm -q "gs://$GCS_BUCKET/places/v1/layers_extra/$P*.json.gz" >/dev/null 2>&1 || true; done; done
           for f in rec-*.json.gz names-ovt-*.json.gz col_ovtadd_*.json.gz; do [ -e "$f" ] || continue
             gcloud storage cp -q "$f" "gs://$GCS_BUCKET/places/v1/layers_extra/$f"; done
           for f in rec_summary_*.json; do gcloud storage cp -q "$f" "$STORE/rec/$(date -u +%F)/$f"; done

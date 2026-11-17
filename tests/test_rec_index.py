@@ -154,11 +154,11 @@ class EndToEnd(unittest.TestCase):
     def test_files_and_coverage(self):
         rec, names, adds, _ = R.build_cc('KR', [self.layer], self.ovt, {'Q482435': (180, 1)}, self.kto, {})
         fs = R.emit(self.d, 'KR', rec, names, adds)
-        self.assertEqual(sorted(os.path.basename(f) for f in fs), ['col_ovtadd_KR.json.gz', 'names-ovt-KR.json.gz', 'rec-KR-00.json.gz'])
+        self.assertEqual(sorted(os.path.basename(f) for f in fs), ['col_ovtadd_KR-00.json.gz', 'names-ovt-KR-00.json.gz', 'rec-KR-00.json.gz'])
         j = json.loads(gzip.decompress(open(os.path.join(self.d, 'rec-KR-00.json.gz'), 'rb').read()))
         self.assertEqual(j['schema'], 'rec-1'); self.assertEqual(j['label']['ko'], '트립루티 추천 지수')
         self.assertIn('CDLA-Permissive-2.0', json.dumps(j['licenses'])); self.assertIn('Apache-2.0', json.dumps(j['licenses']))
-        a = json.loads(gzip.decompress(open(os.path.join(self.d, 'col_ovtadd_KR.json.gz'), 'rb').read()))
+        a = json.loads(gzip.decompress(open(os.path.join(self.d, 'col_ovtadd_KR-00.json.gz'), 'rb').read()))
         self.assertTrue(all(a['lic']) and all(a['src']))
         for bad in ('평점', '방문자 평균', '추정', 'rating', 'review'):
             self.assertNotIn(bad, json.dumps(j, ensure_ascii=False))
@@ -170,6 +170,21 @@ class EndToEnd(unittest.TestCase):
         self.assertEqual(r['itinerary']['ja'], 1)             # Overture 이름 층(names-2)이 일본어 칸을 채움
         md = COV.to_md(COV.build({}, r, date='2026-11-18'))
         self.assertIn('### 9. 트립루티 추천 지수 채움률', md)
+
+    def test_split_under_cap(self):
+        old = R.MAX_GZ
+        try:
+            R.MAX_GZ = 3000
+            rec = {f'x:{i}': [i % 100, 2, 90, 3, 1, None, None, 50] for i in range(5000)}
+            fs = R.write_split(self.d, 'rec-ZZ', sorted(rec), lambda ks: {'rows': {k: rec[k] for k in ks}}, 4000)
+            self.assertGreater(len(fs), 1)
+            got = {}
+            for f in fs:
+                self.assertLessEqual(os.path.getsize(f), 3000 * 4)  # 1000 행 아래로는 더 나누지 않음
+                got.update(json.loads(gzip.decompress(open(f, 'rb').read()))['rows'])
+            self.assertEqual(len(got), 5000)
+        finally:
+            R.MAX_GZ = old
 
     def test_publish_accepts(self):
         import publish_layers as PL
