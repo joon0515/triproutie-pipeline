@@ -6,6 +6,12 @@
 #     daily_limit(조각당 하루 요청 수) · interval_s(같은 사이트 요청 간격, 최소 1초) · script(scripts/collect/collectors.py 의 함수) · shards · secret(필요한 Secret 이름)
 version: 1
 user_agent: "TripRoutie-collector/1.0 (+https://github.com/joon0515/triproutie-pipeline)"
+# 쓰지 않는 출처(2026-11-17 출처·라이선스 전수 점검). 수집·가공·게시·서버 함수 어디에도 넣지 않는다. tests/test_banned_sources.py 가 지킨다.
+banned:
+  - {id: hko_normals, hosts: [hko.gov.hk, weather.gov.hk], why: "홍콩천문대 자료(평년값 등) — 상업 목적은 사전 서면 허락 없이는 못 씀. 기후는 NASA POWER 로 계산(scripts/climate, PR #22)"}
+  - {id: blog_aggregates, hosts: [blog.naver.com, tistory.com, brunch.co.kr, blogspot.com, ameblo.jp, hatenablog.com, note.com], why: "블로그 글에서 뽑은 체류 시간·순서·평가 집계값 — robots 차단·허락 근거 없음. 사실값도 싣지 않는다"}
+  - {id: adsbdb, hosts: [adsbdb.com], why: "약관·라이선스 글 없음 — functions/flight_free.js 의 NOTERMS_OK 로 잠금"}
+  - {id: hexdb, hosts: [hexdb.io], why: "약관 못 찾음 — 위와 같음"}
 sources:
   - id: overture_places
     name: Overture Maps Places (GeoParquet, 월간 릴리스)
