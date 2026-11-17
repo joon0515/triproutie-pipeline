@@ -20,7 +20,7 @@
   지금 앱 목록의 층 파일을 모두 함께 실어(다른 층이 빠지지 않게) 새 태그를 만들고, 직전 3개 판만 남긴다.
   되돌리기(한 줄): gcloud storage cp gs://<b>/places/v1/<이전태그>/layers.json gs://<b>/places/v1/layers.json
 """
-import argparse, datetime, glob, gzip, json, math, os, random, re, resource, shutil, subprocess, sys, tempfile, time
+import argparse, datetime, glob, gzip, hashlib, json, math, os, random, re, resource, shutil, subprocess, sys, tempfile, time
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
@@ -41,6 +41,11 @@ FLUSH_ROWS = 2000000  # 원본을 이만큼 나눌 때마다 대기함을 올리
 PUSH_BANDS = 40       # 띠 이만큼마다 올리고 체크포인트
 BUDGET_MIN = 100      # 한 실행의 시간 예산(분) — 워크플로 제한 150분 안쪽
 PART_SHARE = 0.5      # 예산 가운데 원본 나누기에 쓰는 몫(나머지는 나라별 가공)
+
+
+def cc_shard(cc, n):
+    """나라 → 조각 번호(0..n-1). 어느 실행에서나 같은 값(sha1) — 나라 조각 병렬 실행(--stage countries --shard i/n)이 나라를 겹치지 않게 나눈다."""
+    return int(hashlib.sha1(str(cc).encode()).hexdigest(), 16) % n
 
 
 def cc_of(r):
@@ -301,8 +306,10 @@ def _safe_cc(cc):
 class _Run:
     """한 번의 가공 실행이 들고 다니는 것(저장소·상태·시계·작업 폴더·최신 판)."""
 
-    def __init__(self, store, world, budget_min, clock, workdir):
+    def __init__(self, store, world, budget_min, clock, workdir, shard=None, batch=''):
         self.store, self.world, self.clock, self.log = store, world, clock, Log(clock)
+        # shard=(i, n): 나라 조각 실행. 여럿이 동시에 돌므로 공유 파일(state.json·latest.json)에는 쓰지 않고 processed/shards/ 아래 제 파일에만 쓴다.
+        self.shard, self.batch, self.done_cc = shard, batch, {}
         self.t_part = self.log.t0 + budget_min * 60 * PART_SHARE  # 1) 원본 → 나라별 대기함: 예산의 절반까지
         self.t_end = self.log.t0 + budget_min * 60                # 2) 나라별 띠 가공: 남은 예산
         self.wd = workdir or tempfile.mkdtemp(prefix='proc_', dir=os.environ.get('RUNNER_TEMP') or None)
@@ -319,12 +326,21 @@ class _Run:
         return p
 
     def save_state(self):
+        if self.shard:
+            i, n = self.shard
+            self.store.put_json(f'processed/shards/state_{i}.json', {'batch': self.batch, 'i': i, 'n': n, 'dirty': list(self.pst.get('dirty', [])),
+                                                                     'at': now().isoformat(), 'sec': self.log.sec(), 'peak_rss_mb': peak_mb()})
+            return
         self.pst['progress'] = {'at': now().isoformat(), 'run': self.run, 'sec': self.log.sec(), 'peak_rss_mb': peak_mb(),
                                 'read_files': self.stats['read_files'], 'read_rows': self.stats['read_rows'], 'countries_done': len(self.stats['countries'])}
         self.store.put_json('processed/state.json', self.pst)
 
     def save_latest(self):
         self.stats.update(peak_rss_mb=peak_mb(), sec=self.log.sec())
+        if self.shard:
+            i, n = self.shard
+            self.store.put_json(f'processed/shards/latest_{i}.json', {'batch': self.batch, 'i': i, 'n': n, 'cc': self.done_cc})
+            return
         self.latest = {'run': self.run, 'files': sorted(self.paths), 'paths': self.paths, 'counts': self.counts, 'stats': self.stats}
         self.store.put_json('processed/latest.json', self.latest)
 
@@ -505,6 +521,7 @@ def country(R, cc, inbox, legacy):
     R.counts[cc] = st['places']
     R.stats['countries'][cc] = {'raw': sum(b['raw'] for b in meta['bands'].values()), 'places': st['places'], 'matched_world': st['matched_world'],
                                 'world': meta.get('world', 0), 'multi_src': st['multi_src'], 'official': st['official']}
+    R.done_cc[cc] = {'files': {f: R.paths[f] for f in files}, 'count': st['places'], 'stats': R.stats['countries'][cc]}
     R.save_latest()
     if cc in R.pst.get('dirty', []):
         R.pst['dirty'].remove(cc)
@@ -513,31 +530,90 @@ def country(R, cc, inbox, legacy):
     return True
 
 
-def process(store, world=None, force_all=False, budget_min=BUDGET_MIN, clock=time.time, workdir=None):
+def _info_layers(R):
+    """정보 층(여행경보·공휴일·교통 피드 요약) — 작다."""
+    for ds in sorted(INFO_SETS):
+        cur = R.store.get_json(f'processed/info/{ds}.json.gz', {}) or {}
+        if cur:
+            f = f'col_info_{ds}.json.gz'
+            R.store.put_json(f'processed/out/{R.run}/{f}', {'schema': 'collect-1', 'dataset': ds, 'built': today(), 'rows': cur, 'attribution': attribution(cur.values())})
+            R.paths[f] = f'processed/out/{R.run}/{f}'
+
+
+def merge_shards(R):
+    """나라 조각들이 남긴 결과(processed/shards/latest_<i>.json · state_<i>.json, 같은 batch 것만)를 latest.json·state.json 에 합친다.
+    결과 파일이 없는(실패했거나 돌지 않은) 조각의 나라는 손대지 않는다 — 예전 층 파일·dirty 표시가 그대로 남아 다음 실행이 이어받는다."""
+    store, pst = R.store, R.pst
+    dirty, got = list(pst.get('dirty', [])), 0
+    for k in sorted(store.list('processed/shards/')):
+        name, j = k.rsplit('/', 1)[1], store.get_json(k, {}) or {}
+        if R.batch and j.get('batch') != R.batch:
+            continue
+        if name.startswith('latest_'):
+            for cc, v in sorted((j.get('cc') or {}).items()):
+                for f in [f for f in R.paths if f.startswith(f'col_{cc}_')]:
+                    del R.paths[f]
+                R.paths.update(v['files']); R.counts[cc] = v['count']; R.stats['countries'][cc] = v['stats']; got += 1
+        elif name.startswith('state_'):
+            dirty = [cc for cc in dirty if cc_shard(cc, j['n']) != j['i']] + list(j.get('dirty', []))
+    pst['dirty'] = list(dict.fromkeys(dirty))
+    _info_layers(R)
+    R.stats['pending'] = {'raw_files': int(pst.get('raw_left', 0)), 'countries': list(pst['dirty'])}
+    R.save_latest()
+    R.save_state()
+    shutil.rmtree(R.wd, ignore_errors=True)
+    R.log(f"조각 합치기 {R.run}: 나라 {got}개 반영 · 하다 만 나라 {len(pst['dirty'])}개")
+    return R.run, R.stats
+
+
+def process(store, world=None, force_all=False, budget_min=BUDGET_MIN, clock=time.time, workdir=None, stage='all', shard=None, batch=''):
     """돌려줌 = (run, stats). stats['pending'] = 이번에 못 끝낸 일(원본 파일 수·나라 list) — 비어 있으면 다 끝남.
-    한 실행은 시간 예산 안에서 멈추고(적어도 원본 묶음 하나·나라 띠 묶음 하나는 나아간다) 다음 실행이 Storage 의 체크포인트에서 이어받는다."""
-    R = _Run(store, world, budget_min, clock, workdir)
+    한 실행은 시간 예산 안에서 멈추고(적어도 원본 묶음 하나·나라 띠 묶음 하나는 나아간다) 다음 실행이 Storage 의 체크포인트에서 이어받는다.
+    stage: all(예전처럼 한 러너가 전부) | partition(원본 → 나라별 대기함만) | countries(나라별 가공만; shard=(i, n) 이면 cc_shard 가 i 인 나라만,
+    러너 n 대가 동시에) | merge(조각 결과 합치기 + 정보 층). 순서: partition → countries × n → merge → publish (docs/THROUGHPUT.md)."""
+    R = _Run(store, world, budget_min, clock, workdir, shard if stage == 'countries' else None, batch)
+    if stage == 'merge':
+        return merge_shards(R)
     pst, log = R.pst, R.log
-    if force_all:
-        pst['seen'] = {}
-    seen = pst.setdefault('seen', {})  # 날짜 → 이미 읽은 원본 키(최근 7일만 기억)
-    cutoff = (datetime.date.fromisoformat(today()) - datetime.timedelta(days=7)).isoformat()
-    first = force_all or not pst.get('last_run') or bool(pst.get('backfill'))  # 처음(또는 처음 훑기가 아직 안 끝남): 날짜 가리지 않고 전부
-    done = {k for v in seen.values() for k in v}
-    keys = [k for k in store.list('raw/') if k.endswith('.json.gz')]
-    new = [k for k in keys if k not in done and (first or k.split('/')[2] >= cutoff)]
-    log(f'원본 {len(keys)}개 가운데 새 파일 {len(new)}개 · 시간 예산 {budget_min}분')
-    del done, keys
-    left = partition(R, new)
-    if first:
-        pst['backfill'] = left > 0
-    if not pst.get('backfill'):
-        pst['seen'] = {d: v for d, v in seen.items() if d >= cutoff}  # 처음 훑기가 끝난 뒤에만 오래된 기록을 지운다
+    left = int(pst.get('raw_left', 0))
+    if stage in ('all', 'partition'):
+        if stage == 'partition':
+            R.t_part = R.t_end  # 원본 나누기만 하므로 예산을 다 쓴다
+        if force_all:
+            pst['seen'] = {}
+        seen = pst.setdefault('seen', {})  # 날짜 → 이미 읽은 원본 키(최근 7일만 기억)
+        cutoff = (datetime.date.fromisoformat(today()) - datetime.timedelta(days=7)).isoformat()
+        first = force_all or not pst.get('last_run') or bool(pst.get('backfill'))  # 처음(또는 처음 훑기가 아직 안 끝남): 날짜 가리지 않고 전부
+        done = {k for v in seen.values() for k in v}
+        keys = [k for k in store.list('raw/') if k.endswith('.json.gz')]
+        new = [k for k in keys if k not in done and (first or k.split('/')[2] >= cutoff)]
+        log(f'원본 {len(keys)}개 가운데 새 파일 {len(new)}개 · 시간 예산 {budget_min}분')
+        del done, keys
+        left = partition(R, new)
+        if first:
+            pst['backfill'] = left > 0
+        if not pst.get('backfill'):
+            pst['seen'] = {d: v for d, v in seen.items() if d >= cutoff}  # 처음 훑기가 끝난 뒤에만 오래된 기록을 지운다
+        pst['raw_left'] = left
+    if stage == 'partition':
+        R.stats.update(pending={'raw_files': left, 'countries': []}, peak_rss_mb=peak_mb(), sec=log.sec())
+        pst['last_run'] = R.run
+        R.save_state()
+        shutil.rmtree(R.wd, ignore_errors=True)
+        log(f'원본 나누기 {R.run} 끝: 남은 원본 {left}')
+        return R.run, R.stats
+    mine = (lambda cc: cc_shard(cc, R.shard[1]) == R.shard[0]) if R.shard else (lambda cc: True)
     inbox = {}
     for k in store.list('processed/inbox/'):
-        inbox.setdefault(k.rsplit('/', 1)[1].split('~', 1)[0], []).append(k)
+        cc = k.rsplit('/', 1)[1].split('~', 1)[0]
+        if mine(cc):
+            inbox.setdefault(cc, []).append(k)
     legacy = {k.rsplit('/', 1)[1].split('.', 1)[0]: k for k in store.list('processed/merged/') if k.endswith('.json.gz')}
     dirty = list(pst.get('dirty', []))
+    if R.shard:  # 조각 실행: 공유 state.json 의 dirty 와 지난번 제 조각 파일의 dirty 가운데 제 나라만 들고 다닌다
+        own = store.get_json(f'processed/shards/state_{R.shard[0]}.json', {}) or {}
+        dirty = [cc for cc in dict.fromkeys(dirty + list(own.get('dirty', []))) if mine(cc)]
+        R.pst = pst = {'dirty': list(dirty)}
     todo = dirty + sorted(cc for cc in inbox if cc not in dirty)  # 하다 만 나라 먼저
     left_cc = []
     for n, cc in enumerate(todo):
@@ -548,16 +624,12 @@ def process(store, world=None, force_all=False, budget_min=BUDGET_MIN, clock=tim
         if not country(R, cc, sorted(inbox.get(cc, [])), legacy.get(cc)):
             left_cc = todo[n:]
             break
-    # 정보 층(여행경보·공휴일·교통 피드 요약) — 작다
-    for ds in sorted(INFO_SETS):
-        cur = store.get_json(f'processed/info/{ds}.json.gz', {}) or {}
-        if cur:
-            f = f'col_info_{ds}.json.gz'
-            store.put_json(f'processed/out/{R.run}/{f}', {'schema': 'collect-1', 'dataset': ds, 'built': today(), 'rows': cur, 'attribution': attribution(cur.values())})
-            R.paths[f] = f'processed/out/{R.run}/{f}'
+    if not R.shard:
+        _info_layers(R)
     R.stats['pending'] = {'raw_files': left, 'countries': left_cc}
     R.save_latest()
-    pst['last_run'] = R.run
+    if not R.shard:
+        pst['last_run'] = R.run
     R.save_state()
     shutil.rmtree(R.wd, ignore_errors=True)
     log(f"가공 {R.run} 끝: 나라 {len(R.stats['countries'])}개 · 남은 원본 {left} · 남은 나라 {len(left_cc)}")
@@ -707,12 +779,18 @@ def main():
     ap.add_argument('--bucket', default=''); ap.add_argument('--kms-key', default=''); ap.add_argument('--dry-run', action='store_true')
     ap.add_argument('--alert', default=''); ap.add_argument('--tools', default='tools')
     ap.add_argument('--budget-min', type=float, default=BUDGET_MIN); ap.add_argument('--force-all', action='store_true')
+    ap.add_argument('--stage', choices=['all', 'partition', 'countries', 'merge'], default='all')
+    ap.add_argument('--shard', default='', help='countries 단계: i/n (cc_shard 가 i 인 나라만)')
+    ap.add_argument('--batch', default='', help='같은 워크플로 실행의 조각끼리 맞추는 표(run_id)')
     a = ap.parse_args()
     store = Store(a.store)
     if a.cmd == 'process':
-        run, st = process(store, a.world or None, force_all=a.force_all, budget_min=a.budget_min)
+        shard = tuple(int(x) for x in a.shard.split('/')) if a.shard else None
+        if shard and not (len(shard) == 2 and 0 <= shard[0] < shard[1]):
+            ap.error('--shard 는 i/n (0 <= i < n)')
+        run, st = process(store, a.world or None, force_all=a.force_all, budget_min=a.budget_min, stage=a.stage, shard=shard, batch=a.batch)
         pend = st['pending']
-        _summary([f'## 가공 {run}', f"- 새 원본 파일 {st['read_files']}개 · 행 {st['read_rows']:,} · {st['sec']}초 · 최대 메모리(RSS) {st['peak_rss_mb']:,}MB",
+        _summary([f'## 가공 {run}' + (f' ({a.stage}' + (f' {a.shard}' if a.shard else '') + ')' if a.stage != 'all' else ''), f"- 새 원본 파일 {st['read_files']}개 · 행 {st['read_rows']:,} · {st.get('sec', 0)}초 · 최대 메모리(RSS) {st.get('peak_rss_mb', 0):,}MB",
                   f"- 다음 실행으로 넘긴 일: 원본 파일 {pend['raw_files']}개 · 나라 {len(pend['countries'])}개" + (f" ({', '.join(pend['countries'][:20])}…)" if pend['countries'] else ''),
                   '| 나라 | 장소 | 타일과 일치 | 여러 출처 | 공식 |', '|---|---|---|---|---|']
                  + [f"| {cc} | {s['places']:,} | {s['matched_world']:,} | {s['multi_src']:,} | {s['official']:,} |" for cc, s in sorted(st['countries'].items())])

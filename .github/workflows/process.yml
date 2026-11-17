@@ -1,4 +1,5 @@
 # 트립루티 세계 수집 2단(가공)·3단(게시). collect 가 끝나면 자동(workflow_run) + 3시간마다 + 수동.
+# 단계(11/17): partition(원본 → 나라별 대기함, 1대) → countries(나라 8 조각 동시에) → merge(조각 합치기) → publish. 근거·계산: docs/THROUGHPUT.md
 # 가공: 정규화·좌표 검증·이름 5개 칸·분류·영업시간 표준형 → 출처 사이 같은 곳 묶기(이름+50m)·trust → places-world 타일과 중복 표시(wid) → 나라별 층(col_<cc>_<n>.json.gz).
 # 게시: 품질 관문(나라별 -5% 감소·좌표·필수 칸·글자 깨짐·금지 도메인·표본 20곳) 통과 때만 publish_layers.py 로 새 태그(c<날짜시각>) — 앱 목록 places/v1/layers.json 갱신.
 #   지금 목록의 다른 층(편의시설·인기·TourAPI 등)도 함께 실어 빠지지 않게 한다. 직전 3개 판 보관.
@@ -28,10 +29,11 @@ env:
   STORE: gs://${{ vars.GCS_BUCKET || 'trip-mate-0vum9k.firebasestorage.app' }}/collect/v1
   KMS_SIGN_KEY: ${{ vars.KMS_SIGN_KEY || 'projects/trip-mate-0vum9k/locations/us-east1/keyRings/triproutie/cryptoKeys/places-manifest-ed25519/cryptoKeyVersions/1' }}
 jobs:
-  process:
+  # 1) 원본 → 나라별 대기함 (러너 1대, 체크포인트). 시간 예산 안에 못 끝낸 원본은 다음 실행이 이어받는다.
+  partition:
     if: github.repository == 'joon0515/triproutie-pipeline' && (github.event_name != 'workflow_run' || github.event.workflow_run.head_branch == 'main')
     runs-on: ubuntu-latest
-    timeout-minutes: 150
+    timeout-minutes: 200
     steps:
       - uses: actions/checkout@v4
       - uses: google-github-actions/auth@v2
@@ -42,13 +44,54 @@ jobs:
       - uses: actions/setup-python@v5
         with: {python-version: "3.12"}
       - run: pip install -q pyyaml >/dev/null
-      - name: process
+      - name: partition
+        run: python3 scripts/collect/process.py process --stage partition --budget-min 150 --store "$STORE"
+  # 2) 나라별 가공 — 나라를 8 조각(cc_shard)으로 나눠 러너 8대가 동시에. 조각은 제 파일(processed/shards/)에만 쓴다.
+  #    조각 하나가 실패해도 나머지는 계속(fail-fast: false), 실패한 조각의 나라는 대기함·dirty 에 남아 다음 실행이 이어받는다.
+  countries:
+    needs: partition
+    runs-on: ubuntu-latest
+    timeout-minutes: 300
+    strategy:
+      fail-fast: false
+      max-parallel: 8
+      matrix:
+        shard: [0, 1, 2, 3, 4, 5, 6, 7]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ vars.GCP_WIF_PROVIDER || 'projects/222914945328/locations/global/workloadIdentityPools/github-pool/providers/github-provider' }}
+          service_account: ${{ vars.GCP_SA_EMAIL || 'pipeline-uploader@trip-mate-0vum9k.iam.gserviceaccount.com' }}
+      - uses: google-github-actions/setup-gcloud@v2
+      - uses: actions/setup-python@v5
+        with: {python-version: "3.12"}
+      - run: pip install -q pyyaml >/dev/null
+      - name: countries ${{ matrix.shard }}/8
         run: |
           WT=$(gcloud storage cat "gs://$GCS_BUCKET/places/v1/manifest.json" 2>/dev/null | python3 -c "import json,sys;print(json.load(sys.stdin).get('version',''))" 2>/dev/null || true)
-          python3 scripts/collect/process.py process --store "$STORE" ${WT:+--world "gs://$GCS_BUCKET/places/v1/$WT/tiles"}
+          python3 scripts/collect/process.py process --stage countries --shard "${{ matrix.shard }}/8" --batch "${{ github.run_id }}-${{ github.run_attempt }}" --budget-min 240 --store "$STORE" ${WT:+--world "gs://$GCS_BUCKET/places/v1/$WT/tiles"}
+  # 3) 조각 결과 합치기(latest.json) — 조각이 일부 실패해도 끝난 조각은 반영한다.
+  merge:
+    needs: [partition, countries]
+    if: ${{ !cancelled() && needs.partition.result == 'success' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ vars.GCP_WIF_PROVIDER || 'projects/222914945328/locations/global/workloadIdentityPools/github-pool/providers/github-provider' }}
+          service_account: ${{ vars.GCP_SA_EMAIL || 'pipeline-uploader@trip-mate-0vum9k.iam.gserviceaccount.com' }}
+      - uses: google-github-actions/setup-gcloud@v2
+      - uses: actions/setup-python@v5
+        with: {python-version: "3.12"}
+      - run: pip install -q pyyaml >/dev/null
+      - name: merge
+        run: python3 scripts/collect/process.py process --stage merge --batch "${{ github.run_id }}-${{ github.run_attempt }}" --store "$STORE"
   publish:
-    needs: process
-    if: ${{ github.event.inputs.publish != 'no' }}
+    needs: merge
+    if: ${{ !cancelled() && needs.merge.result == 'success' && github.event.inputs.publish != 'no' }}
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:

@@ -293,6 +293,46 @@ def _shard_box(shard):
     return reg['bbox'], cc
 
 
+SLICE_MAX = 64
+
+
+def lon_strips(boxes, n):
+    """지역 상자들을 경도 방향 n 조각씩으로 자른다 → [(x0, y0, x1, y1, last)]. last 가 아니면 x1 은 포함하지 않는다(조각끼리 겹치지 않음)."""
+    out = []
+    for b in boxes:
+        w = (b[2] - b[0]) / n
+        for i in range(n):
+            out.append((round(b[0] + w * i, 6), b[1], b[2] if i == n - 1 else round(b[0] + w * (i + 1), 6), b[3], i == n - 1))
+    return out
+
+
+def xcond(col, s):
+    return f"{col} >= {s[0]} and {col} {'<=' if s[4] else '<'} {s[2]}"
+
+
+def sliced(ctx, key, boxes, run_strip):
+    """큰 덤프를 지역 조각으로 잘라 읽고 이어받는다. 처음에는 자르지 않는다(n=1, 예전과 같은 질의).
+    한 조각도 못 끝내고 시간(TIME)에 걸리면 다음 회차부터 4배로 잘게(최대 64) 자르고, 끝낸 조각은 상태(slices.done)에 적어 건너뛴다.
+    key(릴리스·달)가 바뀌면 처음부터. 중간에 끊긴 조각의 행은 다시 받지만 id 가 같아 가공에서 한 행으로 합쳐진다."""
+    sl = ctx.st.get('slices') or {}
+    if sl.get('key') != key:
+        sl = {'key': key, 'n': int(sl.get('n', 1)), 'done': []}
+    ctx.st['slices'] = sl
+    strips, did = lon_strips(boxes, sl['n']), False
+    for i, strip in enumerate(strips):
+        if i in sl['done']:
+            continue
+        try:
+            run_strip(strip)
+        except Stop as e:
+            if str(e) == 'TIME' and not did and sl['n'] < SLICE_MAX:
+                sl['n'], sl['done'] = min(sl['n'] * 4, SLICE_MAX), []
+                ctx.note(f"slice → {sl['n']}")
+            raise
+        sl['done'].append(i); did = True
+    ctx.st['slices'] = {'key': key, 'n': sl['n'], 'done': []}  # 다 끝남 — n 은 기억(다음 릴리스도 같은 크기로)
+
+
 def overture_release(http):
     b = http.get('https://overturemaps-us-west-2.s3.us-west-2.amazonaws.com/?list-type=2&prefix=release/&delimiter=/')
     rels = re.findall(rb'<Prefix>release/([0-9][0-9.\-]+)/</Prefix>', b)
@@ -330,24 +370,26 @@ def overture(ctx):
     import importlib, ovt_common
     importlib.reload(ovt_common)
     c = ovt_common.con(); c.execute(f"SET memory_limit='{os.environ.get('DUCK_MEM', '10GB')}'")
-    sel = ' union all '.join(f"""select id, names.primary, names.common, coalesce(basic_category, categories.primary), confidence, websites[1],
-        addresses[1].freeform, sources[1].dataset, sources[1].license, (bbox.xmin+bbox.xmax)/2, (bbox.ymin+bbox.ymax)/2
-        from {ovt_common.SRC} where bbox.xmin between {b[0]} and {b[2]} and bbox.ymin between {b[1]} and {b[3]}
-        and addresses[1].country = '{cc}' and confidence >= 0.6 and coalesce(operating_status, 'open') = 'open'""" for b in boxes)
-    cur = c.execute(sel)
-    while True:
-        batch = cur.fetchmany(50000)
-        if not batch:
-            break
-        rows = []
-        for i, nm, common, cat, conf, web, addr, ds, lic, lon, lat in batch:
-            r = place(ctx.src, i, nm, lat, lon, cat=cat, names=_lang_names(common), url=web, addr=addr,
-                      extra={'cc': cc, 'cf': round(conf or 0, 2), 'via': ds, 'lic': lic})
-            if r:
-                r['lic'] = lic or 'CDLA-Permissive-2.0'
-                rows.append(r)
-        ctx.emit('places', rows)
-        ctx.tick()
+    def run_strip(sp):
+        cur = c.execute(f"""select id, names.primary, names.common, coalesce(basic_category, categories.primary), confidence, websites[1],
+            addresses[1].freeform, sources[1].dataset, sources[1].license, (bbox.xmin+bbox.xmax)/2, (bbox.ymin+bbox.ymax)/2
+            from {ovt_common.SRC} where {xcond('bbox.xmin', sp)} and bbox.ymin between {sp[1]} and {sp[3]}
+            and addresses[1].country = '{cc}' and confidence >= 0.6 and coalesce(operating_status, 'open') = 'open'""")
+        while True:
+            batch = cur.fetchmany(50000)
+            if not batch:
+                break
+            rows = []
+            for i, nm, common, cat, conf, web, addr, ds, lic, lon, lat in batch:
+                r = place(ctx.src, i, nm, lat, lon, cat=cat, names=_lang_names(common), url=web, addr=addr,
+                          extra={'cc': cc, 'cf': round(conf or 0, 2), 'via': ds, 'lic': lic})
+                if r:
+                    r['lic'] = lic or 'CDLA-Permissive-2.0'
+                    rows.append(r)
+            ctx.emit('places', rows)
+            ctx.tick()
+
+    sliced(ctx, rel, boxes, run_strip)
     ctx.st['done_release'] = rel
 
 
@@ -365,18 +407,20 @@ def fsq(ctx):
     c.execute(f"SET memory_limit='{os.environ.get('DUCK_MEM', '10GB')}'")
     c.execute(f"CREATE TEMPORARY SECRET fsq (TYPE ICEBERG, TOKEN '{tok}')"); del tok
     c.execute("ATTACH 'places' AS places (TYPE ICEBERG, ENDPOINT 'https://catalog.h3-hub.foursquare.com/iceberg', SECRET fsq)")
-    sel = ' union all '.join(f"""select fsq_place_id, name, latitude, longitude, address, website, fsq_category_labels[1]
-        from places.datasets.places_os where latitude between {b[1]} and {b[3]} and longitude between {b[0]} and {b[2]}
-        and country = '{cc}' and date_closed is null and name is not null""" for b in boxes)
-    cur = c.execute(sel)
-    while True:
-        batch = cur.fetchmany(50000)
-        if not batch:
-            break
-        rows = [r for r in (place(ctx.src, i, nm, lat, lon, cat=(cat or '').rsplit('>', 1)[-1].strip(), url=web, addr=addr, extra={'cc': cc})
-                            for i, nm, lat, lon, addr, web, cat in batch) if r]
-        ctx.emit('places', rows)
-        ctx.tick()
+    def run_strip(sp):
+        cur = c.execute(f"""select fsq_place_id, name, latitude, longitude, address, website, fsq_category_labels[1], tel
+            from places.datasets.places_os where latitude between {sp[1]} and {sp[3]} and {xcond('longitude', sp)}
+            and country = '{cc}' and date_closed is null and name is not null""")
+        while True:
+            batch = cur.fetchmany(50000)
+            if not batch:
+                break
+            rows = [r for r in (place(ctx.src, i, nm, lat, lon, cat=(cat or '').rsplit('>', 1)[-1].strip(), url=web, addr=addr, tel=tel, extra={'cc': cc})
+                                for i, nm, lat, lon, addr, web, cat, tel in batch) if r]
+            ctx.emit('places', rows)
+            ctx.tick()
+
+    sliced(ctx, today()[:7], boxes, run_strip)
     ctx.st['done'] = today()
 
 

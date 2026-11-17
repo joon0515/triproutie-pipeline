@@ -1,4 +1,4 @@
-# 트립루티 세계 수집 1단(collect) — 매시 정각. 계획(plan)이 출처×나라 조각을 골라 matrix 로 동시에 돌린다(최대 18 — 무료 플랜 동시 20 안쪽).
+# 트립루티 세계 수집 1단(collect) — 매시 정각. 계획(plan)이 출처×나라 조각을 골라 matrix 로 동시에 돌린다(최대 12 — 가공 조각 8 과 합쳐 무료 플랜 동시 20).
 # 원칙: sources/registry.yaml 의 status: active 출처만, robots.txt 는 요청 때마다 실시간 확인, 사이트당 초당 1회 이하·하루 한도, UA 에 저장소 주소.
 # 금지 목록 도메인은 코드가 자동 제외. 결과 원본은 Storage gs://<bucket>/collect/v1/raw/<출처>/<날짜>/ 에만(공개 저장소에는 작은 collect/status.json 만 커밋).
 # 겹치면 앞 실행을 유지하고 새 실행은 1개만 기다린다(cancel-in-progress: false). 한 조각은 48분 예산 → 55분에 강제 종료.
@@ -40,6 +40,7 @@ jobs:
       - id: p
         env:
           HAS_FSQ_TOKEN: ${{ secrets.FSQ_TOKEN != '' }}
+          COLLECT_MAX_JOBS: ${{ vars.COLLECT_MAX_JOBS || '12' }}
         run: python3 scripts/collect/run.py plan --store "$STORE" >> "$GITHUB_OUTPUT"
   collect:
     needs: plan
@@ -48,7 +49,7 @@ jobs:
     timeout-minutes: 55
     strategy:
       fail-fast: false
-      max-parallel: 18
+      max-parallel: 12   # 수집 12 + 가공 조각 8 = 동시 20(무료 플랜 한도, docs/THROUGHPUT.md)
       matrix: ${{ fromJson(needs.plan.outputs.matrix) }}
     concurrency:
       group: collect-${{ matrix.source }}-${{ matrix.shard }}   # 같은 출처·조각만 겹치지 않게
