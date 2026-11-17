@@ -44,6 +44,8 @@ if [ -n "$TILES" ]; then
   mkdir -p "$W/hours"
   if python3 tools/hours_osm.py "$W/hours/hours-$R.json.gz" "$TILES" "$W"/pbf/*.osm.pbf | tail -1; then
     gcloud storage cp -q "$W/hours/hours-$R.json.gz" "gs://$GCS_BUCKET/places/v1/$TAG/hours_src/" >/dev/null 2>&1 || echo "region $R: hours upload failed"
+    # (11/17) 판과 상관없는 최신 사본. 수집 게시(c<날짜시각> 판)가 최신 판이 된 뒤의 merge 는 그 판에 hours_src 가 없어 여기서 가져온다.
+    gcloud storage cp -q "$W/hours/hours-$R.json.gz" "gs://$GCS_BUCKET/places/v1/hours_src/" >/dev/null 2>&1 || echo "region $R: hours latest copy failed"
   fi
 fi
 N=$(ls "$W"/out/*.json.gz 2>/dev/null | wc -l)
