@@ -8,3 +8,4 @@
   - 비밀: `DATA_GO_KR_KEY`(저장소 Actions secret, 없으면 GCP Secret Manager 같은 이름을 시도). 한도 바꾸기: 변수 `TOURAPI_DAILY_LIMIT`.
   - 저장소에는 `tourapi/state.json`(단계·작업 위치·오늘 호출 수)과 우선순위 목록 `tourapi/priority_cids.json`(앱 데이터에 있는 contentid)만 커밋. 내용은 Storage 비공개: `tourapi/v1/store/area_*.json`(누적), `tourapi/v1/agg_tourapi.json`(앱 데이터 모양), `places/v1/layers_extra/kto_<시도>.json.gz`(schema `tourapi-1` — 다음 places-layers 실행 때 서명 목록에 실림).
   - 사진은 공공누리 제1·3유형만(3유형 `no_modify`, 자르기 금지), 출처 '한국관광공사 TourAPI 4.0' 을 파일·목록 attribution 에 표기.
+- 처리량·한도·일정: `docs/THROUGHPUT.md` — 가공은 partition → countries(나라 8 조각 동시에) → merge → publish.

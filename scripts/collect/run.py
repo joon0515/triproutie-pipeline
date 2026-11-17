@@ -18,9 +18,10 @@ from common import Blocked, Http, Stop, Store, now, today  # noqa: E402
 import collectors as C  # noqa: E402
 
 REG = os.path.join(HERE, '..', '..', 'sources', 'registry.yaml')
-MAX_JOBS, DISC_SHARE = 18, 0.3
+MAX_JOBS, DISC_SHARE = int(os.environ.get('COLLECT_MAX_JOBS') or 18), 0.3  # 저장소 변수 COLLECT_MAX_JOBS 로 조절(가공 조각과 합쳐 동시 20 안쪽 — docs/THROUGHPUT.md)
+RETRY_FAST, RETRY_SLOW_H = 3, 6  # 연속 실패 3회 미만 = 다음 회차에 맨 먼저 다시. 3회 이상 = 6시간에 한 번만(다른 조각 자리를 막지 않게)
 REFRESH_DAYS = {'hourly': 0, 'daily': 1, 'weekly': 7, 'monthly': 1}  # monthly 는 날마다 새 릴리스만 확인(수집기가 같으면 곧 끝냄)
-HEAVY_CAP = {'overture_places': 4, 'fsq_os_places': 3, 'wikivoyage': 2, 'commons_photos': 1}  # 사진: 위키미디어 '한 번에 한 요청' — 한 시간에 조각 1개  # 한 시간에 같은 큰 출처 조각 상한(러너 디스크·메모리)
+HEAVY_CAP = {'overture_places': 8, 'fsq_os_places': 6, 'wikivoyage': 2, 'commons_photos': 1}  # 덤프 2종: 러너 1대 = 조각 1개라 디스크·메모리는 서로 무관. 229개 나라 조각 ÷ 8 ≈ 29시간  # 사진: 위키미디어 '한 번에 한 요청' — 한 시간에 조각 1개  # 한 시간에 같은 큰 출처 조각 상한(러너 디스크·메모리)
 
 
 def load_registry(path=REG):
@@ -46,6 +47,12 @@ def _days_since(d):
     return (datetime.date.fromisoformat(today()) - datetime.date.fromisoformat(d[:10])).days
 
 
+def _hours_since(ts):
+    if not ts:
+        return 10 ** 6
+    return (now() - datetime.datetime.fromisoformat(ts)).total_seconds() / 3600
+
+
 def plan(reg, index, env=os.environ, max_jobs=MAX_JOBS):
     col, disc = [], []
     for s in reg['sources']:
@@ -60,7 +67,11 @@ def plan(reg, index, env=os.environ, max_jobs=MAX_JOBS):
                 continue  # 오늘 한도 다 씀
             if need and _days_since(st.get('last_ok')) < need:
                 continue
-            (disc if s['script'] in C.DISCOVERY else col).append((st.get('last_ok') or '', s['id'], rk, sh))  # rk: 등록부에 적힌 조각 순서(첫 회차에 앞쪽부터)
+            fs = int(st.get('fail_streak') or 0)
+            if fs >= RETRY_FAST and _hours_since(st.get('last_run')) < RETRY_SLOW_H:
+                continue  # 계속 실패하는 조각은 6시간 쉬고 다시(실패 기록은 status·이슈에 남는다)
+            first = '' if 0 < fs < RETRY_FAST else (st.get('last_ok') or ' ')  # 방금 실패한 조각을 맨 앞에(자동 재시도)
+            (disc if s['script'] in C.DISCOVERY else col).append((first, s['id'], rk, sh))  # rk: 등록부에 적힌 조각 순서(첫 회차에 앞쪽부터)
     nd = max(1, int(max_jobs * DISC_SHARE)) if disc else 0
     pick, used = [], {}
 
@@ -171,7 +182,7 @@ def summary(reg, store, out_path, alert_path=None):
     for k, st in states.items():
         sid, sh = k.split('/', 1)
         index[f"{sid}/{sh.replace('~', ':')}"] = {
-            'last_ok': st.get('last_ok'), 'req': st.get('req', 0), 'req_date': st.get('req_date'), 'fail_streak': st.get('fail_streak', 0)}
+            'last_ok': st.get('last_ok'), 'req': st.get('req', 0), 'req_date': st.get('req_date'), 'fail_streak': st.get('fail_streak', 0), 'last_run': st.get('last_run')}
     store.put_json('index.json', index)
     by = {}
     for k, st in states.items():
