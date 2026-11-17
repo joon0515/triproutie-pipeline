@@ -24,9 +24,9 @@
   },
   "commons_photos": {
    "failing": 0,
-   "ok_today": 2,
+   "ok_today": 3,
    "rows_last": 11791,
-   "shards": 2
+   "shards": 3
   },
   "fsq_os_places": {
    "failing": 0,
@@ -60,16 +60,28 @@
   },
   "overture_places": {
    "failing": 0,
-   "ok_today": 0,
-   "rows_last": 0,
-   "shards": 5
+   "ok_today": 1,
+   "rows_last": 125037,
+   "shards": 6
+  },
+  "taiwan_tourism": {
+   "failing": 0,
+   "ok_today": 1,
+   "rows_last": 6190,
+   "shards": 1
   },
   "wikidata_official": {
    "failing": 0,
    "ok_today": 0,
    "rows_last": 5617,
    "shards": 1
+  },
+  "wikivoyage": {
+   "failing": 0,
+   "ok_today": 1,
+   "rows_last": 334000,
+   "shards": 1
   }
  },
- "updated": "2026-11-17T17:55Z"
+ "updated": "2026-11-17T18:24Z"
 }
