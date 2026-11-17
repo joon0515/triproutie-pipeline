@@ -30,6 +30,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with: {python-version: "3.12"}
+      - run: pip install -q pyyaml >/dev/null   # tests/test_watchdog.py 가 yaml 을 쓴다(pipefail 로 드러남, 251기)
       - name: test (mock, no network)
         run: set -o pipefail; python3 -W ignore -m unittest tests/test_watchdog.py 2>&1 | tail -3
       - name: watchdog
