@@ -1,0 +1,40 @@
+# 자동화 실패 모음 — 다른 워크플로가 실패하면 이슈 '자동화 실패 모음' 하나에 한 줄씩 누적한다(실패마다 새 이슈·메일을 만들지 않음).
+# 진짜 실패 내용은 각 실행의 Step Summary·로그와 기존 경보 이슈(수집 3회 연속 실패·게시 관문)에 그대로 남는다. 이 워크플로는 목록만 만든다.
+# GitHub 의 실패 알림 메일은 저장소가 끌 수 없다 — 받는 사람의 Settings → Notifications → Actions 에서 'Only notify for failed workflows' 를 끄면 된다(대표).
+name: failure-digest
+on:
+  workflow_run:
+    workflows: [collect, process, places-layers, places-world, tourapi-daily, coverage-report, watch-sources, guards, fx-daily, climate-normals, deploy-functions, patterns]   # 워크플로 name: 값(파일 이름 아님)
+    types: [completed]
+permissions:
+  issues: write
+  actions: read
+concurrency:
+  group: failure-digest
+  cancel-in-progress: false
+jobs:
+  digest:
+    if: github.repository == 'joon0515/triproutie-pipeline' && github.event.workflow_run.conclusion == 'failure'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+      NAME: ${{ github.event.workflow_run.name }}
+      URL: ${{ github.event.workflow_run.html_url }}
+      BRANCH: ${{ github.event.workflow_run.head_branch }}
+      EVENT: ${{ github.event.workflow_run.event }}
+      RUN_ID: ${{ github.event.workflow_run.id }}
+    steps:
+      - name: 실패한 작업 이름 모아 이슈 하나에 댓글
+        run: |
+          JOBS=$(gh api "repos/$GH_REPO/actions/runs/$RUN_ID/jobs?per_page=100" -q '[.jobs[]|select(.conclusion=="failure")|.name]|join(", ")' 2>/dev/null | cut -c1-300)
+          printf -- '- %s · **%s** (%s, %s) 실패 작업: %s — %s\n' "$(date -u +%FT%H:%MZ)" "$NAME" "$BRANCH" "$EVENT" "${JOBS:-?}" "$URL" > "$RUNNER_TEMP/line.md"
+          T="자동화 실패 모음"
+          N="$(gh issue list --state open --search "\"$T\" in:title" --json number,title -q "[.[]|select(.title==\"$T\")][0].number")"
+          if [ -z "$N" ]; then
+            { echo "워크플로 실패를 한 줄씩 모은다(자동). 고친 뒤 닫으면 다음 실패 때 새로 열린다."; echo; cat "$RUNNER_TEMP/line.md"; } > "$RUNNER_TEMP/body.md"
+            gh issue create --title "$T" --body-file "$RUNNER_TEMP/body.md"
+          else
+            gh issue comment "$N" --body-file "$RUNNER_TEMP/line.md"
+          fi
