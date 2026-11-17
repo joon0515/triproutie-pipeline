@@ -1,16 +1,21 @@
 {
  "calls": 900,
- "date": "2026-11-17",
+ "date": "2026-11-18",
  "last": {
-  "date": "2026-11-17",
+  "date": "2026-11-18",
   "new": {
-   "detail": 0,
+   "detail": 655,
    "info": 0,
-   "list": 0
+   "list": 0,
+   "overview": 219
   },
   "stop": "LIMIT"
  },
  "list_done": "2026-11-15",
+ "ov": {
+  "calls": 225,
+  "date": "2026-11-18"
+ },
  "page": 1,
  "pass": 1,
  "phase": "detail",
