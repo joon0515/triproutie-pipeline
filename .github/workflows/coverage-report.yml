@@ -34,7 +34,7 @@ jobs:
         with: {python-version: "3.12"}
       - run: pip install -q pyyaml >/dev/null
       - name: test
-        run: python3 -W ignore -m unittest tests/test_coverage.py tests/test_place_desc.py tests/test_place_names.py tests/test_always_on.py 2>&1 | tail -3
+        run: python3 -W ignore -m unittest tests/test_coverage.py tests/test_place_desc.py tests/test_place_names.py tests/test_always_on.py tests/test_rec_index.py 2>&1 | tail -3
       - name: 영업시간·사진 층(작다)과 어제 보고 받기
         run: |
           mkdir -p "$RUNNER_TEMP/side"
@@ -44,7 +44,9 @@ jobs:
           # (11/17) 장소 소개 층(place_desc.py·desc_osm.py) — 게시 전 사본이 모이는 layers_extra 에서 받는다(개수·비율만 보고)
           mkdir -p "$RUNNER_TEMP/desc"; gcloud storage cp -q "gs://$GCS_BUCKET/places/v1/layers_extra/desc-*.json.gz" "$RUNNER_TEMP/desc/" 2>/dev/null || true
           # (11/18) 이름 5개 언어 층(names-wd-* Wikidata · names-osm-* OSM, 2단 목록이라 layers_extra 에서)·Commons 사진 층(photos-wd-*) — 0절
-          for P in names-wd names-osm photos-wd; do gcloud storage cp -q "gs://$GCS_BUCKET/places/v1/layers_extra/$P-*.json.gz" "$RUNNER_TEMP/side/" 2>/dev/null || true; done
+          # (11/18 245기) 추천 지수 층(rec-*)·새로 더한 일정 장소(col_ovtadd_*) → 9절, Overture 이름(names-ovt-*) → 0절
+          mkdir -p "$RUNNER_TEMP/rec"; for P in rec col_ovtadd_; do gcloud storage cp -q "gs://$GCS_BUCKET/places/v1/layers_extra/$P*.json.gz" "$RUNNER_TEMP/rec/" 2>/dev/null || true; done
+          for P in names-wd names-osm names-ovt photos-wd; do gcloud storage cp -q "gs://$GCS_BUCKET/places/v1/layers_extra/$P-*.json.gz" "$RUNNER_TEMP/side/" 2>/dev/null || true; done
           ls "$RUNNER_TEMP/side" | sed -E 's/-?[0-9]*\.json\.gz$//' | sort | uniq -c | head -40
       - name: Storage 용량·비용 상한(읽기 전용 측정 — 이름·크기만)
         env:
@@ -56,7 +58,7 @@ jobs:
           gcloud storage cp -q "$RUNNER_TEMP/usage.json" "$STORE/guards/usage.json"   # collect 계획이 읽는다(pause_collect)
       - name: measure
         run: |
-          python3 scripts/coverage.py --store "$STORE" --side "$RUNNER_TEMP/side" --desc "$RUNNER_TEMP/desc" --prev "$RUNNER_TEMP/prev.json" --storage "$RUNNER_TEMP/storage.json" \
+          python3 scripts/coverage.py --store "$STORE" --side "$RUNNER_TEMP/side" --desc "$RUNNER_TEMP/desc" --rec "$RUNNER_TEMP/rec" --prev "$RUNNER_TEMP/prev.json" --storage "$RUNNER_TEMP/storage.json" \
             --json "$RUNNER_TEMP/cov.json" --md "$RUNNER_TEMP/cov.md" >> "$GITHUB_STEP_SUMMARY"
           gcloud storage cp -q "$RUNNER_TEMP/cov.json" "$STORE/coverage/$(date -u +%F).json"
       - name: 저장 용량·비용 경고(80% 넘을 때만, REST)
