@@ -1,7 +1,7 @@
 {
  "registry": {
   "active": 13,
-  "candidate": 7
+  "candidate": 8
  },
  "sources": {
   "advisories_ca": {
@@ -30,9 +30,9 @@
   },
   "fsq_os_places": {
    "failing": 0,
-   "ok_today": 60,
-   "rows_last": 91412517,
-   "shards": 182
+   "ok_today": 66,
+   "rows_last": 91428081,
+   "shards": 188
   },
   "holidays_lib": {
    "failing": 0,
@@ -71,5 +71,5 @@
    "shards": 1
   }
  },
- "updated": "2026-11-17T15:11Z"
+ "updated": "2026-11-17T16:11Z"
 }
