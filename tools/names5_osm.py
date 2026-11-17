@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """이름 5개 언어 층 OSM 판(names-2, names-osm-<지역>[-NN].json.gz) — 세계 타일 행에 OSM name:xx 태그를 언어 칸별로 붙인다. (2026-11-18, 223기)
 
-    python3 names5_osm.py <out 폴더> <지역> <tile.json.gz[,tile2.json.gz,…]> <a.osm.pbf> [b.osm.pbf …]
+    python3 names5_osm.py <out 폴더> <지역> <tile.json.gz[,tile2.json.gz,…]> <a.osm.pbf> [b.osm.pbf …] [--cols <수집 층 주소 목록 파일>]
+    행 id = 세계 타일 id(앱) + --cols 를 주면 그 지역 나라 수집 층(col_*, 게시 장소) id 도.
 
 places-layers(scripts/run_layers_region.sh)가 지역마다 영업시간·소개 층과 같은 추출본·같은 타일로 돌린다. 맞추기는 hours_osm.pairs 그대로(80m + 이름).
 읽는 태그 → 칸(원천 값만, 다른 언어로 채우지 않음 · 간체↔번체 변환 없음):
@@ -67,10 +68,14 @@ def rows_of(d, osm):
 
 
 def main(argv):
+    cols = None
+    if '--cols' in argv:
+        i = argv.index('--cols'); cols = argv[i + 1]; del argv[i:i + 2]
     if len(argv) < 5:
         print(__doc__)
         return 2
     out, region = argv[1], argv[2]
+    os.makedirs(out, exist_ok=True)
     d = HO.load_tiles([f for f in argv[3].split(',') if f])
     if not d['id']:
         print('no rows')
@@ -78,7 +83,12 @@ def main(argv):
     bb = [min(d['_lon']) - 0.01, min(d['_lat']) - 0.01, max(d['_lon']) + 0.01, max(d['_lat']) + 0.01]
     osm = osm_names(argv[4:], bb)
     rows = rows_of(d, osm)
-    rep = {'tile_rows': len(d['id']), 'osm_rows': len(osm), 'matched': len(rows)}
+    ncol = 0
+    if cols:  # 수집 층(게시 장소) id 로도 — 같은 OSM 행, 같은 규칙(80m + 이름)
+        for k, rid in HO.col_pairs(HO.col_urls(cols), osm, bb, out).items():
+            if rid not in rows:
+                rows[rid] = dict(osm[k][3], osm=osm[k][5]); ncol += 1
+    rep = {'tile_rows': len(d['id']), 'osm_rows': len(osm), 'matched': len(rows), 'col_matched': ncol}
     if not rows:
         print(rep, 'no file')
         return 0

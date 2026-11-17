@@ -71,6 +71,25 @@ class TestNameSlots(unittest.TestCase):
         self.assertEqual(NO.targets(NO.load_pack(os.path.join(d, 'w-1.json.gz'))), [0])
 
 
+class TestColIds(unittest.TestCase):
+    """(11/18) OSM 이름·영업시간을 수집 층(게시 장소) id 로도 — 타일에 없는 Foursquare 행에도 맞춘다."""
+
+    def test_col_pairs_stream(self):
+        import hours_osm as HO, region_cols as RC
+        t = tempfile.mkdtemp()
+        mk = lambda rows: P.to_layer('JP', [dict({'src': 'fsq_os_places', 'lic': 'Apache-2.0', 'c': 'castle'}, **r) for r in rows])
+        gz(os.path.join(t, 'col_JP_0.json.gz'), mk([{'id': 'fsq:1', 'nm': '大阪城', 'lat': 34.68735, 'lon': 135.52620}, {'id': 'fsq:9', 'nm': 'far', 'lat': 40.0, 'lon': 140.0}]))
+        gz(os.path.join(t, 'col_JP_1.json.gz'), mk([{'id': 'fsq:2', 'nm': '大阪城', 'lat': 34.6900, 'lon': 135.5262}]))  # 같은 OSM 행에 더 먼 후보
+        lst = os.path.join(t, 'cols.txt')
+        open(lst, 'w').write('\n'.join(os.path.join(t, f) for f in ('col_JP_0.json.gz', 'col_JP_1.json.gz')))
+        osm = [(34.6874, 135.5262, ['大阪城', 'Osaka Castle'], {'ko': '오사카성', 'en': 'Osaka Castle', 'ja': None, 'zh_Hans': None, 'zh_Hant': None}, None, 'way/42', True)]
+        got = HO.col_pairs(HO.col_urls(lst), osm, [135.0, 34.0, 136.0, 35.0], t)
+        self.assertEqual(got, {0: 'fsq:1'})
+        self.assertTrue(os.path.exists(os.path.join(t, 'col_JP_0.json.gz')))  # 로컬 파일은 지우지 않음
+        latest = {'run': 'r2', 'files': ['col_JP_0.json.gz', 'col_KR_0.json.gz', 'col_info_holidays.json.gz'], 'paths': {'col_JP_0.json.gz': 'processed/out/r1/col_JP_0.json.gz'}}
+        self.assertEqual(RC.urls(latest, {'JP'}, 'gs://b/collect/v1'), ['gs://b/collect/v1/processed/out/r1/col_JP_0.json.gz'])
+
+
 class TestHours(unittest.TestCase):
     def test_oh_ok(self):
         for s in ('24/7', 'Mo-Fr 09:00-18:00; Sa 10:00-14:00; PH off', 'Mo-Fr 08:00-12:00, Sa 10:00-12:00', 'Fr-Sa 18:00-02:00', 'Apr-Oct: Mo-Su 09:00-19:00',
