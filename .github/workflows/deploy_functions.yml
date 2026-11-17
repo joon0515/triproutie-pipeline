@@ -31,6 +31,7 @@ env:
   GEO_COORD: ${{ vars.GEO_COORD }}
   GEO_UA: ${{ vars.GEO_UA }}
   REQUIRE_APP_CHECK: ${{ vars.REQUIRE_APP_CHECK || 'false' }}
+  ACCT_MAX_AUTH_AGE_MIN: ${{ vars.ACCT_MAX_AUTH_AGE_MIN || '0' }}
 jobs:
   test:
     # PR·모든 브랜치: 키·GCP 없이 도는 시험(주소 검색 63건 + 진입점 불러오기). 항공 시험은 노선표가 GCS 에 있어 main 의 deploy 에서.
@@ -116,7 +117,8 @@ jobs:
         run: |
           case "$REQUIRE_APP_CHECK" in true|false) ;; *) echo "::error::REQUIRE_APP_CHECK 는 true/false"; exit 1;; esac
           case "$GEO_COORD" in ""|true|false) ;; *) echo "::error::GEO_COORD 는 true/false/빈칸"; exit 1;; esac
-          { echo "REQUIRE_APP_CHECK=$REQUIRE_APP_CHECK"; u="${GEO_UA:-TripRoutie-geoLookup/1.0}"; printf 'GEO_UA="%s"\n' "${u//\"/}"; } > .env
+          case "$ACCT_MAX_AUTH_AGE_MIN" in ""|*[!0-9]*) echo "::error::ACCT_MAX_AUTH_AGE_MIN 은 0 이상 정수"; exit 1;; esac
+          { echo "REQUIRE_APP_CHECK=$REQUIRE_APP_CHECK"; u="${GEO_UA:-TripRoutie-geoLookup/1.0}"; printf 'GEO_UA="%s"\n' "${u//\"/}"; echo "ACCT_MAX_AUTH_AGE_MIN=$ACCT_MAX_AUTH_AGE_MIN"; } > .env
           if grep -qE '^(DATA_GO_KR_KEY|JUSO_KEY|JUSO_COORD_KEY)=' .env; then echo "::error::.env 에 Secret 이름"; exit 1; fi
           cat .env
       - name: deploy (이름 지정만, --force 없음)
