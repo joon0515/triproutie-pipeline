@@ -14,7 +14,7 @@ import traceback
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
-from common import Blocked, Http, Stop, Store, now, today  # noqa: E402
+from common import Blocked, Http, Stop, Store, now, region_rank, shard_cc, today  # noqa: E402
 import collectors as C  # noqa: E402
 
 REG = os.path.join(HERE, '..', '..', 'sources', 'registry.yaml')
@@ -53,7 +53,8 @@ def _hours_since(ts):
     return (now() - datetime.datetime.fromisoformat(ts)).total_seconds() / 3600
 
 
-def plan(reg, index, env=os.environ, max_jobs=MAX_JOBS):
+def plan(reg, index, env=os.environ, max_jobs=MAX_JOBS, demand=None):
+    """demand = {cc: 사용자 검색 수}(Storage demand.json, 없으면 None) — 같은 날짜끼리는 많이 찾는 나라 조각부터(sources/region_priority.json)."""
     col, disc = [], []
     for s in reg['sources']:
         if s.get('status') != 'active' or s.get('script') not in C.REGISTRY:
@@ -71,12 +72,13 @@ def plan(reg, index, env=os.environ, max_jobs=MAX_JOBS):
             if fs >= RETRY_FAST and _hours_since(st.get('last_run')) < RETRY_SLOW_H:
                 continue  # 계속 실패하는 조각은 6시간 쉬고 다시(실패 기록은 status·이슈에 남는다)
             first = '' if 0 < fs < RETRY_FAST else (st.get('last_ok') or ' ')  # 방금 실패한 조각을 맨 앞에(자동 재시도)
-            (disc if s['script'] in C.DISCOVERY else col).append((first, s['id'], rk, sh))  # rk: 등록부에 적힌 조각 순서(첫 회차에 앞쪽부터)
+            pr = region_rank(shard_cc(sh), demand)  # 11/18: 같은 날짜면 사용자가 많이 찾는 나라 먼저, 그다음 전 세계
+            (disc if s['script'] in C.DISCOVERY else col).append((first, pr, s['id'], rk, sh))  # rk: 등록부에 적힌 조각 순서(첫 회차에 앞쪽부터)
     nd = max(1, int(max_jobs * DISC_SHARE)) if disc else 0
     pick, used = [], {}
 
     def take(lst, n):
-        for _, sid, _rk, sh in sorted(lst):
+        for _, _pr, sid, _rk, sh in sorted(lst):
             if n <= 0:
                 break
             if used.get(sid, 0) >= HEAVY_CAP.get(sid, 99):
@@ -87,7 +89,7 @@ def plan(reg, index, env=os.environ, max_jobs=MAX_JOBS):
     take(disc, nd)
     take(col, max_jobs - len(pick))
     if len(pick) < max_jobs:  # 수집 몫이 남으면 발견에 더 준다(놀리지 않음)
-        rest = [x for x in disc if {'source': x[1], 'shard': x[3]} not in pick]
+        rest = [x for x in disc if {'source': x[2], 'shard': x[4]} not in pick]
         take(rest, max_jobs - len(pick))
     return pick
 
@@ -218,7 +220,12 @@ def main():
     a = ap.parse_args()
     reg, store = load_registry(a.registry), Store(a.store)
     if a.cmd == 'plan':
-        p = plan(reg, get_index(store))
+        usage = store.get_json('guards/usage.json', None) or {}  # coverage-report 의 저장 용량·비용 측정(scripts/storage_guard.py)
+        if usage.get('pause_collect'):
+            print('matrix={"include":[]}'); print('any=false')
+            print(f"저장 상한 도달({usage.get('total_gib')} GiB / {usage.get('cap_gib')} GiB · ${usage.get('est_usd_month')}/월) — 새 원본 수집 멈춤", file=sys.stderr)
+            return 0
+        p = plan(reg, get_index(store), demand=(store.get_json('demand.json', None) or {}).get('cc'))
         print(f"matrix={json.dumps({'include': p}, separators=(',', ':'))}")
         print(f"any={'true' if p else 'false'}")
         print(f'계획 {len(p)}개 조각', file=sys.stderr)

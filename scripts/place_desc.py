@@ -28,14 +28,14 @@ import argparse, datetime, glob, gzip, hashlib, html, json, os, re, shutil, subp
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.join(HERE, '..')
 sys.path.insert(0, os.path.join(HERE, 'collect'))
-from common import Blocked, Http, Stop, Store, bad_text, norm_name, today  # noqa: E402
+from common import Blocked, Http, Stop, Store, bad_text, norm_name, refresh_days, today  # noqa: E402
 
 SLOTS = ('ko', 'en', 'ja', 'zh_Hans', 'zh_Hant')
 WD_TAGS = {'ko': ('ko',), 'en': ('en',), 'ja': ('ja',), 'zh_Hans': ('zh-hans', 'zh-cn', 'zh-sg', 'zh-my'), 'zh_Hant': ('zh-hant', 'zh-tw', 'zh-hk', 'zh-mo')}
 ALL_TAGS = tuple(t for ts in WD_TAGS.values() for t in ts) + ('zh',)
 QID = re.compile(r'(?:^|[:/])(Q[1-9]\d{0,9})$')
 BATCH = 250          # SPARQL VALUES 하나에 넣는 QID 수(주소 길이 약 4KB, qlever 응답 약 11초 — 11/17 실측)
-REFRESH_DAYS = 30
+REFRESH_DAYS = refresh_days('desc', 30)  # 설명·라벨 캐시 갱신 주기(sources/refresh_policy.json)
 MIN_LEN = 4
 MAX_SENT = 120
 NSH = 32             # desc-wd 파일 수(id 해시로 나눔 — 파일 하나가 앱 상한 8MB 를 넘지 않게. 넘으면 두 배로)
@@ -436,7 +436,12 @@ def run(store, bucket=None, extra_dir=None, out=None, budget_min=45.0, http=None
     src = next(s for s in reg['sources'] if s['id'] == 'wikidata_official')
     assert src.get('status') == 'active' and 'descriptions' in (src.get('fields') or []), 'registry wikidata_official 에 descriptions 가 없음'
     seeds = gather(store, bucket, extra_dir, clock() + budget_min * 60 * 0.3, clock)
+    # (11/18 233기) 씨앗 QID 를 남긴다 — wikidata-dump.yml(scripts/wd_dump.py)이 같은 씨앗으로 주간 덤프를 훑는다(223기 이름 층과 같은 조인)
+    store.put_json('processed/desc/qids.json.gz', {'built': today(), 'q': sorted(int(q[1:]) for q in seeds.q), 'prio': sorted(int(q[1:]) for q in seeds.prio)})
     cache = store.get_json('processed/desc/wd.json.gz', {}) or {}
+    for q, v in (store.get_json('processed/desc/wd_dump.json.gz', None) or {}).items():  # 덤프 조인 결과(받은 날 = 덤프 날짜) — 더 새것만 덮어 씀
+        if q not in cache or len(cache[q]) < 3 or cache[q][0] < v[0]:
+            cache[q] = v
     todo = order_qids(seeds, cache)
     st = store.get_json('processed/desc/state.json', {}) or {}
     if http is None:

@@ -1,5 +1,7 @@
 # 트립루티 커버리지 일일 보고 — 하루 1번(+수동). 최신 가공 판의 층 파일을 40개씩 받아 읽고(받은 파일은 곧 지움) 숫자만 남긴다.
-# 결과: 이슈 '커버리지 일일 보고' 하나에 댓글로 누적 + Storage collect/v1/coverage/<날짜>.json(어제와 견주기용). 저장소에는 커밋하지 않는다.
+# 결과: 이슈 '커버리지 일일 보고' 하나에 댓글로 누적 + Storage collect/v1/coverage/<날짜>.json(어제와 견주기용).
+# (11/18 233기) docs/COVERAGE.md 8절 표(언어별 이름·영업시간·사진·소개 채움률과 1·7·30일 추세)를 날마다 바꿔 커밋한다 — 개수·비율만.
+#   저장 용량·비용 상한(scripts/storage_guard.py, 읽기 전용 측정): 80% 넘으면 이슈 '저장 용량·비용 경고', 100% 면 collect 가 새 원본 수집을 멈춘다.
 # 장소 내용은 로그·이슈·artifact·cache 에 남기지 않는다(개수·비율만). 구글 데이터는 받지 않는다 — 구글 값은 sources/coverage_targets.json 의 공개 문구 인용뿐.
 name: coverage-report
 on:
@@ -7,7 +9,7 @@ on:
     - cron: "47 20 * * *"     # UTC 20:47 = KST 05:47
   workflow_dispatch: {}
 permissions:
-  contents: read
+  contents: write     # docs/COVERAGE.md 추세 표 커밋 전용
   id-token: write
   issues: write
 concurrency:
@@ -32,7 +34,7 @@ jobs:
         with: {python-version: "3.12"}
       - run: pip install -q pyyaml >/dev/null
       - name: test
-        run: python3 -W ignore -m unittest tests/test_coverage.py tests/test_place_desc.py tests/test_place_names.py 2>&1 | tail -3
+        run: python3 -W ignore -m unittest tests/test_coverage.py tests/test_place_desc.py tests/test_place_names.py tests/test_always_on.py 2>&1 | tail -3
       - name: 영업시간·사진 층(작다)과 어제 보고 받기
         run: |
           mkdir -p "$RUNNER_TEMP/side"
@@ -44,29 +46,46 @@ jobs:
           # (11/18) 이름 5개 언어 층(names-wd-* Wikidata · names-osm-* OSM, 2단 목록이라 layers_extra 에서)·Commons 사진 층(photos-wd-*) — 0절
           for P in names-wd names-osm photos-wd; do gcloud storage cp -q "gs://$GCS_BUCKET/places/v1/layers_extra/$P-*.json.gz" "$RUNNER_TEMP/side/" 2>/dev/null || true; done
           ls "$RUNNER_TEMP/side" | sed -E 's/-?[0-9]*\.json\.gz$//' | sort | uniq -c | head -40
-      - name: Storage 용량(이름·크기만)
+      - name: Storage 용량·비용 상한(읽기 전용 측정 — 이름·크기만)
+        env:
+          STORAGE_CAP_GIB: ${{ vars.STORAGE_CAP_GIB }}
+          COST_CAP_USD_MONTH: ${{ vars.COST_CAP_USD_MONTH }}
+          STORAGE_USD_PER_GIB: ${{ vars.STORAGE_USD_PER_GIB }}
         run: |
-          python3 - <<'PY' > "$RUNNER_TEMP/storage.json"
-          import json, os, subprocess
-          b, out = os.environ['GCS_BUCKET'], {}
-          for name, p in (('수집 원본 raw', 'collect/v1/raw'), ('가공 띠 bands', 'collect/v1/processed/bands'), ('가공 층 out', 'collect/v1/processed/out'), ('게시 places/v1', 'places/v1')):
-              r = subprocess.run(['gcloud', 'storage', 'du', '-s', f'gs://{b}/{p}'], capture_output=True, text=True)
-              try:
-                  out[name] = f"{int(r.stdout.split()[0]) / 2**30:.2f} GiB"
-              except Exception:
-                  out[name] = '미측정'
-          print(json.dumps(out, ensure_ascii=False))
-          PY
+          python3 scripts/storage_guard.py --bucket "$GCS_BUCKET" --storage "$RUNNER_TEMP/storage.json" --usage "$RUNNER_TEMP/usage.json" --alert "$RUNNER_TEMP/cap_alert.md" | tee -a "$GITHUB_STEP_SUMMARY"
+          gcloud storage cp -q "$RUNNER_TEMP/usage.json" "$STORE/guards/usage.json"   # collect 계획이 읽는다(pause_collect)
       - name: measure
         run: |
           python3 scripts/coverage.py --store "$STORE" --side "$RUNNER_TEMP/side" --desc "$RUNNER_TEMP/desc" --prev "$RUNNER_TEMP/prev.json" --storage "$RUNNER_TEMP/storage.json" \
             --json "$RUNNER_TEMP/cov.json" --md "$RUNNER_TEMP/cov.md" >> "$GITHUB_STEP_SUMMARY"
           gcloud storage cp -q "$RUNNER_TEMP/cov.json" "$STORE/coverage/$(date -u +%F).json"
-      - name: 이슈 하나에 누적
+      - name: 저장 용량·비용 경고(80% 넘을 때만, REST)
         env:
           GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          [ -f "$RUNNER_TEMP/cap_alert.md" ] || { echo "상한 안쪽"; exit 0; }
+          T="저장 용량·비용 경고"; { echo "- $(date -u +%F) · coverage-report(Storage)"; cat "$RUNNER_TEMP/cap_alert.md"; } > "$RUNNER_TEMP/cap.md"
+          N="$(gh api "repos/$GH_REPO/issues?state=open&per_page=100" -q "[.[]|select(.title==\"$T\" and (has(\"pull_request\")|not))][0].number // empty")"
+          if [ -z "$N" ]; then gh api "repos/$GH_REPO/issues" -f title="$T" -F body=@"$RUNNER_TEMP/cap.md" > /dev/null; else gh api "repos/$GH_REPO/issues/$N/comments" -F body=@"$RUNNER_TEMP/cap.md" > /dev/null; fi
+      - name: docs/COVERAGE.md 추세 표 갱신·커밋(개수·비율만)
+        run: |
+          mkdir -p "$RUNNER_TEMP/hist"
+          gcloud storage ls "$STORE/coverage/*.json" 2>/dev/null | sort | tail -40 | gcloud storage cp -q -I "$RUNNER_TEMP/hist/" 2>/dev/null || true
+          cp "$RUNNER_TEMP/cov.json" "$RUNNER_TEMP/hist/$(date -u +%F).json"
+          python3 scripts/coverage_trend.py --dir "$RUNNER_TEMP/hist" --md docs/COVERAGE.md --days 14
+          git config user.name "github-actions[bot]"; git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add docs/COVERAGE.md
+          if ! git diff --cached --quiet; then
+            git commit -q -m "coverage: 채움률·추세 표 $(date -u +%F)"
+            for i in 1 2 3 4 5; do git push -q origin HEAD:main && break; sleep $((i * 5)); git pull -q --rebase origin main; done
+          fi
+      - name: 이슈 하나에 누적(REST)
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
         run: |
           T="커버리지 일일 보고"
           head -c 60000 "$RUNNER_TEMP/cov.md" > "$RUNNER_TEMP/body.md"
-          N="$(gh issue list --state open --search "\"$T\" in:title" --json number,title -q "[.[]|select(.title==\"$T\")][0].number")"
-          if [ -z "$N" ]; then gh issue create --title "$T" --body-file "$RUNNER_TEMP/body.md"; else gh issue comment "$N" --body-file "$RUNNER_TEMP/body.md"; fi
+          N="$(gh api "repos/$GH_REPO/issues?state=open&per_page=100" -q "[.[]|select(.title==\"$T\" and (has(\"pull_request\")|not))][0].number // empty")"
+          if [ -z "$N" ]; then gh api "repos/$GH_REPO/issues" -f title="$T" -F body=@"$RUNNER_TEMP/body.md" > /dev/null; else gh api "repos/$GH_REPO/issues/$N/comments" -F body=@"$RUNNER_TEMP/body.md" > /dev/null; fi

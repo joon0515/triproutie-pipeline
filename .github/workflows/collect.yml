@@ -107,6 +107,9 @@ jobs:
 
   # GitHub 예약(schedule)이 이 저장소에서 한 번도 안 돌아서(11/15 확인), 수집이 끝나면 스스로 다음 회차를 건다.
   # workflow_dispatch 는 GITHUB_TOKEN 으로도 새 실행을 만든다(GitHub 문서). 끄려면 저장소 변수 CHAIN_OFF=1.
+  # (11/18 233기) 사슬이 끊기던 곳: ① process 걸기가 실패하면 뒤 단계가 다 건너뛰어 다음 수집이 안 걸림 ② run_started_at 조회가 실패하면
+  #   bash -e 로 그 단계가 죽음 ③ 다음 수집 걸기에 재시도가 없음. → ①은 continue-on-error, ②는 실패 시 10분 쉼, ③은 5번 재시도.
+  #   그래도 끊기면 watchdog(매시 37분)이 3시간 안에 다시 건다. 다음 수집을 건 뒤의 보충 단계는 실패해도 이 실행을 실패로 만들지 않는다.
   chain:
     needs: [plan, collect, summary]
     if: ${{ always() && vars.CHAIN_OFF != '1' }}
@@ -119,15 +122,25 @@ jobs:
       GH_REPO: ${{ github.repository }}
     steps:
       - name: 가공(process) — 수집 직후 한 번
+        continue-on-error: true   # 실패해도 다음 수집은 건다(process 는 workflow_run·3시간 예약·watchdog 로도 돈다)
         run: gh workflow run process.yml --ref main
       - name: 1시간 간격 맞추기
         run: |
-          st=$(gh api repos/$GH_REPO/actions/runs/${{ github.run_id }} -q .run_started_at)
+          st=$(gh api repos/$GH_REPO/actions/runs/${{ github.run_id }} -q .run_started_at 2>/dev/null || true)
+          if [ -z "$st" ]; then echo "시작 시각 조회 실패 — 10분 쉬고 건다"; sleep 600; exit 0; fi
           wait=$(( $(date -d "$st" +%s) + 3600 - $(date +%s) ))
           echo "다음 회차까지 ${wait}s"; if [ $wait -gt 0 ] && [ $wait -le 3600 ]; then sleep $wait; fi
       - name: 다음 수집 걸기
-        run: gh workflow run collect.yml --ref main
+        run: |
+          for i in 1 2 3 4 5; do gh workflow run collect.yml --ref main && exit 0; echo "재시도 $i"; sleep $((i * 20)); done
+          echo "::error::다음 수집을 걸지 못함 — watchdog 이 3시간 안에 다시 건다"; exit 1
+      - name: watchdog 보충 (watchdog 예약이 빠질 때 — 2시간 넘게 실행이 없으면 한 번)
+        continue-on-error: true
+        run: |
+          last=$(gh api "repos/$GH_REPO/actions/workflows/watchdog.yml/runs?per_page=1" -q '.workflow_runs[0].created_at // empty' 2>/dev/null || true)
+          if [ -z "$last" ] || [ $(( $(date +%s) - $(date -d "$last" +%s) )) -gt 7200 ]; then gh workflow run watchdog.yml --ref main && echo "watchdog 걸음"; else echo "watchdog 최근 실행 $last"; fi
       - name: TourAPI 하루 1회 (KST 00시대 이후, 오늘 실행 없을 때만)
+        continue-on-error: true
         run: |
           today=$(TZ=Asia/Seoul date +%F); h=$(TZ=Asia/Seoul date +%H)
           last=$(gh run list -w tourapi_daily.yml -L 1 --json createdAt -q '.[0].createdAt' 2>/dev/null)
@@ -135,6 +148,7 @@ jobs:
           if [ "$lastk" != "$today" ] && [ "$h" -ge 0 ]; then gh workflow run tourapi_daily.yml --ref main && echo "tourapi 걸음"; else echo "tourapi 오늘 이미 실행($lastk)"; fi
       - name: places-layers 주 1회 merge · 월 1회 full all (예약 실행이 빠질 때 보충, 끄려면 저장소 변수 LAYERS_CHAIN_OFF=1)
         if: ${{ vars.LAYERS_CHAIN_OFF != '1' }}
+        continue-on-error: true
         run: |
           # 사진·영업시간 층은 places-layers 가 돌아야 게시된다. 진행 중인 실행이 있으면 걸지 않는다.
           runs=$(gh run list -w places-layers.yml -L 40 --json displayTitle,createdAt,status 2>/dev/null || echo '[]')

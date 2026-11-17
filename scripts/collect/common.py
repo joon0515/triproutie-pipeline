@@ -17,6 +17,48 @@ FORBIDDEN = ('instagram.com', 'cdninstagram.com', 'tiktok.com', 'tiktokcdn.com',
 FORBIDDEN_LABELS = ('google', 'tripadvisor', 'tabelog', 'instagram', 'tiktok', 'naver', 'kakao')  # google.co.jp · tripadvisor.fr 등 모든 나라 도메인
 LANGS = ('ko', 'en', 'ja', 'zh')  # + nm(현지 이름) = 앱 타일과 같은 5개 이름 칸
 BLOCK_COOL_DAYS = 7  # 403 을 받은 사이트는 7일 쉼
+_SRC_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', '..', 'sources')
+_POLICY, _PRIO = {}, {}
+
+
+def refresh_days(kind, default):
+    """증분 갱신 주기(일) — sources/refresh_policy.json 의 fields.<kind>.days. 파일·칸이 없으면 default."""
+    if not _POLICY:
+        try:
+            _POLICY.update(json.load(open(os.path.join(_SRC_DIR, 'refresh_policy.json'), encoding='utf-8')).get('fields') or {})
+        except (OSError, ValueError):
+            _POLICY['_'] = {}
+    try:
+        return int(_POLICY[kind]['days'])
+    except (KeyError, TypeError, ValueError):
+        return default
+
+
+def shard_cc(shard):
+    """'<지역>:<cc>' 나라 조각 → cc. 언어(en)·번호(0) 조각은 None."""
+    s = str(shard or '')
+    return s.rsplit(':', 1)[1].upper() if ':' in s else None
+
+
+def region_rank(cc, demand=None):
+    """지역 순환 우선순위 — 작을수록 먼저. cc = 나라 코드(없으면 0 — 나라가 없는 조각은 순서를 바꾸지 않음).
+    demand = {cc: 사용자 검색 수}(있으면 그 순서가 단계보다 앞선다). 근거: sources/region_priority.json."""
+    cc = str(cc or '').upper()
+    if len(cc) != 2 or not cc.isalpha():
+        return 0
+    if not _PRIO:
+        try:
+            tiers = json.load(open(os.path.join(_SRC_DIR, 'region_priority.json'), encoding='utf-8')).get('tiers') or []
+        except (OSError, ValueError):
+            tiers = []
+        _PRIO.update({c: i for i, t in enumerate(tiers) for c in t})
+        _PRIO['_n'] = len(tiers)
+    base = _PRIO.get(cc, _PRIO['_n'])
+    if demand:
+        ranked = sorted(demand, key=lambda c: -float(demand[c] or 0))
+        if cc in demand and float(demand[cc] or 0) > 0:
+            return ranked.index(cc) / (len(ranked) + 1) - 1  # 검색 수가 있는 나라는 모두 단계 0 보다 앞(-1 ~ 0)
+    return base
 OPEN_LICENSES = ('cc0', 'cc-zero', 'publicdomain', 'pddl', 'cc-by', 'cc_by', 'ccby', 'odc-by', 'odc-odbl', 'odbl', 'ogl', 'open-government',
                  'ca-ogl', 'uk-ogl', 'etalab', 'licence-ouverte', 'lo-2', 'cdla-permissive', 'apache-2', 'mit', 'dl-de-zero', 'dl-de-by',
                  'nlod', 'kogl-1', 'ogdl-taiwan', 'sg-odl')

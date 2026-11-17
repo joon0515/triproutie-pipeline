@@ -24,14 +24,14 @@ import datetime, glob, gzip, hashlib, json, os, re, sys, time, unicodedata, urll
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE); sys.path.insert(0, os.path.join(HERE, 'collect'))
 import place_desc as PD  # noqa: E402
-from common import Blocked, Http, Stop, bad_text, today  # noqa: E402
+from common import Blocked, Http, Stop, bad_text, refresh_days, today  # noqa: E402
 
 SLOTS = PD.SLOTS
 NAME_MAX = 120
 NSH = 8
 FILE_MAX = 7 * 1024 * 1024
 C_BATCH = 40          # Commons 끝점 VALUES 하나에 넣는 파일 수(주소 약 5KB — 100개는 414, 11/18 실측 40개 12초)
-C_REFRESH = 90
+C_REFRESH = refresh_days('photos', 90)  # Commons 사진 정보 갱신 주기(sources/refresh_policy.json)
 COMMONS_EP = 'https://qlever.dev/api/wikimedia-commons'
 FILEPATH = 'http://commons.wikimedia.org/wiki/Special:FilePath/'
 # 라이선스 Wikidata 항목 → (표기, 라이선스 주소). 이 목록 밖(나라별 판·GFDL·PD 표기·NC/ND 등)은 싣지 않는다.

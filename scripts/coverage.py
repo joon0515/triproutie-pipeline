@@ -56,6 +56,22 @@ def type_of(cat):
     return t
 
 
+# (11/18 233기) 커버리지 분모 '일정에 들어갈 수 있는 장소' — 앱 일정 생성기(trip_gen_v2)가 쓰는 칸: 명소·식사(식당·카페)·숙소·교통 거점(공항·역·터미널·여객선).
+#   벤치·가로등·버스 정류장·주차장·주유소 같은 '그 밖'·'정류장'은 빼고 센다. 전체 기준 수치도 함께 남긴다(places).
+HUB_KW = ('airport', 'station', 'terminal', 'ferry', 'pier', 'harbour', 'harbor', 'railway', 'metro', 'subway')
+NOT_HUB = ('stop', 'platform', 'taxistand', 'gas', 'fuel', 'charging', 'police', 'fire', 'radio', 'power', 'weather', 'parking', 'bicycle', 'bike')
+_icache = {}
+
+
+def itin_of(cat):
+    """일정에 들어갈 수 있는 장소인가(명소·식당·숙소 전부 + 교통은 거점만)."""
+    c = (cat or '').lower()
+    if c not in _icache:
+        t = type_of(c)
+        _icache[c] = t in ('sight', 'food', 'lodging') or (t == 'transport' and any(k in c for k in HUB_KW) and not any(k in c for k in NOT_HUB))
+    return _icache[c]
+
+
 def _blank():
     return {'n': 0, **{a: 0 for a in ATTRS}}
 
@@ -74,6 +90,7 @@ class Meter:
         self.files = 0
         self.desc = desc  # {칸: 장소 id set} 또는 None(장소 소개 층을 읽지 않음)
         self.d_all, self.d_typ, self.d_city = _dblank(), {t: _dblank() for t in TYPES}, {}
+        self.itin, self.d_itin = _blank(), _dblank()  # 일정 장소 기준(itin_of)
 
     def _desc(self, keys, groups):
         hit = [any(k in self.desc[s] for k in keys if k) for s in DESC_SLOTS]
@@ -89,6 +106,7 @@ class Meter:
         self.files += 1
         cc, cats, n = j.get('cc') or '??', j.get('cats') or [], len(j['id'])
         tp = [type_of(c) for c in cats]
+        ip = [itin_of(c) for c in cats]
         col = lambda k: j.get(k) or [None] * n
         ko, en, ja, zh, h, tel, url, tr, src, wid, ids = (col(k) for k in ('ko', 'en', 'ja', 'zh', 'h', 'tel', 'url', 'tr', 'src', 'wid', 'id'))
         boxes = [(nm, b) for nm, b in self.cities.items()]
@@ -98,12 +116,13 @@ class Meter:
         for i in range(n):
             la += j['dla'][i]; lo += j['dlo'][i]
             t = tp[j['c'][i]] if 0 <= j['c'][i] < len(tp) else 'other'
+            it = ip[j['c'][i]] if 0 <= j['c'][i] < len(ip) else False
             keys = (ids[i], wid[i]) if wid[i] else (ids[i],)
             zk = PN.zh_generic(PN.name_ok(zh[i])) if zh[i] else None
             own = (bool(PN.name_ok(ko[i])), bool(PN.name_ok(en[i])), bool(PN.name_ok(ja[i])), zk == 'zh_Hans', zk == 'zh_Hant')
             f = tuple(o or any(k in sset for k in keys) for o, sset in zip(own, nm_sets)) + (
                 bool(oh_ok(h[i])) or any(k in self.h_ids for k in keys), any(k in self.p_ids for k in keys), bool(tel[i]), bool(url[i]), (tr[i] or 1) >= 2)
-            tg = [bcc, self.typ[t]]
+            tg = [bcc, self.typ[t]] + ([self.itin] if it else [])
             if boxes:
                 x, y = lo / 1e5, la / 1e5
                 for nm, b in boxes:
@@ -115,7 +134,7 @@ class Meter:
                     g[a] += v
             bct[t] += 1
             if self.desc is not None:
-                dg = [self.d_all, self.d_typ[t]]
+                dg = [self.d_all, self.d_typ[t]] + ([self.d_itin] if it else [])
                 if boxes:
                     x, y = lo / 1e5, la / 1e5
                     dg += [self.d_city.setdefault(nm, _dblank()) for nm, b in boxes if b[0] <= x <= b[2] and b[1] <= y <= b[3]]
@@ -130,10 +149,10 @@ class Meter:
         for b in self.cc.values():
             for k in tot:
                 tot[k] += b[k]
-        r = {'places': tot, 'by_type': self.typ, 'by_cc': self.cc, 'by_cc_type': self.cc_typ, 'by_city': self.city, 'by_source': self.src, 'layer_files': self.files,
+        r = {'places': tot, 'itinerary': self.itin, 'by_type': self.typ, 'by_cc': self.cc, 'by_cc_type': self.cc_typ, 'by_city': self.city, 'by_source': self.src, 'layer_files': self.files,
              'side_files': {k: dict(v) for k, v in SIDE_FILES.items()}}
         if self.desc is not None:
-            r['desc'] = {'all': self.d_all, 'by_type': self.d_typ, 'by_city': self.d_city, 'files': self.desc.get('_files', {})}
+            r['desc'] = {'all': self.d_all, 'itinerary': self.d_itin, 'by_type': self.d_typ, 'by_city': self.d_city, 'files': self.desc.get('_files', {})}
         return r
 
 
@@ -296,9 +315,11 @@ def to_md(rep, prev=None, top=25):
     if lay:
         P0, pv = lay['places'], ((prev or {}).get('layers') or {}).get('places') or {}
         dlt = lambda a: (f" (어제 {_pct(pv[a], pv['n'])})" if pv.get('n') and a in pv else '')
-        L += ['### 0. 이름 5개 언어·영업시간·사진 채움(게시 장소 전체, 그 언어로 적힌 원천 값만 — 원어 이름·번역·간체↔번체 변환 값은 세지 않음)',
-              '| 칸 | 장소 수 | 비율 |', '|---|---|---|']
-        L += [f"| {ATTR_KO[a]} | {P0[a]:,} | {_pct(P0[a], P0['n'])}{dlt(a)} |" for a in NAME_SLOTS + ('h', 'photo')]
+        I0 = lay.get('itinerary') or _blank()
+        L += ['### 0. 이름 5개 언어·영업시간·사진 채움(그 언어로 적힌 원천 값만 — 원어 이름·번역·간체↔번체 변환 값은 세지 않음)',
+              f"- **일정 장소 기준**(명소·식당·숙소·교통 거점 — 일정 생성기가 쓰는 범주, 벤치·정류장·주차장 등 제외): {I0['n']:,}곳 · 전체 기준: {P0['n']:,}곳",
+              '| 칸 | 일정 장소 수 | 일정 기준 비율 | 전체 장소 수 | 전체 기준 비율 |', '|---|---|---|---|---|']
+        L += [f"| {ATTR_KO[a]} | {I0[a]:,} | {_pct(I0[a], I0['n'])} | {P0[a]:,} | {_pct(P0[a], P0['n'])}{dlt(a)} |" for a in NAME_SLOTS + ('h', 'photo')]
         if lay.get('side_files'):
             L.append('- 읽은 층: ' + ', '.join(f"{k} 파일 {v['files']}·행 {v['rows']:,}" for k, v in sorted(lay['side_files'].items())))
         hdr = '| 장소 | ' + ' | '.join(ATTR_KO[a] for a in ATTRS) + ' |'
@@ -313,7 +334,7 @@ def to_md(rep, prev=None, top=25):
             dh = '| | 장소 | 소개 1개 언어 이상 | ' + ' | '.join(DESC_SLOTS) + ' |'
             drow = lambda name, b: f"| {name} | {b['n']:,} | {_pct(b['any'], b['n'])} | " + ' | '.join(_pct(b[k], b['n']) for k in DESC_SLOTS) + ' |'
             L += ['### 7. 장소 소개(언어별 커버리지 — 수집 층 장소 중 그 언어 소개가 있는 비율, 다른 언어로 채우지 않음)', dh, '|---' * (len(DESC_SLOTS) + 3) + '|',
-                  drow('전체', dsc['all'])] + [drow(TYPE_KO[t], dsc['by_type'][t]) for t in TYPES]
+                  drow('일정 장소', dsc.get('itinerary') or _dblank()), drow('전체', dsc['all'])] + [drow(TYPE_KO[t], dsc['by_type'][t]) for t in TYPES]
             if dsc.get('by_city'):
                 L += ['', dh.replace('| |', '| 도시 |', 1), '|---' * (len(DESC_SLOTS) + 3) + '|'] + [drow(c, b) for c, b in sorted(dsc['by_city'].items(), key=lambda kv: -kv[1]['n'])]
             if dsc.get('files'):

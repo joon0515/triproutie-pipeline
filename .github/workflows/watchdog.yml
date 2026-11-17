@@ -1,0 +1,43 @@
+# 상시 가동 감시(watchdog) — 매시간. 각 워크플로의 마지막 성공 시각을 보고 기준(sources/watchdog.json max_age_h)을 넘기면 workflow_dispatch 로 다시 건다.
+# 3회 연속 실패는 이슈 '자동화 실패 모음'에 한 번 올리고, 60일 무활동으로 꺼진 예약 워크플로는 enable 로 되살린다(하루 한 번 keepalive).
+# GitHub REST API 만 쓴다(scripts/watchdog.py). 클라우드 권한·비밀값 없음 — GITHUB_TOKEN(actions·issues 쓰기)뿐.
+# 이 워크플로의 예약이 빠질 때를 대비해 collect.yml chain 이 2시간 넘게 watchdog 실행이 없으면 한 번 건다(서로 감시).
+name: watchdog
+on:
+  schedule:
+    - cron: "37 * * * *"     # 정각 근처(부하가 몰려 예약이 밀리거나 빠지는 때)를 피함
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "판단만(다시 걸기·이슈·enable 없이): yes | no"
+        default: "no"
+      keepalive:
+        description: "지금 keepalive(켜진 워크플로 enable 다시 부르기)도: yes | no"
+        default: "no"
+permissions:
+  contents: read
+  actions: write      # workflow_dispatch · enable
+  issues: write       # 3회 연속 실패·용량 경고
+concurrency:
+  group: watchdog
+  cancel-in-progress: false
+jobs:
+  watch:
+    if: github.repository == 'joon0515/triproutie-pipeline'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: {python-version: "3.12"}
+      - name: test (mock, no network)
+        run: python3 -W ignore -m unittest tests/test_watchdog.py 2>&1 | tail -3
+      - name: watchdog
+        env:
+          GH_TOKEN: ${{ github.token }}
+          DRY: ${{ inputs.dry_run }}
+          KEEP: ${{ inputs.keepalive }}
+        run: |
+          python3 scripts/watchdog.py --md "$RUNNER_TEMP/w.md" --json "$RUNNER_TEMP/w.json" \
+            $( [ "$DRY" = "yes" ] && echo --dry-run ) $( [ "$KEEP" = "yes" ] && echo --keepalive ) > /dev/null
+          cat "$RUNNER_TEMP/w.md" | tee -a "$GITHUB_STEP_SUMMARY"

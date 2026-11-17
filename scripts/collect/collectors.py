@@ -3,7 +3,7 @@
 import bz2, csv, datetime, gzip, hashlib, html.parser, io, json, os, re, shutil, subprocess, sys, tarfile, tempfile, time, urllib.parse, zipfile
 import xml.etree.ElementTree as ET
 
-from common import LANGS, Stop, Blocked, forbidden, host_of, license_open, place, today, valid_coord
+from common import LANGS, Stop, Blocked, forbidden, host_of, license_open, place, refresh_days, region_rank, today, valid_coord
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 TOOLS = os.path.join(HERE, '..', '..', 'tools')
@@ -177,7 +177,7 @@ def gtfs(ctx):
 def _gtfs_loop(ctx, feeds, done, idx, summary):
     for f in feeds:
         ctx.tick()
-        if not _due(done, f['id'], 7):
+        if not _due(done, f['id'], refresh_days('gtfs', 7)):
             continue
         try:
             z = ctx.http.get(f['url'])
@@ -632,10 +632,11 @@ def crawl_site(ctx, qid, seed, max_pages=15):
 def crawl(ctx):
     seeds = ctx.store.get_json(f'seeds/sites_{ctx.shard}.json.gz', {}) or {}
     done = ctx.st.setdefault('done', {})
-    order = sorted(seeds, key=lambda q: done.get(q, ''))
+    order = sorted(seeds, key=lambda q: (done.get(q, ''), region_rank(seeds[q].get('cc'))))  # 오래된 것부터, 같으면 많이 찾는 나라 먼저
+    ttl = refresh_days('hours', 14)  # 영업시간은 자주 바뀐다 — 사이트마다 14일(sources/refresh_policy.json)
     rows = []
     for qid in order:
-        if not _due(done, qid, 30):
+        if not _due(done, qid, ttl):
             break
         seed = seeds[qid]
         try:
@@ -760,7 +761,7 @@ def open_dataset(ctx):
     done = ctx.st.setdefault('done', {})
     mine = sorted((k for k, e in disc.items() if e['status'] == 'active' and shard_of(k, ctx.nshards) == int(ctx.shard)), key=lambda k: done.get(k, ''))
     for k in mine:
-        if not _due(done, k, 30):
+        if not _due(done, k, refresh_days('datasets', 30)):
             break
         e, rows = disc[k], []
         src = dict(ctx.src, license=e['license'], id='open_dataset')

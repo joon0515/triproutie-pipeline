@@ -1,0 +1,66 @@
+{
+ "note": "watchdog(.github/workflows/watchdog.yml)가 매시간 본다. max_age_h = 마지막 '성공'이 이보다 오래되면 workflow_dispatch 로 다시 건다(돌고 있거나 대기 중이면 걸지 않는다 — 같은 concurrency 묶음의 대기 실행을 밀어내지 않게). inputs = 다시 걸 때 넣는 값. 수동 전용 워크플로(places-world·climate-normals·deploy-functions)는 넣지 않는다.",
+ "cooldown_min": 50,
+ "fail_backoff_h": 6,
+ "fail_streak_alert": 3,
+ "keepalive_hour_utc": 3,
+ "digest_title": "자동화 실패 모음",
+ "capacity_title": "저장 용량·비용 경고",
+ "cache_warn_gib": 8,
+ "artifact_warn_mib": 400,
+ "workflows": [
+  {
+   "file": "collect.yml",
+   "max_age_h": 3,
+   "why": "매시 스스로 이어 돈다(chain). 3시간 성공이 없으면 사슬이 끊긴 것"
+  },
+  {
+   "file": "process.yml",
+   "max_age_h": 8,
+   "why": "collect chain·workflow_run·3시간 예약. 한 번에 2~4시간"
+  },
+  {
+   "file": "places-layers.yml",
+   "max_age_h": 192,
+   "inputs": {
+    "mode": "merge"
+   },
+   "why": "주 1회 merge(월 1회 full 은 collect chain 이 건다)"
+  },
+  {
+   "file": "tourapi_daily.yml",
+   "max_age_h": 27,
+   "why": "하루 1회(KST 00:20) — 하루 한도는 스크립트가 지킨다"
+  },
+  {
+   "file": "fx_daily.yml",
+   "max_age_h": 27,
+   "why": "하루 1회"
+  },
+  {
+   "file": "coverage-report.yml",
+   "max_age_h": 27,
+   "why": "하루 1회 — docs/COVERAGE.md 추세 표"
+  },
+  {
+   "file": "patterns.yml",
+   "max_age_h": 30,
+   "why": "하루 1회(오늘 이미 성공이면 바로 끝남)"
+  },
+  {
+   "file": "watch-sources.yml",
+   "max_age_h": 192,
+   "why": "주 1회"
+  },
+  {
+   "file": "guards.yml",
+   "max_age_h": 192,
+   "why": "push·PR·주 1회"
+  },
+  {
+   "file": "wikidata-dump.yml",
+   "max_age_h": 192,
+   "why": "주 1회(금) Wikidata 덤프 조인 — 같은 덤프면 바로 끝남"
+  }
+ ]
+}

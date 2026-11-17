@@ -62,8 +62,10 @@ class Stop(Exception):
 
 
 class Client:
-    def __init__(self, key, state, limit, opener=None, sleep=time.sleep):
+    def __init__(self, key, state, limit, opener=None, sleep=time.sleep, interval=None, clock=time.time):
         self.key, self.st, self.limit, self.sleep = key, state, limit, sleep
+        # 출처별 속도 제한(11/18): 요청 사이 최소 간격(초) — 하루 한도(limit)와 따로. 등록부 tourapi.interval_s 와 같은 값(기본 1초 — 수집 원칙 '사이트당 초당 1회 이하').
+        self.interval, self.clock, self._last = float(os.environ.get('TOURAPI_INTERVAL_S', 1.0) if interval is None else interval), clock, None
         self.opener = opener or (lambda u: urllib.request.urlopen(urllib.request.Request(u, headers={'User-Agent': 'TripRoutie-pipeline/1.0'}), timeout=60).read())
         self.fails = 0
         if state.get('date') != today():
@@ -80,6 +82,11 @@ class Client:
             if self.st['calls'] >= self.limit:
                 raise Stop('LIMIT')
             self.st['calls'] += 1
+            if self._last is not None:
+                gap = self.interval - (self.clock() - self._last)
+                if gap > 0:
+                    self.sleep(gap)
+            self._last = self.clock()
             try:
                 try:
                     raw = self.opener(u)
