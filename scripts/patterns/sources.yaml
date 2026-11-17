@@ -1,0 +1,52 @@
+# 일정 패턴 출처 등록부 — 판정 근거는 docs/PATTERNS_POLICY.md. status: active 이고 verdict 가 ok|conditional 인 것만 읽는다.
+# blocked 출처는 받는 코드 자체가 없다(sources.FETCHERS 에 kind 가 없음 — tests/test_patterns.py 가 지킨다).
+# license_class: clean(동일조건 없음) | by-sa(동일조건 — 산출물을 따로 두고 기본으로는 모델에 덧대지 않음)
+version: 1
+sources:
+  - id: youtube_data_api
+    name: YouTube Data API v3 (search.list · videos.list 의 설명란·챕터)
+    kind: youtube_api
+    verdict: no
+    status: blocked
+    reason: "개발자 정책 III.E.4.h(API 데이터로 새·파생 데이터·지표 만들기 금지) · III.E.2.a(집계 금지). 2026-11-17 확인. YouTube 의 서면 허락 전에는 켜지 않는다"
+    secret: YOUTUBE_API_KEY     # 이름만. 지금은 쓰는 코드가 없다
+  - id: naver_search_api
+    name: 네이버 검색 API(블로그)
+    kind: search_api
+    verdict: no
+    status: blocked
+    reason: "약관 미확인(2026-11-17 developers.naver.com 을 이 환경에서 열지 못함) + 검색 결과는 요약문뿐이라 본문은 금지 도메인을 긁어야 함"
+  - id: kakao_search_api
+    name: 카카오(Daum) 검색 API(블로그)
+    kind: search_api
+    verdict: no
+    status: blocked
+    reason: "운영정책 제5조 30호(사전 승낙 없는 복제·변경 금지)·20호(사용자 환경 개선 외 캐시 금지). 결과는 요약문뿐. 2026-11-17 확인"
+  - id: wikivoyage_itineraries
+    name: Wikivoyage 덤프의 일정 문서(Day 1·1日目·第1天 제목이 있는 문서)
+    kind: wikivoyage_dump
+    verdict: conditional
+    status: active
+    license: CC-BY-SA-4.0
+    license_class: by-sa
+    attribution: "Wikivoyage contributors (CC BY-SA 4.0) — 통계 계산에 사용"
+    url: https://dumps.wikimedia.org/<lang>wikivoyage/latest/<lang>wikivoyage-latest-pages-articles.xml.bz2
+    langs: [en, ja, zh]
+    daily_limit: 8
+    interval_s: 5
+    timeout_s: 600
+  # ---- robots 허용 사이트(kind: site) — 사람이 약관을 읽고 terms_checked(날짜)·terms_url 을 적은 것만 active 로 올린다 ----
+  # 조건(코드가 강제): 금지 도메인 아님 · robots.txt 가 우리 UA 를 허용 · 페이지에 noai/tdm-reservation 표시 없음 · /.well-known/tdmrep.json 없음
+  - id: site_example
+    name: (보기) 관광청 모델 코스 — 약관 확인 전이라 받지 않음
+    kind: site
+    verdict: conditional
+    status: candidate
+    license_class: clean
+    seeds: []
+    path_re: "/(itinerar|course|model-?course)"
+    max_pages: 40
+    daily_limit: 60
+    interval_s: 2
+    terms_url: ""
+    terms_checked: ""
