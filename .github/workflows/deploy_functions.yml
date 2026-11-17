@@ -1,5 +1,5 @@
 name: deploy-functions
-# 서버 함수(flightLookup·geoLookup) 배포 — Cloud Shell 수작업 대체.
+# 서버 함수(flightLookup·geoLookup·deleteAccount) 배포 — Cloud Shell 수작업 대체.
 # 지금 배포돼 있는 codebase "proxy" 그대로 쓰되, 반드시 함수 이름을 지정(--only functions:proxy:<이름>)해 배포한다.
 # 이 저장소엔 proxy 의 일부(두 함수)만 있으므로 이름 없는 전체 배포(--only functions:proxy)는 금지 — 아래 deploy 단계가 막는다. --force 없음.
 # 이름 지정 배포는 지정 밖 함수를 계획에서 빼므로(firebase-tools planner: endpointMatchesAnyFilter) placesSearch·g·roadRoute 등은 그대로.
@@ -45,8 +45,12 @@ jobs:
         run: |
           node test_geo_fn.js | tail -1 | tee /tmp/geo.txt
           grep -qx 'geo_fn: 63/0' /tmp/geo.txt
+      - name: acct test (62/0)
+        run: |
+          node test_acct_fn.js | tail -1 | tee /tmp/acct.txt
+          grep -qx 'acct_fn: 62/0' /tmp/acct.txt
       - name: entry loads
-        run: node -e "const e=require('./index.js'); for (const k of ['flightLookup','geoLookup']) if(!e[k]) throw new Error(k)"
+        run: node -e "const e=require('./index.js'); for (const k of ['flightLookup','geoLookup','deleteAccount']) if(!e[k]) throw new Error(k)"
   deploy:
     needs: test
     # Workload Identity 조건이 main 만 허용 → 배포는 main 의 push·수동 실행에서만.
@@ -74,6 +78,29 @@ jobs:
         run: |
           node test_geo_fn.js | tail -1 | tee /tmp/geo.txt
           grep -qx 'geo_fn: 63/0' /tmp/geo.txt
+      - name: acct test (62/0)
+        run: |
+          node test_acct_fn.js | tail -1 | tee /tmp/acct.txt
+          grep -qx 'acct_fn: 62/0' /tmp/acct.txt
+      - name: deleteAccount preflight (읽기만 — 실행 계정 권한·comments 색인)
+        # deleteAccount 를 배포할 때만. IAM·색인을 바꾸지 않고 조회만 한다. 못 읽거나 없으면 배포 중단(대표 확인 필요).
+        if: contains(env.ONLY, 'deleteAccount')
+        run: |
+          FAIL=0
+          SA=$(gcloud functions describe deleteAccount --project "$PROJECT" --region "$REGION" --gen2 --format='value(serviceConfig.serviceAccountEmail)' 2>/dev/null || true)
+          [ -n "$SA" ] || SA=$(gcloud functions describe geoLookup --project "$PROJECT" --region "$REGION" --gen2 --format='value(serviceConfig.serviceAccountEmail)' 2>/dev/null || true)
+          [ -n "$SA" ] || { echo "::error::함수 실행 계정을 읽지 못함"; exit 1; }
+          echo "runtime SA: $SA"
+          PR=$(gcloud projects get-iam-policy "$PROJECT" --flatten='bindings[].members' --filter="bindings.members:serviceAccount:$SA" --format='value(bindings.role)' 2>/tmp/iam.err) || { echo "::error::프로젝트 IAM 을 읽지 못함(조회 권한 없음)"; head -3 /tmp/iam.err; exit 1; }
+          BR=$(gcloud storage buckets get-iam-policy "gs://$GCS_BUCKET" --flatten='bindings[].members' --filter="bindings.members:serviceAccount:$SA" --format='value(bindings.role)' 2>/dev/null || true)
+          echo "project roles: $(echo $PR)"; echo "bucket roles: $(echo $BR)"
+          any() { for r in "$@"; do echo "$PR $BR" | tr ' ' '\n' | grep -qx "$r" && return 0; done; return 1; }
+          any roles/owner roles/editor roles/firebase.admin roles/firebaseauth.admin roles/firebase.developAdmin roles/firebase.sdkAdminServiceAgent || { echo "::error::$SA 에 Auth 사용자 삭제 권한 역할 없음"; FAIL=1; }
+          any roles/owner roles/editor roles/firebase.admin roles/storage.admin roles/storage.objectAdmin roles/firebase.sdkAdminServiceAgent || { echo "::error::$SA 에 Storage 삭제 권한 역할 없음"; FAIL=1; }
+          any roles/owner roles/editor roles/firebase.admin roles/datastore.owner roles/datastore.user roles/firebase.sdkAdminServiceAgent || { echo "::error::$SA 에 Firestore 쓰기 역할 없음"; FAIL=1; }
+          IX=$(gcloud firestore indexes fields describe author --collection-group=comments --database='(default)' --project "$PROJECT" --format=json 2>/tmp/ix.err) || { echo "::error::comments.author 색인 설정을 읽지 못함"; head -3 /tmp/ix.err; exit 1; }
+          echo "$IX" | node -e "let s='';process.stdin.on('data',d=>s+=d).on('end',()=>{const x=JSON.parse(s);const ok=((x.indexConfig||{}).indexes||[]).some(i=>i.queryScope==='COLLECTION_GROUP'&&(i.fields||[]).some(f=>f.order)&&(!i.state||i.state==='READY'));console.log('comments.author collection-group index:',ok?'READY':'없음');process.exit(ok?0:1)})" || { echo "::error::comments 컬렉션 그룹 단일 필드 색인(author) 없음 — 콘솔에서 예외 추가 필요"; FAIL=1; }
+          exit $FAIL
       - name: secrets present (이름·켜진 버전만)
         id: sec
         run: |
@@ -96,7 +123,7 @@ jobs:
         working-directory: .
         run: |
           case "$ONLY" in *[!A-Za-z0-9,]*|""|,*|*,|*,,*) echo "::error::only 형식 오류(함수 이름을 쉼표로)"; exit 1;; esac
-          for n in $(echo "$ONLY" | tr ',' ' '); do case $n in flightLookup|geoLookup) ;; *) echo "::error::$n 은 이 저장소 함수가 아님"; exit 1;; esac; done
+          for n in $(echo "$ONLY" | tr ',' ' '); do case $n in flightLookup|geoLookup|deleteAccount) ;; *) echo "::error::$n 은 이 저장소 함수가 아님"; exit 1;; esac; done
           F=$(echo "$ONLY" | tr ',' '\n' | sed "s/^/functions:$CODEBASE:/" | paste -sd, -)
           echo "targets=$F"
           npx -y firebase-tools@15 deploy --project "$PROJECT" --only "$F" --non-interactive 2>&1 | tee /tmp/deploy.log | grep -E "✔|Error|error|Deploy complete|ecret|⚠|delet" | head -40
@@ -109,6 +136,7 @@ jobs:
             case $fn in
               flightLookup) BODY='{"no":"KE081","date":"2026-11-16"}'; NEED=DATA_GO_KR_KEY; MAXI=2 ;;
               geoLookup) BODY='{"q":"부산 해운대구 우동","lang":"ko"}'; NEED=JUSO_KEY; MAXI=1 ;;
+              deleteAccount) BODY='{"mode":"preview"}'; NEED=; MAXI=2 ;;
               *) BODY='{}'; NEED=; MAXI= ;;
             esac
             SEC=$(d $fn 'serviceConfig.secretEnvironmentVariables[].key'); MI=$(d $fn 'serviceConfig.maxInstanceCount')
