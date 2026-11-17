@@ -1,0 +1,40 @@
+# 트립루티 climate-normals — 도시별 월별 평년값(1991–2020) 표를 NASA POWER 일별 API(키 없음)에서 계산한다.
+# 손으로만 실행(workflow_dispatch). 비밀값·클라우드 권한을 쓰지 않는다. 결과는 작은 정적 파일(JSON·dart) + 출처 표기 파일을 실행 산출물로 남긴다.
+# 자료·라이선스: docs/CLIMATE.md. 평년값은 해마다 바뀌지 않으므로 예약 실행은 두지 않는다(도시 목록을 바꿨을 때만 다시 돌린다).
+name: climate-normals
+on:
+  workflow_dispatch:
+    inputs:
+      limit:
+        description: "앞에서 N개 도시만(0 = 전부, 시험용)"
+        default: "0"
+permissions:
+  contents: read
+concurrency:
+  group: climate-normals
+  cancel-in-progress: false
+jobs:
+  build:
+    if: github.repository == 'joon0515/triproutie-pipeline'
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: test (mock, no network)
+        run: python3 -m unittest tests/test_climate_normals.py
+      - name: build
+        env:
+          LIMIT: ${{ inputs.limit }}
+        run: |
+          case "$LIMIT" in ''|*[!0-9]*) LIMIT=0;; esac
+          python3 scripts/climate_normals.py --cities sources/climate_cities.csv --out climate/out --limit "$LIMIT" --dart
+          rm -rf climate/out/cache
+          ls -l climate/out
+      - uses: actions/upload-artifact@v4
+        with:
+          name: climate-normals
+          path: climate/out/
+          retention-days: 30
