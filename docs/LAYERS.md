@@ -26,6 +26,14 @@
 끝나면 `gs://<bucket>/places/v1/<tag>/layers/*.json.gz` 와 서명된 `places/v1/<tag>/layers.json`, 최신 사본 `places/v1/layers.json` 이 생긴다.
 앱(s62 tl_place_layers)은 `places/v1/layers.json` 만 본다. 되돌리기 = 이전 판의 `layers.json` 을 `places/v1/layers.json` 에 덮어쓴다.
 
+### 목록 크기 한도와 2단 목록 (11/17)
+- 서명 키는 Ed25519(PureEdDSA)다. KMS 는 본문을 그대로 받아 서명하고(요약값만 보내는 `--digest-file` 은 이 알고리즘에 쓸 수 없다) 한 번에 64 KiB 까지만 받는다. 앱도 `layers.json` 을 64 KiB 까지만 읽는다.
+- 그래서 수집 층(`col_*`, kind `collect`) 항목은 `places/v1/<tag>/layer_parts/collect-NNN.json`(schema `places-layers-part-1`, 나라 단위 200개씩)에 싣고,
+  `layers.json` 에는 `parts_path` 와 `parts: [{file, kind, n, rows, size, sha256, cc[], bbox}]` 만 넣는다. 검증 순서: 뿌리 서명 → 2단 목록 sha256·크기 → 층 파일 sha256·크기.
+- `layers.json` 의 `schema`·`path`·`layers` 모양은 그대로다(다른 종류는 전처럼 `layers` 에 있음). 수집 층이 없으면 `parts` 키도 없다.
+- 뿌리 목록이 그래도 62 KiB 를 넘으면 `publish_layers.py` 가 서명·업로드 전에 멈추고 종류별 크기를 알려 준다.
+- 되돌리기는 같다(2단 목록은 판 폴더 안에 있어 `layers.json` 만 덮어쓰면 된다).
+
 ## 결과물 크기·시간(로컬 실측에서 옮긴 것)
 - 일본 8개 지역: 편의시설 69KB~948KB, 지역당 15~47초(PBF 100~600MB). 이름 보충: 도시 팩 기준 56KB~303KB, 30초 안팎.
 - 러너 1대가 지역 1개를 맡는다. 가장 큰 추출본(독일·프랑스 4GB대)도 추출은 6분 안쪽 — 시간은 대부분 내려받기다.
