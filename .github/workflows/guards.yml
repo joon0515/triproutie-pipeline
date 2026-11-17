@@ -22,7 +22,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with: {python-version: "3.12"}
-      - run: pip install -q pyyaml holidays "duckdb==1.*" >/dev/null
+      - run: pip install -q pyyaml holidays "duckdb==1.*" numpy >/dev/null   # numpy: tests/test_wd_dump.py(scripts/wd_dump.py bz2 비트 맞춤)
       - name: 단위 시험 전부
         run: set -o pipefail; python3 -W ignore -m unittest discover -s tests 2>&1 | tail -25
       - name: 라이선스·출처 표기
