@@ -371,6 +371,15 @@ def _lang_names(common):
     return out
 
 
+def _rule_names(rules):
+    """Overture names.rules(variant language) → ko·en·ja·zh 칸(collect-1 모양). 번역·변환 없음."""
+    m = {}
+    for r in rules or ():
+        if isinstance(r, dict) and r.get('variant') == 'language' and r.get('language') and r.get('value'):
+            m.setdefault(r['language'], r['value'])
+    return _lang_names(m)
+
+
 def overture(ctx):
     if ctx.st.get('rel_checked') != today():
         ctx.st['release'], ctx.st['rel_checked'] = overture_release(ctx.http) or os.environ.get('OVERTURE_RELEASE', '').replace('release/', ''), today()
@@ -384,7 +393,9 @@ def overture(ctx):
     importlib.reload(ovt_common)
     c = ovt_common.con(); c.execute(f"SET memory_limit='{os.environ.get('DUCK_MEM', '10GB')}'")
     def run_strip(sp):
-        cur = c.execute(f"""select id, names.primary, names.common, coalesce(basic_category, categories.primary), confidence, websites[1],
+        # (11/18 245기) 2026-10 릴리스부터 categories 칸이 없어져(taxonomy 로 바뀜) 이 질의가 Binder Error 로 0행이었다 → taxonomy.primary.
+        #  다국어 이름은 names.common 이 비어 있고 names.rules(variant language)에 있다.
+        cur = c.execute(f"""select id, names.primary, names.rules, coalesce(basic_category, taxonomy.primary), confidence, websites[1],
             addresses[1].freeform, sources[1].dataset, sources[1].license, (bbox.xmin+bbox.xmax)/2, (bbox.ymin+bbox.ymax)/2
             from {ovt_common.SRC} where {xcond('bbox.xmin', sp)} and bbox.ymin between {sp[1]} and {sp[3]}
             and addresses[1].country = '{cc}' and confidence >= 0.6 and coalesce(operating_status, 'open') = 'open'""")
@@ -393,8 +404,8 @@ def overture(ctx):
             if not batch:
                 break
             rows = []
-            for i, nm, common, cat, conf, web, addr, ds, lic, lon, lat in batch:
-                r = place(ctx.src, i, nm, lat, lon, cat=cat, names=_lang_names(common), url=web, addr=addr,
+            for i, nm, rules, cat, conf, web, addr, ds, lic, lon, lat in batch:
+                r = place(ctx.src, i, nm, lat, lon, cat=cat, names=_rule_names(rules), url=web, addr=addr,
                           extra={'cc': cc, 'cf': round(conf or 0, 2), 'via': ds, 'lic': lic})
                 if r:
                     r['lic'] = lic or 'CDLA-Permissive-2.0'

@@ -27,6 +27,8 @@ sources:
     script: overture
     shards: countries          # tools/world_regions.json 의 지역×나라 상자별
     status: active
+    # (11/18 245기) 2026-10 릴리스에서 categories 칸이 없어져 수집기가 Binder Error 로 0행이었다 → taxonomy.primary 로 고침, 이름은 names.rules(language).
+    #  scripts/rec_index.py(rec-index.yml)도 같은 공개 S3 를 익명으로 읽어 추천 지수·Overture 이름(names-ovt-*)·새 일정 장소(col_ovtadd_*) 층을 만든다(docs/RECOMMEND_INDEX.md).
   - id: fsq_os_places
     name: Foursquare Open Source Places (Iceberg 카탈로그, 월간)
     kind: dump

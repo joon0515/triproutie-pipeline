@@ -76,12 +76,53 @@ def _blank():
     return {'n': 0, **{a: 0 for a in ATTRS}}
 
 
+def _rblank():
+    return {'n': 0, 'rec': 0, 'rec2': 0, 'added': 0}
+
+
+def rec_signals(v):
+    """rec-1 행 [점수, 교차, conf, sitelinks, 위키, 관광공사, 언급, 순위] → 근거로 쓴 독립 신호 수(scripts/rec_index.n_signals 와 같음)."""
+    return (v[1] >= 2) + (v[2] is not None) + bool(v[3]) + bool(v[4]) + bool(v[5]) + (v[6] is not None)
+
+
+def rec_ids(paths):
+    """추천 지수 층(rec-1) → {'any': 점수 있는 장소 id, 'two': 근거 2개 이상, '_files': {파일 수, 행}}. 파일이 없으면 None."""
+    a, t, files, seen = set(), set(), {'files': 0, 'rows': 0}, 0
+    for f in paths:
+        if not os.path.basename(f).startswith('rec-'):
+            continue
+        try:
+            j = _load(f)
+        except Exception:
+            continue
+        if j.get('schema') != 'rec-1' or not isinstance(j.get('rows'), dict):
+            continue
+        seen += 1; files['files'] += 1
+        for rid, v in j['rows'].items():
+            if isinstance(v, list) and len(v) >= 8 and isinstance(v[0], int):
+                files['rows'] += 1; a.add(rid)
+                if rec_signals(v) >= 2:
+                    t.add(rid)
+    return {'any': a, 'two': t, '_files': files} if seen else None
+
+
+def add_rec_layers(m, d):
+    """rec 폴더의 col_ovtadd_*(새로 더한 일정 장소, collect-1)를 장소로 함께 센다."""
+    if not d or not os.path.isdir(d):
+        return
+    m.adding = True
+    for f in sorted(os.listdir(d)):
+        if f.startswith('col_ovtadd_') and f.endswith('.json.gz'):
+            m.add_layer(_load(os.path.join(d, f)))
+    m.adding = False
+
+
 def _dblank():
     return {'n': 0, 'any': 0, **{k: 0 for k in DESC_SLOTS}}
 
 
 class Meter:
-    def __init__(self, cities=None, hours_ids=(), photo_ids=(), desc=None, names=None):
+    def __init__(self, cities=None, hours_ids=(), photo_ids=(), desc=None, names=None, rec=None):
         self.cc, self.typ, self.city, self.src = {}, {t: _blank() for t in TYPES}, {}, {}
         self.cc_typ = {}
         self.cities = cities or {}
@@ -91,6 +132,9 @@ class Meter:
         self.desc = desc  # {칸: 장소 id set} 또는 None(장소 소개 층을 읽지 않음)
         self.d_all, self.d_typ, self.d_city = _dblank(), {t: _dblank() for t in TYPES}, {}
         self.itin, self.d_itin = _blank(), _dblank()  # 일정 장소 기준(itin_of)
+        self.rec = rec  # (11/18 245기) 추천 지수 층(rec-1) {'any': id set, 'two': 근거 2개 이상 id set, '_files': …} 또는 None
+        self.r_itin, self.r_all = _rblank(), _rblank()
+        self.adding = False  # col_ovtadd_* (rec_index 가 더한 Overture 일정 장소) 를 읽는 중
 
     def _desc(self, keys, groups):
         hit = [any(k in self.desc[s] for k in keys if k) for s in DESC_SLOTS]
@@ -133,6 +177,10 @@ class Meter:
                 for a, v in zip(ATTRS, f):
                     g[a] += v
             bct[t] += 1
+            if self.rec is not None:
+                ra, r2 = any(k in self.rec['any'] for k in keys if k), any(k in self.rec['two'] for k in keys if k)
+                for g in ([self.r_all, self.r_itin] if it else [self.r_all]):
+                    g['n'] += 1; g['rec'] += ra; g['rec2'] += r2; g['added'] += self.adding
             if self.desc is not None:
                 dg = [self.d_all, self.d_typ[t]] + ([self.d_itin] if it else [])
                 if boxes:
@@ -151,6 +199,8 @@ class Meter:
                 tot[k] += b[k]
         r = {'places': tot, 'itinerary': self.itin, 'by_type': self.typ, 'by_cc': self.cc, 'by_cc_type': self.cc_typ, 'by_city': self.city, 'by_source': self.src, 'layer_files': self.files,
              'side_files': {k: dict(v) for k, v in SIDE_FILES.items()}}
+        if self.rec is not None:
+            r['rec'] = {'itinerary': self.r_itin, 'all': self.r_all, 'files': self.rec.get('_files', {})}
         if self.desc is not None:
             r['desc'] = {'all': self.d_all, 'itinerary': self.d_itin, 'by_type': self.d_typ, 'by_city': self.d_city, 'files': self.desc.get('_files', {})}
         return r
@@ -226,22 +276,27 @@ def desc_ids(paths):
 def measure_dir(d, cities):
     fs = sorted(os.path.join(d, f) for f in os.listdir(d) if f.endswith('.json.gz'))
     nm = {}
-    h, p = side_ids([f for f in fs if not os.path.basename(f).startswith(('col_', 'desc-'))], nm)
-    m = Meter(cities, h, p, desc_ids(fs), nm)
+    h, p = side_ids([f for f in fs if not os.path.basename(f).startswith(('col_', 'desc-', 'rec-'))], nm)
+    m = Meter(cities, h, p, desc_ids(fs), nm, rec_ids(fs))
     for f in fs:
-        if os.path.basename(f).startswith('col_'):
+        b = os.path.basename(f)
+        if b.startswith('col_'):
+            m.adding = b.startswith('col_ovtadd_')
             m.add_layer(_load(f))
+    m.adding = False
     return m.result()
 
 
-def measure_store(store, cities, side_dir=None, batch=40, desc_dir=None):
+def measure_store(store, cities, side_dir=None, batch=40, desc_dir=None, rec_dir=None):
     latest = store.get_json('processed/latest.json', None)
     if not latest:
         return None
     nm = {}
     h, p = side_ids([os.path.join(side_dir, f) for f in sorted(os.listdir(side_dir))], nm) if side_dir and os.path.isdir(side_dir) else (set(), set())
     dd = desc_ids([os.path.join(desc_dir, f) for f in sorted(os.listdir(desc_dir))]) if desc_dir and os.path.isdir(desc_dir) else None
-    m = Meter(cities, h, p, dd, nm)
+    rr = rec_ids([os.path.join(rec_dir, f) for f in sorted(os.listdir(rec_dir))]) if rec_dir and os.path.isdir(rec_dir) else None
+    m = Meter(cities, h, p, dd, nm, rr)
+    add_rec_layers(m, rec_dir)
     paths = latest.get('paths') or {f: f"processed/out/{latest['run']}/{f}" for f in latest.get('files', [])}
     keys = sorted(v for k, v in paths.items() if k.startswith('col_') and not k.startswith('col_info_'))
     for i in range(0, len(keys), batch):
@@ -340,6 +395,16 @@ def to_md(rep, prev=None, top=25):
             if dsc.get('files'):
                 L += ['', '| 소개 층 출처 | 파일 | 행(앱 타일 id 포함) | ' + ' | '.join(DESC_SLOTS) + ' |', '|---' * (len(DESC_SLOTS) + 3) + '|']
                 L += [f"| {k} | {v['files']} | {v['rows']:,} | " + ' | '.join(f'{v[s]:,}' for s in DESC_SLOTS) + ' |' for k, v in sorted(dsc['files'].items())]
+        rc = lay.get('rec')
+        if rc:
+            I, A = rc['itinerary'], rc['all']
+            pr = (((prev or {}).get('layers') or {}).get('rec') or {}).get('itinerary') or {}
+            L += ['### 9. 트립루티 추천 지수 채움률(일정 장소 기준 — 계산식 docs/RECOMMEND_INDEX.md, 다른 서비스 평점 아님)',
+                  '| 기준 | 장소 | 지수 있음 | 근거 2개 이상 | 새로 더한 일정 장소(Overture) |', '|---|---|---|---|---|',
+                  f"| 일정 장소 | {I['n']:,} | {_pct(I['rec'], I['n'])}" + (f" (어제 {_pct(pr['rec'], pr['n'])})" if pr.get('n') else '') +
+                  f" | {_pct(I['rec2'], I['n'])} | {I['added']:,} |",
+                  f"| 전체 | {A['n']:,} | {_pct(A['rec'], A['n'])} | {_pct(A['rec2'], A['n'])} | {A['added']:,} |",
+                  f"- 읽은 지수 파일 {rc['files'].get('files', 0)} · 행 {rc['files'].get('rows', 0):,}"]
         if lay.get('pending'):
             L.append(f"- 가공이 다음 실행으로 넘긴 일: 원본 파일 {lay['pending'].get('raw_files', 0)}개 · 나라 {len(lay['pending'].get('countries', []))}개")
     for k, v in (rep.get('storage') or {}).items():
@@ -360,6 +425,7 @@ def main():
     ap.add_argument('--status', default=os.path.join(ROOT, 'collect', 'status.json'))
     ap.add_argument('--layers', default=''); ap.add_argument('--store', default=''); ap.add_argument('--side', default='', help='hours·photos 층 파일 폴더(--store 와 함께)')
     ap.add_argument('--desc', default='', help='장소 소개 층(desc-*.json.gz) 폴더(--store 와 함께)')
+    ap.add_argument('--rec', default='', help='추천 지수 층(rec-*.json.gz)·새 장소(col_ovtadd_*) 폴더(--store 와 함께)')
     ap.add_argument('--json', default=''); ap.add_argument('--md', default=''); ap.add_argument('--prev', default=''); ap.add_argument('--storage', default='', help='{"이름": "크기"} JSON 파일')
     a = ap.parse_args()
     cities = json.load(open(os.path.join(ROOT, 'sources', 'coverage_cities.json'), encoding='utf-8'))['cities']
@@ -370,7 +436,7 @@ def main():
     elif a.store:
         sys.path.insert(0, os.path.join(HERE, 'collect'))
         from common import Store
-        lay = measure_store(Store(a.store), cities, a.side or None, desc_dir=a.desc or None)
+        lay = measure_store(Store(a.store), cities, a.side or None, desc_dir=a.desc or None, rec_dir=a.rec or None)
     rep = build(status, lay, storage=json.load(open(a.storage, encoding='utf-8')) if a.storage and os.path.exists(a.storage) else None)
     prev = json.load(open(a.prev, encoding='utf-8')) if a.prev and os.path.exists(a.prev) else None
     md = to_md(rep, prev)

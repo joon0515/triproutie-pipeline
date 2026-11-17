@@ -126,3 +126,8 @@ python3 scripts/publish_layers.py --tag t --dir <층 폴더> --bucket b --tools 
 ### 앱 표시(앱 팀)
 - 이름: 앱 언어 칸이 있으면 그 이름, 없으면 원어 이름(nm). 우선순위 = 수집 층 제 칸(공식·Wikidata 씨앗) > names-wd > names-osm. OSM 이름을 보여 줄 때 출처 줄 '© OpenStreetMap contributors (ODbL)'.
 - 사진: `photo_credit` 를 사진 아래 그대로, 누르면 `photo_page`. 라이선스 주소 `photo_license_url`. 문구에 '추정' 같은 말을 쓰지 않는다.
+
+## 11/18 추가 — 트립루티 추천 지수(rec-1)·Overture 이름·새 일정 장소(245기)
+- `rec-<나라>-NN.json.gz`(schema `rec-1`, kind `rec`, 2단 목록) · `names-ovt-<나라>.json.gz`(names-2, CDLA-Permissive-2.0) · `col_ovtadd_<나라>.json.gz`(collect-1, 행마다 `lic`).
+- 만드는 곳 `scripts/rec_index.py` / `.github/workflows/rec-index.yml`(주 1회). 계산식·표시 문구·사용자 평가 전환 규칙은 `docs/RECOMMEND_INDEX.md`.
+- 앱 표시: '트립루티 추천 지수 NN' 칩 + '?' 설명. 다른 서비스 평점처럼 보이게 하지 않는다(별 모양 없음).

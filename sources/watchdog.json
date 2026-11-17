@@ -61,6 +61,11 @@
    "file": "wikidata-dump.yml",
    "max_age_h": 192,
    "why": "주 1회(금) Wikidata 덤프 조인 — 같은 덤프면 바로 끝남"
+  },
+  {
+   "file": "rec-index.yml",
+   "max_age_h": 192,
+   "why": "주 1회(화) 추천 지수·Overture 이름·새 일정 장소 층(245기). 끄기 = 변수 REC_INDEX_OFF=1"
   }
  ]
 }

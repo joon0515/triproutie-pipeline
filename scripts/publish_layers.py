@@ -25,11 +25,11 @@
 """
 import argparse, base64, datetime, glob, gzip, hashlib, json, os, subprocess, sys
 
-OK_SCHEMA = {'popularity-1': 'popularity', 'amenities-1': 'amenities', 'lockers-1': 'lockers', 'names-1': 'names', 'tourapi-1': 'tourapi', 'collect-1': 'collect', 'hours-1': 'hours', 'photos-1': 'photos', 'desc-1': 'desc', 'names-2': 'names5'}  # hours·photos: 11/15 · desc: 11/17 장소 소개(place_desc.py·desc_osm.py) · names5: 11/18 이름 5개 언어(place_names.py·names5_osm.py)
+OK_SCHEMA = {'popularity-1': 'popularity', 'amenities-1': 'amenities', 'lockers-1': 'lockers', 'names-1': 'names', 'tourapi-1': 'tourapi', 'collect-1': 'collect', 'hours-1': 'hours', 'photos-1': 'photos', 'desc-1': 'desc', 'names-2': 'names5', 'rec-1': 'rec'}  # hours·photos: 11/15 · desc: 11/17 장소 소개(place_desc.py·desc_osm.py) · names5: 11/18 이름 5개 언어(place_names.py·names5_osm.py)
 MAX_BYTES = 8 * 1024 * 1024  # 앱의 파일 크기 상한(타일과 같음)
 SIGN_MAX = 64 * 1024         # KMS asymmetric-sign 이 한 번에 받는 본문 크기(Ed25519 는 본문 그대로 서명)
 ROOT_MAX = 62 * 1024         # 뿌리 목록 파일(서명 포함) 상한 — 앱 kTlPlMaxRootBytes(64 KiB)·SIGN_MAX 보다 작게
-PART_KINDS = ('collect', 'desc', 'names5')  # 2단 목록으로 빼는 종류(지금 앱이 뿌리 목록에서 읽지 않는 것만 — desc 11/17 · names5 11/18 새 층, 앱 연결 전)
+PART_KINDS = ('collect', 'desc', 'names5', 'rec')  # 2단 목록으로 빼는 종류(지금 앱이 뿌리 목록에서 읽지 않는 것만 — desc 11/17 · names5 11/18 새 층, 앱 연결 전)
 PART_ENTRIES = 200           # 2단 목록 하나에 싣는 층 항목 수(나라가 갈리지 않게 나라 단위로 채운다)
 
 
@@ -103,6 +103,8 @@ def describe(fn):
             e['bbox'] = bb
         if j.get('region'):
             e['region'] = j['region']
+    if kind == 'rec':  # (11/18 245기) 트립루티 추천 지수 — rows 는 {장소 id: [점수, 신호…]}, 계산식 docs/RECOMMEND_INDEX.md
+        e['src'], e['version'], e['cc'] = j.get('src'), j.get('version'), j.get('cc')
     if kind == 'popularity':
         e['packs'] = sorted((j.get('report') or {}).keys()) or None
         e['photos'] = sum(1 for r in rows.values() if isinstance(r, dict) and 'photo' in r)

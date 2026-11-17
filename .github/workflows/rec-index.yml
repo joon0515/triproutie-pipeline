@@ -1,0 +1,60 @@
+# 트립루티 추천 지수(rec-1) — Overture 공식 공개 S3(익명) × 우리 수집 층 맞추기 → 지수·Overture 이름·새 일정 장소 층. 계산식 docs/RECOMMEND_INDEX.md.
+# 매주 화요일 + 수동. 나라를 8묶음으로 나눠 러너 4대씩(디스크·Actions 시간 한도 안). 결과는 Storage places/v1/layers_extra/ 에만(저장소·로그에는 개수만).
+# 끄기: 저장소 변수 REC_INDEX_OFF=1. 다른 서비스의 평점·리뷰는 받지 않는다(금지 도메인은 이 단계에 아예 없다).
+name: rec-index
+on:
+  schedule:
+    - cron: "13 21 * * 2"
+  workflow_dispatch:
+    inputs:
+      ccs:
+        description: "나라 코드(쉼표, 비우면 전부)"
+        default: ""
+permissions:
+  contents: read
+  id-token: write
+concurrency:
+  group: rec-index
+  cancel-in-progress: false
+env:
+  GCS_BUCKET: ${{ vars.GCS_BUCKET || 'trip-mate-0vum9k.firebasestorage.app' }}
+  STORE: gs://${{ vars.GCS_BUCKET || 'trip-mate-0vum9k.firebasestorage.app' }}/collect/v1
+jobs:
+  build:
+    if: github.repository == 'joon0515/triproutie-pipeline' && github.ref == 'refs/heads/main' && vars.REC_INDEX_OFF != '1'
+    runs-on: ubuntu-latest
+    timeout-minutes: 340
+    strategy:
+      fail-fast: false
+      max-parallel: 4
+      matrix:
+        chunk: [0, 1, 2, 3, 4, 5, 6, 7]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ vars.GCP_WIF_PROVIDER || 'projects/222914945328/locations/global/workloadIdentityPools/github-pool/providers/github-provider' }}
+          service_account: ${{ vars.GCP_SA_EMAIL || 'pipeline-uploader@trip-mate-0vum9k.iam.gserviceaccount.com' }}
+      - uses: google-github-actions/setup-gcloud@v2
+      - uses: actions/setup-python@v5
+        with: {python-version: "3.12"}
+      - run: pip install -q pyyaml "duckdb==1.*" >/dev/null
+      - name: test
+        run: python3 -W ignore -m unittest tests/test_rec_index.py 2>&1 | tail -3
+      - name: 학습 통계(숫자 분포만, 있으면)
+        run: gcloud storage cp -q "gs://$GCS_BUCKET/patterns/v1/patterns.clean.json" "$RUNNER_TEMP/patterns.json" 2>/dev/null || echo "patterns 없음 — 언급 비율 신호 빼고 계산"
+      - name: build chunk ${{ matrix.chunk }}/8
+        env:
+          DUCK_MEM: 10GB
+          CCS: ${{ inputs.ccs }}
+        run: |
+          mkdir -p "$RUNNER_TEMP/rec"
+          python3 scripts/rec_index.py build --store "$STORE" --extra "gs://$GCS_BUCKET/places/v1/layers_extra" --out "$RUNNER_TEMP/rec" \
+            --chunk "${{ matrix.chunk }}/8" ${CCS:+--ccs "$CCS"} --patterns "$RUNNER_TEMP/patterns.json" | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: upload(layers_extra · 요약)
+        run: |
+          cd "$RUNNER_TEMP/rec"
+          for f in rec-*.json.gz names-ovt-*.json.gz col_ovtadd_*.json.gz; do [ -e "$f" ] || continue
+            gcloud storage cp -q "$f" "gs://$GCS_BUCKET/places/v1/layers_extra/$f"; done
+          for f in rec_summary_*.json; do gcloud storage cp -q "$f" "$STORE/rec/$(date -u +%F)/$f"; done
+          ls | sed -E 's/-?[A-Z]{2}(-[0-9]+)?\.json\.gz$//' | sort | uniq -c

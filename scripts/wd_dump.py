@@ -215,6 +215,15 @@ def pick(ent, tags):
     return g('descriptions'), g('labels'), sorted(p18)
 
 
+NOT_WP = ('commonswiki', 'specieswiki', 'wikidatawiki', 'metawiki', 'mediawikiwiki', 'sourceswiki', 'incubatorwiki', 'outreachwiki', 'wikimaniawiki', 'foundationwiki')
+
+
+def site_stats(ent):
+    """덤프 항목 → (sitelinks 수, 위키백과 문서 있음). 위키백과 = '<언어>wiki' 꼴(공용·종·메타 등 제외). 글은 읽지 않고 개수만."""
+    sl = ent.get('sitelinks') or {}
+    return len(sl), any(k.endswith('wiki') and k not in NOT_WP for k in sl)
+
+
 def to_cache(desc, labels, p18, day):
     import place_desc as PD
     ex = {'l': {k: v for k, v in PD._pn().wd_label_slots(labels).items() if v}}
@@ -243,6 +252,12 @@ class Lines:
         r = pick(ent, self.tags)
         q = 'Q' + m.group(1).decode()
         self.out[q] = to_cache(*r, self.day) if r else [self.day, {}, {'l': {}}]
+        if r:  # (11/18 245기) 추천 지수 신호: sitelinks 수(s)·위키백과 문서 있음(w) — scripts/rec_index.py
+            s, w = site_stats(ent)
+            if s:
+                self.out[q][2]['s'] = s
+            if w:
+                self.out[q][2]['w'] = 1
         self.hit += 1
 
     def feed(self, b):
