@@ -4,7 +4,7 @@
 name: failure-digest
 on:
   workflow_run:
-    workflows: [collect, process, places-layers, places-world, tourapi-daily, coverage-report, watch-sources, guards, fx-daily, climate-normals, deploy-functions]   # 워크플로 name: 값(파일 이름 아님)
+    workflows: [collect, process, places-layers, places-world, tourapi-daily, coverage-report, watch-sources, guards, fx-daily, climate-normals, deploy-functions, patterns]   # 워크플로 name: 값(파일 이름 아님)
     types: [completed]
 permissions:
   issues: write

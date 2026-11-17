@@ -96,7 +96,7 @@ class Workflows(unittest.TestCase):
             names.add(yaml.safe_load(open(f, encoding='utf-8'))['name'])
         y = yaml.safe_load(open(os.path.join(ROOT, '.github', 'workflows', 'failure-digest.yml'), encoding='utf-8'))
         watched = set(y[True]['workflow_run']['workflows'])  # yaml 1.1: on → True
-        pending = {'coverage-report', 'fx-daily', 'climate-normals'}  # 열린 PR(#18·#22·coverage)이 들여오는 이름
+        pending = {'coverage-report', 'fx-daily', 'climate-normals', 'patterns'}  # 열린 PR(#18·#22·#24·coverage)이 들여오는 이름
         self.assertEqual(watched - names - pending, set())
         self.assertEqual(names - watched - {'failure-digest'}, set())  # 이 저장소의 워크플로는 모두 지켜본다
 
