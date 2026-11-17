@@ -1,5 +1,8 @@
 # 트립루티 세계 수집 2단(가공)·3단(게시). collect 가 끝나면 자동(workflow_run) + 3시간마다 + 수동.
-# 단계(11/17): partition(원본 → 나라별 대기함, 1대) → countries(나라 8 조각 동시에) → merge(조각 합치기) → publish. 근거·계산: docs/THROUGHPUT.md
+# 단계(11/17): partition(원본 → 나라별 대기함, 1대) → countries(나라 8 조각 동시에) → merge(조각 합치기) → place-desc(장소 소개 층) → publish. 근거·계산: docs/THROUGHPUT.md
+# place-desc(11/17, 218기): 수집 층 wd·타일 id·OSM wikidata 태그의 QID → Wikidata 설명(QLever, CC0) + TourAPI 소개(공공누리 제1유형) + 대만 소개
+#   → places/v1/layers_extra/desc-*.json.gz(출처마다 따로 파일, 5개 언어 칸). 실패해도 게시는 계속(이전 desc 파일이 실림). 끄기: 저장소 변수 PLACE_DESC_OFF=1.
+#   수동 실행 only_desc=yes 면 가공(partition·countries·merge)을 건너뛰고 이 단계만 돈다.
 # 가공: 정규화·좌표 검증·이름 5개 칸·분류·영업시간 표준형 → 출처 사이 같은 곳 묶기(이름+50m)·trust → places-world 타일과 중복 표시(wid) → 나라별 층(col_<cc>_<n>.json.gz).
 # 게시: 품질 관문(나라별 -5% 감소·좌표·필수 칸·글자 깨짐·금지 도메인·표본 20곳) 통과 때만 publish_layers.py 로 새 태그(c<날짜시각>) — 앱 목록 places/v1/layers.json 갱신.
 #   지금 목록의 다른 층(편의시설·인기·TourAPI 등)도 함께 실어 빠지지 않게 한다. 직전 3개 판 보관.
@@ -17,6 +20,9 @@ on:
       publish:
         description: "가공 뒤 게시까지: yes | dry(서명·업로드 없이 관문·목록만) | no"
         default: "yes"
+      only_desc:
+        description: "장소 소개 단계(place-desc)만: yes | no"
+        default: "no"
 permissions:
   contents: read
   id-token: write
@@ -31,7 +37,7 @@ env:
 jobs:
   # 1) 원본 → 나라별 대기함 (러너 1대, 체크포인트). 시간 예산 안에 못 끝낸 원본은 다음 실행이 이어받는다.
   partition:
-    if: github.repository == 'joon0515/triproutie-pipeline' && (github.event_name != 'workflow_run' || github.event.workflow_run.head_branch == 'main')
+    if: github.repository == 'joon0515/triproutie-pipeline' && (github.event_name != 'workflow_run' || github.event.workflow_run.head_branch == 'main') && github.event.inputs.only_desc != 'yes'
     runs-on: ubuntu-latest
     timeout-minutes: 200
     steps:
@@ -89,8 +95,27 @@ jobs:
       - run: pip install -q pyyaml >/dev/null
       - name: merge
         run: python3 scripts/collect/process.py process --stage merge --batch "${{ github.run_id }}-${{ github.run_attempt }}" --store "$STORE"
-  publish:
+  # 4) 장소 소개 층 — 게시 바로 앞. 시간 예산 50분(QLever 요청 5초 간격·하루 3000회, 다 못 물은 QID 는 다음 실행이 이어서).
+  place-desc:
     needs: merge
+    if: ${{ !cancelled() && github.repository == 'joon0515/triproutie-pipeline' && vars.PLACE_DESC_OFF != '1' && (needs.merge.result == 'success' || github.event.inputs.only_desc == 'yes') }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 75
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+      - uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ vars.GCP_WIF_PROVIDER || 'projects/222914945328/locations/global/workloadIdentityPools/github-pool/providers/github-provider' }}
+          service_account: ${{ vars.GCP_SA_EMAIL || 'pipeline-uploader@trip-mate-0vum9k.iam.gserviceaccount.com' }}
+      - uses: google-github-actions/setup-gcloud@v2
+      - uses: actions/setup-python@v5
+        with: {python-version: "3.12"}
+      - run: pip install -q pyyaml >/dev/null
+      - name: place-desc
+        run: python3 scripts/place_desc.py build --store "$STORE" --bucket "$GCS_BUCKET" --budget-min 50 ${{ github.event.inputs.publish == 'dry' && '--dry-run' || '' }}
+  publish:
+    needs: [merge, place-desc]
     if: ${{ !cancelled() && needs.merge.result == 'success' && github.event.inputs.publish != 'no' }}
     runs-on: ubuntu-latest
     timeout-minutes: 60  # 관문만 22분대(11/17) + 금지 링크 정리·서명·복사

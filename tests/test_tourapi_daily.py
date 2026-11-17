@@ -39,6 +39,10 @@ class Fake:
         if cid in self.bad or (cid in self.flaky and cid not in self.seen_flaky):
             self.seen_flaky.add(cid)
             raise OSError('timeout')
+        if op == 'detailCommon2':  # (11/17) 소개
+            assert set(q) == {'serviceKey', 'MobileOS', 'MobileApp', '_type', 'contentId'}
+            it = [{'contentid': cid, 'overview': f'곳{cid} 은 바다가 보이는 언덕이다.<br>둘째 문장이다.'}]
+            return json.dumps({'response': {'header': {'resultCode': '0000'}, 'body': {'items': {'item': it}}}}).encode()
         if op == 'detailIntro2':
             it = {'usetime': '09:00~18:00', 'restdate': '매주 월요일', 'parking': '가능', 'opentimefood': '11:00-21:00', 'restdatefood': '연중무휴',
                   'firstmenu': '국밥', 'checkintime': '15:00', 'checkouttime': '11:00', 'usefeeleports': '이용요금 어른 10,000원'}
@@ -172,6 +176,25 @@ class TestOutputs(Base):
         sys.path.insert(0, os.path.join(HERE, '..', 'scripts')); import publish_layers as P
         e = P.describe(os.path.join(L, 'kto_11.json.gz'))
         self.assertEqual(e['kind'], 'tourapi'); self.assertEqual(e['n'], len(rows)); self.assertIn('bbox', e); self.assertEqual(e['license'], 'KOGL')
+
+    def test_overview_type1_share(self):  # 11/17: 소개는 제1유형 관광지·문화시설만, 하루 한도의 몫까지, 제주·경주 먼저
+        f = Fake(); st, _, s = self.go(f, 900)
+        self.assertNotIn('detailCommon2', f.n)  # 첫날(목록 받는 날)·ov_share 0 은 소개를 받지 않음
+        day('2026-11-17'); f2 = Fake()
+        st2 = dict(st); stt = T.Store(self.store)
+        stop = T.run(st2, stt, T.Client('TESTKEY', st2, 400, opener=f2, sleep=lambda x: None), prio=PRIO, ov_share=0.25)
+        self.assertEqual(stop, 'LIMIT'); self.assertEqual(f2.n['detailCommon2'], 100); self.assertEqual(st2['ov']['calls'], 100)
+        C = cards(T.Store(self.store))
+        got = [c for c in C if c.get('opass')]
+        self.assertEqual(len(got), 100)
+        self.assertTrue(all(c['cpy'] == 'Type1' and c['type'] in T.OV_TYPES for c in got))
+        self.assertTrue({c['cid'] for c in C if c['area'] == '50' and c['cpy'] == 'Type1'} <= {c['cid'] for c in got})  # 제주 먼저
+        self.assertTrue(all(c['ov'].endswith('언덕이다.') and '<br>' not in c['ov'] for c in got))
+        L = os.path.join(self.tmp, 'layers'); T.build_outputs(T.Store(self.store), L, os.path.join(self.tmp, 'agg.json'))
+        rows = {}
+        for fn in os.listdir(L):
+            rows.update(json.loads(gzip.decompress(open(os.path.join(L, fn), 'rb').read()))['rows'])
+        self.assertEqual(sum(1 for r in rows.values() if r.get('ov')), 100)
 
     def test_types_normalize(self):
         f = T.normalize('28', [{'usetimeleports': '10:00~17:00', 'usefeeleports': '어른 10,000원', 'restdateleports': '연중무휴'}], [])

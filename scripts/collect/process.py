@@ -119,7 +119,7 @@ def merge_cluster(rows):
     srcs = sorted({r['src'] for r in rows})
     base['srcs'], base['tr'] = srcs, len(srcs)
     for r in rows[1:]:
-        for k in ('nm',) + LANGS + FIELDS + ('c',):
+        for k in ('nm',) + LANGS + FIELDS + ('c', 'dsc'):
             if not base.get(k) and r.get(k):
                 base[k] = r[k]
     hs = {r['h'] for r in rows if r.get('h')}
@@ -672,6 +672,8 @@ def to_layer(cc, rows):
             cols[k].append(r.get(k))
         cols['src'].append('|'.join(r.get('srcs') or [r['src']])); cols['tr'].append(r.get('tr', 1))
         cols['rk'].append('o' if r.get('rank') == 'official' else None); cols['hd'].append(r.get('hd'))
+    if any(r.get('dsc') for r in rows):  # (11/17) 공식 관광 자료의 소개 첫 문장(대만 관광서) — 있는 층에만 싣는다. scripts/place_desc.py 가 desc-tw 로 옮긴다
+        cols['dsc'] = [r.get('dsc') for r in rows]
     return {'schema': 'collect-1', 'dataset': 'places', 'cc': cc, 'built': today(), 'n': len(rows), 'cats': cats, **cols, 'attribution': attribution(rows)}
 
 

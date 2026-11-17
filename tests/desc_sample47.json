@@ -1,0 +1,405 @@
+{
+"_note": "gen_fix3 표본 47곳(212기 실측, 11/17). 장소 이름·좌표는 싣지 않고 QID 와 Wikidata 설명(CC0)만. tests/test_place_desc.py 의 고정 시험.",
+"rows": [
+{
+"i": 0,
+"city": "오사카",
+"kind": "역사·문화",
+"qid": null,
+"desc": {}
+},
+{
+"i": 1,
+"city": "오사카",
+"kind": "관광지",
+"qid": null,
+"desc": {}
+},
+{
+"i": 2,
+"city": "오사카",
+"kind": "맛집",
+"qid": null,
+"desc": {}
+},
+{
+"i": 3,
+"city": "오사카",
+"kind": "관광지",
+"qid": "Q964876",
+"desc": {
+"ko": "일본 오사카부 오사카시 주오구의 번화가",
+"en": "human settlement in Japan",
+"ja": "大阪市中央区の繁華街",
+"zh": "位于日本大阪府大阪市的运河，以及大阪市中央区的地名"
+}
+},
+{
+"i": 4,
+"city": "오사카",
+"kind": "맛집",
+"qid": null,
+"desc": {}
+},
+{
+"i": 5,
+"city": "오사카",
+"kind": "쇼핑",
+"qid": null,
+"desc": {}
+},
+{
+"i": 6,
+"city": "오사카",
+"kind": "역사·문화",
+"qid": "Q11261312",
+"desc": {
+"en": "Japanese museum",
+"ja": "大阪府大阪市中央区にある博物館"
+}
+},
+{
+"i": 7,
+"city": "오사카",
+"kind": "야경",
+"qid": null,
+"desc": {}
+},
+{
+"i": 8,
+"city": "오사카",
+"kind": "관광지",
+"qid": "Q1054648",
+"desc": {
+"en": "zoo",
+"ja": "大阪市天王寺区の天王寺公園内にある動物園"
+}
+},
+{
+"i": 9,
+"city": "오사카",
+"kind": "맛집",
+"qid": null,
+"desc": {}
+},
+{
+"i": 10,
+"city": "도쿄",
+"kind": "쇼핑",
+"qid": null,
+"desc": {}
+},
+{
+"i": 11,
+"city": "도쿄",
+"kind": "관광지",
+"qid": null,
+"desc": {}
+},
+{
+"i": 12,
+"city": "도쿄",
+"kind": "야경",
+"qid": "Q183536",
+"desc": {
+"ko": "일본 도쿄도 미나토구에 위치한 전파탑",
+"en": "tower in Tokyo, Japan",
+"ja": "東京都港区にある電波塔",
+"zh-hant": "东京铁塔",
+"zh": "位于日本东京都港区芝公园内的电波塔"
+}
+},
+{
+"i": 13,
+"city": "도쿄",
+"kind": "역사·문화",
+"qid": "Q287165",
+"desc": {
+"ko": "일본 도쿄도 시부야구에 위치한 신사",
+"en": "Shinto shrine in Tokyo, Japan",
+"ja": "東京都渋谷区にある神社",
+"zh-hant": "日本神社"
+}
+},
+{
+"i": 14,
+"city": "도쿄",
+"kind": "맛집",
+"qid": null,
+"desc": {}
+},
+{
+"i": 15,
+"city": "도쿄",
+"kind": "역사·문화",
+"qid": null,
+"desc": {}
+},
+{
+"i": 16,
+"city": "도쿄",
+"kind": "야경",
+"qid": "Q57965",
+"desc": {
+"ko": "일본 도쿄도 스미다구에 위치한 전파탑",
+"en": "tower in Tokyo, Japan",
+"ja": "東京都墨田区の電波塔",
+"zh-hans": "位于日本广岛墨田区的电波塔",
+"zh-hant": "位於日本廣島墨田區的電波塔",
+"zh": "位於日本東京都墨田區的電波塔",
+"zh-tw": "位於日本東京都墨田區的電波塔",
+"zh-cn": "位于日本广岛墨田区的电波塔"
+}
+},
+{
+"i": 17,
+"city": "도쿄",
+"kind": "자연",
+"qid": null,
+"desc": {}
+},
+{
+"i": 18,
+"city": "도쿄",
+"kind": "맛집",
+"qid": null,
+"desc": {}
+},
+{
+"i": 19,
+"city": "도쿄",
+"kind": "쇼핑",
+"qid": "Q746052",
+"desc": {
+"ko": "일본 도쿄 주오구에 위치한 번화가",
+"en": "district of Chūō-ku, Tokyo",
+"ja": "東京都中央区の地名",
+"zh": "位於日本東京都中央區的商業區"
+}
+},
+{
+"i": 20,
+"city": "도쿄",
+"kind": "역사·문화",
+"qid": "Q615183",
+"desc": {
+"en": "Buddhist temple in Tokyo, Japan",
+"ja": "東京都台東区にある仏教寺院",
+"zh-hant": "日本東京都寺廟",
+"zh": "浅草寺"
+}
+},
+{
+"i": 21,
+"city": "도쿄",
+"kind": "체험",
+"qid": null,
+"desc": {}
+},
+{
+"i": 22,
+"city": "도쿄",
+"kind": "역사·문화",
+"qid": null,
+"desc": {}
+},
+{
+"i": 23,
+"city": "도쿄",
+"kind": "맛집",
+"qid": null,
+"desc": {}
+},
+{
+"i": 24,
+"city": "제주",
+"kind": "자연",
+"qid": "Q6750353",
+"desc": {
+"ko": "제주시의 동굴",
+"en": "lavea tube cave area in Jeju city, Jeju-do, South Korea",
+"ja": "韓国・済州島済州市にある洞窟"
+}
+},
+{
+"i": 25,
+"city": "제주",
+"kind": "맛집",
+"qid": null,
+"desc": {}
+},
+{
+"i": 26,
+"city": "제주",
+"kind": "관광지",
+"qid": null,
+"desc": {}
+},
+{
+"i": 27,
+"city": "제주",
+"kind": "체험",
+"qid": null,
+"desc": {}
+},
+{
+"i": 28,
+"city": "제주",
+"kind": "맛집",
+"qid": null,
+"desc": {}
+},
+{
+"i": 29,
+"city": "제주",
+"kind": "역사·문화",
+"qid": "Q55734281",
+"desc": {
+"en": "stone museum and park in Jeju City, South Korea"
+}
+},
+{
+"i": 30,
+"city": "제주",
+"kind": "맛집",
+"qid": null,
+"desc": {}
+},
+{
+"i": 31,
+"city": "제주",
+"kind": "자연",
+"qid": "Q122225",
+"desc": {
+"ko": "제주특별자치도 서귀포시 성산읍에 있는 산",
+"en": "South Korean protected area"
+}
+},
+{
+"i": 32,
+"city": "오사카",
+"kind": "자연",
+"qid": "Q6960289",
+"desc": {
+"en": "public park in Osaka, Japan",
+"ja": "大阪市北区にある公園"
+}
+},
+{
+"i": 33,
+"city": "오사카",
+"kind": "야경",
+"qid": null,
+"desc": {}
+},
+{
+"i": 34,
+"city": "오사카",
+"kind": "맛집",
+"qid": null,
+"desc": {}
+},
+{
+"i": 35,
+"city": "도쿄",
+"kind": "자연",
+"qid": "Q776863",
+"desc": {
+"ko": "일본 도쿄도 신주쿠구에 위치한 공원",
+"en": "park and garden in Shinjuku and Shibuya, Tokyo, Japan",
+"ja": "東京都にある国民公園",
+"zh": "位于日本东京新宿、涩谷的公园"
+}
+},
+{
+"i": 36,
+"city": "도쿄",
+"kind": "맛집",
+"qid": null,
+"desc": {}
+},
+{
+"i": 37,
+"city": "도쿄",
+"kind": "맛집",
+"qid": null,
+"desc": {}
+},
+{
+"i": 38,
+"city": "도쿄",
+"kind": "카페",
+"qid": "Q735384",
+"desc": {
+"en": "town located in Setagaya-ku, Tokyo",
+"ja": "東京都世田谷区北沢および下北沢駅の周辺地域を指す呼称"
+}
+},
+{
+"i": 39,
+"city": "도쿄",
+"kind": "맛집",
+"qid": null,
+"desc": {}
+},
+{
+"i": 40,
+"city": "도쿄",
+"kind": "맛집",
+"qid": null,
+"desc": {}
+},
+{
+"i": 41,
+"city": "도쿄",
+"kind": "맛집",
+"qid": null,
+"desc": {}
+},
+{
+"i": 42,
+"city": "도쿄",
+"kind": "야경",
+"qid": null,
+"desc": {}
+},
+{
+"i": 43,
+"city": "도쿄",
+"kind": "관광지",
+"qid": "Q11633916",
+"desc": {
+"en": "Central wholesale market in Koto-ku, Tokyo, Japan",
+"ja": "東京都江東区豊洲に所在する公設卸売市場",
+"zh": "位于日本东京江东区的鱼市场"
+}
+},
+{
+"i": 44,
+"city": "도쿄",
+"kind": "자연",
+"qid": null,
+"desc": {}
+},
+{
+"i": 45,
+"city": "제주",
+"kind": "자연",
+"qid": "Q626162",
+"desc": {
+"ko": "제주도 서귀포시에 위치한 폭포",
+"en": "waterfall in Seogwipo-si, Jeju island, South Korea",
+"ja": "韓国・済州特別自治道西帰浦市にある滝"
+}
+},
+{
+"i": 46,
+"city": "제주",
+"kind": "자연",
+"qid": "Q16745734",
+"desc": {
+"en": "Mountain in Jeju City, South Korea"
+}
+}
+]
+}

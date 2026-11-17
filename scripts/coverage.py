@@ -8,6 +8,7 @@
 
 재는 것: (a) 출처별 받은 조각·행 ÷ 공개 총수 (b) 종류(명소·식당·숙소·교통)·나라·도시별 장소 수와 속성 채움 비율
 (c) 게시 장소 수 ÷ 공개 출처 합집합(하한~상한) + 구글 공개 문구 대비 참고값.
+(d) (11/17) 장소 소개(desc-1) 언어별 커버리지 — ko·en·ja·zh_Hans·zh_Hant 칸마다 따로(다른 언어로 채운 값 없음).
 """
 import argparse, gzip, json, os, shutil, sys, tempfile
 
@@ -24,6 +25,7 @@ _KW = (('lodging', ('hotel', 'hostel', 'motel', 'lodging', 'resort', 'guesthouse
        ('food', ('restaurant', 'food', 'cafe', 'coffee', 'bakery', 'diner', 'bistro', 'izakaya', 'noodle', 'ramen', 'sushi', 'pizza', 'burger', 'dessert', 'teahouse', 'tearoom',
                  'steakhouse', 'brewery', 'icecream', 'bbq', 'eatery')))
 _tcache = {}
+DESC_SLOTS = ('ko', 'en', 'ja', 'zh_Hans', 'zh_Hant')  # 장소 소개 층(desc-1, scripts/place_desc.py) 언어 칸
 
 
 def type_of(cat):
@@ -49,13 +51,26 @@ def _blank():
     return {'n': 0, **{a: 0 for a in ATTRS}}
 
 
+def _dblank():
+    return {'n': 0, 'any': 0, **{k: 0 for k in DESC_SLOTS}}
+
+
 class Meter:
-    def __init__(self, cities=None, hours_ids=(), photo_ids=()):
+    def __init__(self, cities=None, hours_ids=(), photo_ids=(), desc=None):
         self.cc, self.typ, self.city, self.src = {}, {t: _blank() for t in TYPES}, {}, {}
         self.cc_typ = {}
         self.cities = cities or {}
         self.h_ids, self.p_ids = set(hours_ids), set(photo_ids)
         self.files = 0
+        self.desc = desc  # {칸: 장소 id set} 또는 None(장소 소개 층을 읽지 않음)
+        self.d_all, self.d_typ, self.d_city = _dblank(), {t: _dblank() for t in TYPES}, {}
+
+    def _desc(self, keys, groups):
+        hit = [any(k in self.desc[s] for k in keys if k) for s in DESC_SLOTS]
+        for g in groups:
+            g['n'] += 1; g['any'] += any(hit)
+            for s, v in zip(DESC_SLOTS, hit):
+                g[s] += v
 
     def add_layer(self, j):
         """collect-1 장소 층 한 파일."""
@@ -85,6 +100,12 @@ class Meter:
                 for a, v in zip(ATTRS, f):
                     g[a] += v
             bct[t] += 1
+            if self.desc is not None:
+                dg = [self.d_all, self.d_typ[t]]
+                if boxes:
+                    x, y = lo / 1e5, la / 1e5
+                    dg += [self.d_city.setdefault(nm, _dblank()) for nm, b in boxes if b[0] <= x <= b[2] and b[1] <= y <= b[3]]
+                self._desc((ids[i], wid[i]), dg)
             for s in (src[i] or '').split('|'):
                 if s:
                     self.src[s] = self.src.get(s, 0) + 1
@@ -95,7 +116,10 @@ class Meter:
         for b in self.cc.values():
             for k in tot:
                 tot[k] += b[k]
-        return {'places': tot, 'by_type': self.typ, 'by_cc': self.cc, 'by_cc_type': self.cc_typ, 'by_city': self.city, 'by_source': self.src, 'layer_files': self.files}
+        r = {'places': tot, 'by_type': self.typ, 'by_cc': self.cc, 'by_cc_type': self.cc_typ, 'by_city': self.city, 'by_source': self.src, 'layer_files': self.files}
+        if self.desc is not None:
+            r['desc'] = {'all': self.d_all, 'by_type': self.d_typ, 'by_city': self.d_city, 'files': self.desc.get('_files', {})}
+        return r
 
 
 def _load(p):
@@ -121,22 +145,51 @@ def side_ids(paths):
     return h, p
 
 
+def desc_ids(paths):
+    """장소 소개 층(desc-1) → {칸: 글이 있는 장소 id set, '_files': {출처: {'rows', 칸…}}}. 층 파일이 하나도 없으면 None."""
+    out, files, seen = {k: set() for k in DESC_SLOTS}, {}, 0
+    for f in paths:
+        if not os.path.basename(f).startswith('desc-'):
+            continue
+        try:
+            j = _load(f)
+        except Exception:
+            continue
+        if j.get('schema') != 'desc-1' or not isinstance(j.get('rows'), dict):
+            continue
+        seen += 1
+        b = files.setdefault(j.get('src') or '?', {'files': 0, 'rows': 0, **{k: 0 for k in DESC_SLOTS}})
+        b['files'] += 1
+        for rid, v in j['rows'].items():
+            if not isinstance(v, dict):
+                continue
+            b['rows'] += 1
+            for k in DESC_SLOTS:
+                if v.get(k):
+                    out[k].add(rid); b[k] += 1
+    if not seen:
+        return None
+    out['_files'] = files
+    return out
+
+
 def measure_dir(d, cities):
     fs = sorted(os.path.join(d, f) for f in os.listdir(d) if f.endswith('.json.gz'))
-    h, p = side_ids([f for f in fs if not os.path.basename(f).startswith('col_')])
-    m = Meter(cities, h, p)
+    h, p = side_ids([f for f in fs if not os.path.basename(f).startswith(('col_', 'desc-'))])
+    m = Meter(cities, h, p, desc_ids(fs))
     for f in fs:
         if os.path.basename(f).startswith('col_'):
             m.add_layer(_load(f))
     return m.result()
 
 
-def measure_store(store, cities, side_dir=None, batch=40):
+def measure_store(store, cities, side_dir=None, batch=40, desc_dir=None):
     latest = store.get_json('processed/latest.json', None)
     if not latest:
         return None
     h, p = side_ids([os.path.join(side_dir, f) for f in os.listdir(side_dir)]) if side_dir and os.path.isdir(side_dir) else (set(), set())
-    m = Meter(cities, h, p)
+    dd = desc_ids([os.path.join(desc_dir, f) for f in sorted(os.listdir(desc_dir))]) if desc_dir and os.path.isdir(desc_dir) else None
+    m = Meter(cities, h, p, dd)
     paths = latest.get('paths') or {f: f"processed/out/{latest['run']}/{f}" for f in latest.get('files', [])}
     keys = sorted(v for k, v in paths.items() if k.startswith('col_') and not k.startswith('col_info_'))
     for i in range(0, len(keys), batch):
@@ -215,6 +268,17 @@ def to_md(rep, prev=None, top=25):
         L += [row(cc, b) for cc, b in sorted(lay['by_cc'].items(), key=lambda kv: -kv[1]['n'])[:top]]
         L += ['### 5. 도시별', '| 도시 ' + hdr, '|---' * (len(ATTRS) + 2) + '|'] + [row(c, b) for c, b in sorted(lay['by_city'].items(), key=lambda kv: -kv[1]['n'])]
         L += ['### 6. 출처별 게시 행', ', '.join(f'{k} {v:,}' for k, v in sorted(lay['by_source'].items(), key=lambda kv: -kv[1])[:15])]
+        dsc = lay.get('desc')
+        if dsc:
+            dh = '| | 장소 | 소개 1개 언어 이상 | ' + ' | '.join(DESC_SLOTS) + ' |'
+            drow = lambda name, b: f"| {name} | {b['n']:,} | {_pct(b['any'], b['n'])} | " + ' | '.join(_pct(b[k], b['n']) for k in DESC_SLOTS) + ' |'
+            L += ['### 7. 장소 소개(언어별 커버리지 — 수집 층 장소 중 그 언어 소개가 있는 비율, 다른 언어로 채우지 않음)', dh, '|---' * (len(DESC_SLOTS) + 3) + '|',
+                  drow('전체', dsc['all'])] + [drow(TYPE_KO[t], dsc['by_type'][t]) for t in TYPES]
+            if dsc.get('by_city'):
+                L += ['', dh.replace('| |', '| 도시 |', 1), '|---' * (len(DESC_SLOTS) + 3) + '|'] + [drow(c, b) for c, b in sorted(dsc['by_city'].items(), key=lambda kv: -kv[1]['n'])]
+            if dsc.get('files'):
+                L += ['', '| 소개 층 출처 | 파일 | 행(앱 타일 id 포함) | ' + ' | '.join(DESC_SLOTS) + ' |', '|---' * (len(DESC_SLOTS) + 3) + '|']
+                L += [f"| {k} | {v['files']} | {v['rows']:,} | " + ' | '.join(f'{v[s]:,}' for s in DESC_SLOTS) + ' |' for k, v in sorted(dsc['files'].items())]
         if lay.get('pending'):
             L.append(f"- 가공이 다음 실행으로 넘긴 일: 원본 파일 {lay['pending'].get('raw_files', 0)}개 · 나라 {len(lay['pending'].get('countries', []))}개")
     for k, v in (rep.get('storage') or {}).items():
@@ -234,6 +298,7 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument('--status', default=os.path.join(ROOT, 'collect', 'status.json'))
     ap.add_argument('--layers', default=''); ap.add_argument('--store', default=''); ap.add_argument('--side', default='', help='hours·photos 층 파일 폴더(--store 와 함께)')
+    ap.add_argument('--desc', default='', help='장소 소개 층(desc-*.json.gz) 폴더(--store 와 함께)')
     ap.add_argument('--json', default=''); ap.add_argument('--md', default=''); ap.add_argument('--prev', default=''); ap.add_argument('--storage', default='', help='{"이름": "크기"} JSON 파일')
     a = ap.parse_args()
     cities = json.load(open(os.path.join(ROOT, 'sources', 'coverage_cities.json'), encoding='utf-8'))['cities']
@@ -244,7 +309,7 @@ def main():
     elif a.store:
         sys.path.insert(0, os.path.join(HERE, 'collect'))
         from common import Store
-        lay = measure_store(Store(a.store), cities, a.side or None)
+        lay = measure_store(Store(a.store), cities, a.side or None, desc_dir=a.desc or None)
     rep = build(status, lay, storage=json.load(open(a.storage, encoding='utf-8')) if a.storage and os.path.exists(a.storage) else None)
     prev = json.load(open(a.prev, encoding='utf-8')) if a.prev and os.path.exists(a.prev) else None
     md = to_md(rep, prev)

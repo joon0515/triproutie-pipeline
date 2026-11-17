@@ -69,8 +69,8 @@ def osm_hours(files, bbox=None):
     return out
 
 
-def match(d, osm):
-    """팩 행 → OSM 행. 같은 OSM 행은 가장 가까운 팩 행 하나에만."""
+def pairs(d, osm):
+    """팩 행 → OSM 행 짝 {osm 번호: (거리, 팩 행 번호)}. 같은 OSM 행은 가장 가까운 팩 행 하나에만. (desc_osm.py 도 씀)"""
     grid = {}
     for k, r in enumerate(osm):
         grid.setdefault(cell(r[0], r[1]), []).append(k)
@@ -95,6 +95,12 @@ def match(d, osm):
                 top = (m, k)
         if top and (top[1] not in best or top[0] < best[top[1]][0]):
             best[top[1]] = (top[0], i)
+    return best
+
+
+def match(d, osm):
+    """팩 행 → OSM 행. 같은 OSM 행은 가장 가까운 팩 행 하나에만."""
+    best = pairs(d, osm)
     rows = {}
     for k, (_, i) in best.items():
         r = osm[k]

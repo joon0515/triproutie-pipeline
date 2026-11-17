@@ -329,7 +329,7 @@ def norm_hours(h):
 
 
 def place(src, pid, nm, lat, lon, cat=None, names=None, hours=None, url=None, addr=None, tel=None, price=None, wd=None, extra=None):
-    """정규화 장소 1곳. 좌표·이름이 틀리면 None. 사진·본문 글은 담지 않는다(링크만)."""
+    """정규화 장소 1곳. 좌표·이름이 틀리면 None. 사진·본문 글은 담지 않는다(링크만). 예외: 공식 관광 자료의 소개 첫 문장 dsc(extra — collectors._tw_desc)."""
     if not nm or not valid_coord(lat, lon) or bad_text(nm):
         return None
     r = {'id': f"{src['id']}:{pid}", 'nm': str(nm)[:120], 'lat': round(float(lat), 6), 'lon': round(float(lon), 6), 'c': map_cat(cat)}

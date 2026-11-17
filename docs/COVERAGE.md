@@ -66,6 +66,11 @@ Foursquare 는 조각의 65% 에서 이미 8,987만 행이라, 다 받으면 1�
 이슈 **'커버리지 일일 보고'** 하나에 댓글로 누적한다(목표 대비·출처별·종류별·나라 상위 25·도시 30·Storage 용량·어제 대비 증감).
 같은 내용의 JSON 은 Storage `collect/v1/coverage/<날짜>.json`. 저장소에는 커밋하지 않고, 장소 내용은 어디에도 찍지 않는다(개수·비율만).
 
+### 장소 소개(11/17)
+보고 7절 = 수집 층 장소 가운데 **그 언어의** 소개가 있는 비율(ko·en·ja·zh_Hans·zh_Hant 따로, 종류별·도시별)과 소개 층 출처별 행 수.
+소개 층은 `places/v1/layers_extra/desc-*.json.gz`(place-desc 단계·places-layers)에서 받는다. 다른 언어로 채운 값이 없으므로 칸마다 숫자가 다르다.
+고정 표본: gen_fix3 47곳(`tests/desc_sample47.json`) — Wikidata 설명만으로 ko 9 · en 16 · ja 14 · zh_Hans 5 · zh_Hant 4곳(거르기 뒤, `tests/test_place_desc.py`).
+
 ## 7. 알려진 한계
 - 종류 가르기는 낱말 어림이다(Foursquare 분류 1,000여 개를 표로 맞춘 것이 아님). 틀린 낱말은 `type_of` 에 더한다.
 - 사진·영업시간 층은 장소 id(또는 타일 id `wid`)가 맞는 것만 센다.

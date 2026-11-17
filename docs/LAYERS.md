@@ -64,3 +64,38 @@ python3 scripts/publish_layers.py --tag t --dir <층 폴더> --bucket b --tools 
 - 사진: 수집 순환(collect, 매시)의 `commons_photos` 출처가 세계 타일 지역마다 `tools/photo_layer.py` 를 돌려 `collect/v1/layers/photos-<지역>.json.gz` 를 만들고 finalize 가 함께 싣는다.
   행 `{photo_url, photo_thumb, photo_credit, photo_license, photo_license_url?, photo_author?, photo_page?, photo_src: tourapi|commons, no_modify?}`. 한국은 TourAPI(공공누리 1·3유형) 먼저, 그다음 Commons(CC0·CC BY·CC BY-SA).
 - 앱: `places/v1/layers.json` 의 `kind: hours | photos` 항목(bbox 포함)을 읽는 코드는 앱 팀 몫(s62 tl_place_layers 에 두 종류 추가).
+
+## 11/17 추가 — 장소 소개 층(desc-1) — '왜 여기?' 첫 조각 (218기)
+근거: kit_1114/CC_bench/gen_fix3/PLACE_DESC_PLAN.md(212기, 표본 47곳 실측: Wikidata 설명 ko 19% · en 36% · zh_Hant 9%).
+
+| 파일 | 만드는 곳 | 출처·라이선스 | 칸 |
+|---|---|---|---|
+| `desc-wd-NN.json.gz` | process 의 `place-desc` 단계(`scripts/place_desc.py`) | Wikidata 설명, CC0. registry `wikidata_official` 의 QLever 끝점 | ko·en·ja·zh_Hans·zh_Hant |
+| `desc-kto.json.gz` | 같은 단계(TourAPI 층 `kto_*` 의 `ov`) | 한국관광공사 TourAPI 4.0 overview 첫 문장, **공공누리 제1유형만** | ko |
+| `desc-tw.json.gz` | 같은 단계(수집 층 `dsc` 칸) | 대만 관광서 소개 첫 문장, OGDL-Taiwan-1.0 | zh_Hant |
+| `desc-osm-<지역>.json.gz` | places-layers 지역 빌드(`tools/desc_osm.py`) | OSM `description:<lang>`, **ODbL — 따로 파일** | 태그 언어대로 |
+
+- 행: `{장소 id: {ko, en, ja, zh_Hans, zh_Hant: 글|null, q?(QID), osm?}}`. 파일 머리에 `src · license · credit · page`(원문 주소 틀: `https://www.wikidata.org/wiki/{q}`, `https://www.openstreetmap.org/{osm}`) · `langs`(칸별 개수).
+  장소 id 는 수집 층 id 와 타일 id(`wid`·`kowiki:Q…`) 둘 다 싣는다. TourAPI 는 `kto:<contentid>`.
+- **없는 언어는 null.** 다른 언어로 채우지 않고 번역·간체↔번체 변환·요약·생성을 하지 않는다. 꼬리표 없는 zh 는 글자로 간체·번체가 갈릴 때만 그 칸.
+- 거르기: 4자 미만 · 이름/라벨과 같음 · 위키미디어 동음이의·분류 문서 · 주소 · 글자 깨짐 · GLOSSARY 금지 낱말(추정·어림·대략·estimated·約+숫자 등 — 원문을 고치지 않으므로 그런 글은 싣지 않음).
+  긴 문단(TourAPI·대만·OSM)은 첫 문장만, 120자를 넘으면 버린다(중간에서 자르지 않음).
+- QID 잇기: 수집 층 `wd`(Wikivoyage·Wikidata 씨앗) · 세계 타일 id 의 Q-id · 영업시간 원본 층(`hours_src`)의 `q`(OSM `wikidata` 태그). **이름 검색은 쓰지 않는다.**
+- 받는 길과 robots: `www.wikidata.org/w/api.php`·`query.wikidata.org/sparql`·`*.wikipedia.org/w/`·`/api/` 는 robots.txt 가 `User-agent: *` 에 Disallow(2026-11-17 확인) → 쓰지 않는다.
+  QLever(qlever.dev, robots.txt 없음) 에 QID 250개씩, 5초 간격(registry interval_s), 하루 3000회(desc_daily_limit). 캐시 `collect/v1/processed/desc/wd.json.gz`, 30일 지나면 다시 묻는다.
+  ※ 기존 `tools/photo_layer.py`·`tools/names_osm.py` 는 아직 `www.wikidata.org/w/api.php` 를 부른다 — robots 기준으로 다시 볼 것(이번 PR 범위 밖).
+- 게시: `places/v1/layers_extra/desc-*.json.gz` → process 의 publish 가 함께 싣는다. 앱 목록에서는 **2단 목록(`layer_parts/desc-NNN.json`)** 에 들어간다(앱 연결 전이라 뿌리 목록 64 KiB 를 아낀다). 끄기: 저장소 변수 `PLACE_DESC_OFF=1`.
+- TourAPI: `tourapi_daily.py` 가 목록을 한 번 다 받은 뒤 매일 한도의 25%(`--ov-share`)를 먼저 `detailCommon2` 에 쓴다(관광지·문화시설, 제1유형, 제주·경주 먼저).
+  약관: data.go.kr 15101578 '이용허락범위 제한 없음'(2026-11-17 확인). 제3유형(변경 금지)·2·4유형 소개는 받지 않는다. 영·일·중 서비스는 따로 활용 신청이 필요해 받지 않는다.
+
+### 앱 표시(앱 팀)
+- 그 언어 칸이 비면 소개 조각을 생략한다(다른 언어 글을 보여 주지 않는다). 우선순위: 공식(kto·tw) > Wikidata > OSM.
+- 출처 줄: '설명: Wikidata (CC0)' / '한국관광공사 TourAPI 4.0 (공공누리 제1유형)' / '交通部觀光署 觀光資訊資料庫 (政府資料開放授權條款-第1版)' / '© OpenStreetMap contributors (ODbL)' — 파일의 `credit` 그대로. 장소 상세 '출처'에서 `page` 를 연다.
+
+### 위키백과 첫 문단 — 판정: 이번에는 쓰지 않음(보류)
+근거: docs 밖 `kit_1114/BB_mapmory/LICENSE_AUDIT.md` 24번(위키백과 요약문 = CC BY-SA, '표기만 보완', 요약 문장은 파생물), PR #24 의 `docs/PATTERNS_POLICY.md` 5절(BY-SA 자료는 `by-sa` 묶음으로 따로, 기본 모델에 섞지 않음, 앱에 넣을지는 대표·법무).
+1. 받는 길이 없다: 위키백과 `w/api.php`·REST `/api/` 는 robots.txt Disallow. 덤프(`pages-articles`)는 위키 문법을 풀어야 해 '원문 그대로'가 아니다(틀·각주 처리 = 손댐).
+2. 동일조건: '왜 여기?' 문장에 섞으면 그 문장이 CC BY-SA 개작물이 된다.
+3. 쓰게 될 때의 표시(대표 승인 뒤): `desc-wp-*` 따로 파일, `license_class: by-sa`. 첫 문단을 고치지 않고 통째로, '왜 여기?' 문장과 **떨어진 문단**으로만 보여 주고
+   바로 아래에 '출처: 위키백과 「문서 제목」 기여자, CC BY-SA 4.0' + 문서 링크 + 라이선스 링크(https://creativecommons.org/licenses/by-sa/4.0/). 자르거나 요약하지 않는다.
+   registry `wikipedia_lead`(candidate) 에 같은 내용을 적어 두었다.

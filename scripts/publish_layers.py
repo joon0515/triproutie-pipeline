@@ -14,7 +14,7 @@
     gs://<bucket>/places/v1/<tag>/layers.json              서명된 manifest(뿌리 목록, 64 KiB 미만)
     gs://<bucket>/places/v1/<tag>/layer_parts/<kind>-NNN.json   2단 목록(수집 층 col_* 항목) — 뿌리 목록의 parts 에 sha256·크기가 적힌다
     gs://<bucket>/places/v1/layers.json                    최신 판을 가리키는 사본(되돌리기 = 이전 판 manifest 로 덮어쓰기)
-받는 층: schema 가 'popularity-1'(pop_build.py·food_score.py) · 'amenities-1'(osm_amenities.py) · 'lockers-1' · 'names-1'(names_osm.py — 이름 보충) · 'tourapi-1'(tourapi_daily.py — 한국관광공사) · 'collect-1'(scripts/collect/process.py — 세계 수집) 인 gzip JSON. 그 밖의 파일은 거부한다.
+받는 층: schema 가 'popularity-1'(pop_build.py·food_score.py) · 'amenities-1'(osm_amenities.py) · 'lockers-1' · 'names-1'(names_osm.py — 이름 보충) · 'tourapi-1'(tourapi_daily.py — 한국관광공사) · 'collect-1'(scripts/collect/process.py — 세계 수집) · 'desc-1'(scripts/place_desc.py·tools/desc_osm.py — 장소 소개, 2단 목록) 인 gzip JSON. 그 밖의 파일은 거부한다.
 키·토큰·장소 내용은 출력하지 않는다(파일 이름·크기·개수만).
 
 2단 목록(11/17): 서명 키는 Ed25519(PureEdDSA)라 KMS 가 본문을 그대로 받아 서명한다 — 요약값(digest)만 보내 서명하는 길이 없고, 한 번에 64 KiB 까지만 받는다.
@@ -25,11 +25,11 @@
 """
 import argparse, base64, datetime, glob, gzip, hashlib, json, os, subprocess, sys
 
-OK_SCHEMA = {'popularity-1': 'popularity', 'amenities-1': 'amenities', 'lockers-1': 'lockers', 'names-1': 'names', 'tourapi-1': 'tourapi', 'collect-1': 'collect', 'hours-1': 'hours', 'photos-1': 'photos'}  # hours·photos: 11/15
+OK_SCHEMA = {'popularity-1': 'popularity', 'amenities-1': 'amenities', 'lockers-1': 'lockers', 'names-1': 'names', 'tourapi-1': 'tourapi', 'collect-1': 'collect', 'hours-1': 'hours', 'photos-1': 'photos', 'desc-1': 'desc'}  # hours·photos: 11/15 · desc: 11/17 장소 소개(place_desc.py·desc_osm.py)
 MAX_BYTES = 8 * 1024 * 1024  # 앱의 파일 크기 상한(타일과 같음)
 SIGN_MAX = 64 * 1024         # KMS asymmetric-sign 이 한 번에 받는 본문 크기(Ed25519 는 본문 그대로 서명)
 ROOT_MAX = 62 * 1024         # 뿌리 목록 파일(서명 포함) 상한 — 앱 kTlPlMaxRootBytes(64 KiB)·SIGN_MAX 보다 작게
-PART_KINDS = ('collect',)    # 2단 목록으로 빼는 종류(지금 앱이 뿌리 목록에서 읽지 않는 것만)
+PART_KINDS = ('collect', 'desc')  # 2단 목록으로 빼는 종류(지금 앱이 뿌리 목록에서 읽지 않는 것만 — desc 는 11/17 새 층, 앱 연결 전)
 PART_ENTRIES = 200           # 2단 목록 하나에 싣는 층 항목 수(나라가 갈리지 않게 나라 단위로 채운다)
 
 
@@ -85,6 +85,15 @@ def describe(fn):
             e['with_oh'] = sum(1 for r in rows.values() if isinstance(r, dict) and r.get('oh'))
         else:
             e['region'] = j.get('region')
+    if kind == 'desc':  # 장소 소개 — rows 는 {장소 id: {ko,en,ja,zh_Hans,zh_Hant: 글|null, …}}, 출처 하나 = 파일 하나(라이선스를 섞지 않음)
+        e['license'] = j.get('license') or 'mixed'
+        e['src'] = j.get('src')
+        e['langs'] = {k: v for k, v in (j.get('langs') or {}).items() if isinstance(v, int)} or None
+        bb = j.get('bbox')
+        if isinstance(bb, list) and len(bb) == 4 and all(isinstance(x, (int, float)) for x in bb):
+            e['bbox'] = bb
+        if j.get('region'):
+            e['region'] = j['region']
     if kind == 'popularity':
         e['packs'] = sorted((j.get('report') or {}).keys()) or None
         e['photos'] = sum(1 for r in rows.values() if isinstance(r, dict) and 'photo' in r)
@@ -96,7 +105,7 @@ def build_manifest(tag, files, now=None, extra=()):
     return {'schema': 'places-layers-1', 'version': tag, 'created_at': now.strftime('%Y-%m-%dT%H:%M:%SZ'), 'path': f'places/v1/{tag}/layers/',
             'layers': sorted([describe(f) for f in files] + list(extra), key=lambda e: e['file']), 'disabled': False, 'revoked': [],
             'expires': (now + datetime.timedelta(days=90)).strftime('%Y-%m-%dT%H:%M:%SZ'),
-            'attribution': {'ko': '인기 점수: 위키백과 조회수·Wikidata (CC0) · 사진: 위키미디어 공용(사진마다 저작자·라이선스 표기) · 편의시설·이름 보충: © OpenStreetMap contributors (ODbL 1.0) · 한국 관광지 정보·사진: 한국관광공사 TourAPI 4.0 (공공누리 제1·3유형, 출처표시) · 세계 수집 층(col_*): Overture Maps Foundation(CDLA-Permissive-2.0 등 레코드별) · Foursquare Labs(Apache-2.0) · Wikivoyage(CC BY-SA 4.0) · Wikidata(CC0) · 각국 공공데이터(출처별 라이선스, 행마다 lic)'}}
+            'attribution': {'ko': '인기 점수: 위키백과 조회수·Wikidata (CC0) · 사진: 위키미디어 공용(사진마다 저작자·라이선스 표기) · 편의시설·이름 보충: © OpenStreetMap contributors (ODbL 1.0) · 한국 관광지 정보·사진: 한국관광공사 TourAPI 4.0 (공공누리 제1·3유형, 출처표시) · 장소 소개: Wikidata (CC0) · 한국관광공사 TourAPI 4.0 (공공누리 제1유형) · 交通部觀光署 觀光資訊資料庫 (政府資料開放授權條款-第1版) · © OpenStreetMap contributors (ODbL 1.0) — 파일마다 license·credit · 세계 수집 층(col_*): Overture Maps Foundation(CDLA-Permissive-2.0 등 레코드별) · Foursquare Labs(Apache-2.0) · Wikivoyage(CC BY-SA 4.0) · Wikidata(CC0) · 각국 공공데이터(출처별 라이선스, 행마다 lic)'}}
 
 
 def split_manifest(man, canonical):
