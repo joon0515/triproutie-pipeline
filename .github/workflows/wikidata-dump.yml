@@ -45,7 +45,7 @@ jobs:
         with: {python-version: "3.12"}
       - run: pip install -q pyyaml numpy >/dev/null
       - name: test (mock, no network)
-        run: python3 -W ignore -m unittest tests/test_wd_dump.py 2>&1 | tail -3
+        run: set -o pipefail; python3 -W ignore -m unittest tests/test_wd_dump.py 2>&1 | tail -3
       - id: p
         run: python3 scripts/wd_dump.py plan --store "$STORE" --jobs "$JOBS" --procs "$PROCS" $( [ "${{ inputs.force }}" = "yes" ] && echo --force ) >> "$GITHUB_OUTPUT"
   scan:

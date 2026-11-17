@@ -34,7 +34,7 @@ jobs:
         with: {python-version: "3.12"}
       - run: pip install -q pyyaml >/dev/null
       - name: test
-        run: python3 -W ignore -m unittest tests/test_coverage.py tests/test_place_desc.py tests/test_place_names.py tests/test_always_on.py tests/test_rec_index.py 2>&1 | tail -3
+        run: set -o pipefail; python3 -W ignore -m unittest tests/test_coverage.py tests/test_place_desc.py tests/test_place_names.py tests/test_always_on.py tests/test_rec_index.py 2>&1 | tail -3
       - name: 영업시간·사진 층(작다)과 어제 보고 받기
         run: |
           mkdir -p "$RUNNER_TEMP/side"

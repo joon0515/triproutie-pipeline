@@ -24,6 +24,6 @@ jobs:
         with: {python-version: "3.12"}
       - run: pip install -q pyyaml holidays "duckdb==1.*" >/dev/null
       - name: 단위 시험 전부
-        run: python3 -W ignore -m unittest discover -s tests 2>&1 | tail -25
+        run: set -o pipefail; python3 -W ignore -m unittest discover -s tests 2>&1 | tail -25
       - name: 라이선스·출처 표기
         run: python3 scripts/guards/license_check.py

@@ -1,4 +1,4 @@
-# 트립루티 세계 수집 1단(collect) — 매시 정각. 계획(plan)이 출처×나라 조각을 골라 matrix 로 동시에 돌린다(최대 12 — 가공 조각 8 과 합쳐 무료 플랜 동시 20).
+# 트립루티 세계 수집 1단(collect) — 매시 23분 예약 + 끝나면 스스로 다음 회차(chain, 아래). 계획(plan)이 출처×나라 조각을 골라 matrix 로 동시에 돌린다(최대 12 — 가공 조각 8 과 합쳐 무료 플랜 동시 20).
 # 원칙: sources/registry.yaml 의 status: active 출처만, robots.txt 는 요청 때마다 실시간 확인, 사이트당 초당 1회 이하·하루 한도, UA 에 저장소 주소.
 # 금지 목록 도메인은 코드가 자동 제외. 결과 원본은 Storage gs://<bucket>/collect/v1/raw/<출처>/<날짜>/ 에만(공개 저장소에는 작은 collect/status.json 만 커밋).
 # 겹치면 앞 실행을 유지하고 새 실행은 1개만 기다린다(cancel-in-progress: false). 한 조각은 48분 예산 → 55분에 강제 종료.
@@ -36,7 +36,7 @@ jobs:
         with: {python-version: "3.12"}
       - run: pip install -q pyyaml holidays >/dev/null
       - name: test (mock, no network)
-        run: python3 -W ignore -m unittest tests/test_collect.py tests/test_fill.py 2>&1 | tail -3
+        run: set -o pipefail; python3 -W ignore -m unittest tests/test_collect.py tests/test_fill.py 2>&1 | tail -3
       - id: p
         env:
           HAS_FSQ_TOKEN: ${{ secrets.FSQ_TOKEN != '' }}
@@ -105,7 +105,7 @@ jobs:
             gh issue comment "$(gh issue list --state open --search "$T in:title" --json number -q '.[0].number')" --body-file "$RUNNER_TEMP/alert.md"
           fi
 
-  # GitHub 예약(schedule)이 이 저장소에서 한 번도 안 돌아서(11/15 확인), 수집이 끝나면 스스로 다음 회차를 건다.
+  # GitHub 예약(schedule)이 이 저장소에서 거의 돌지 않아서(11/15 0회, 11/9~11/17 약 190시간 중 7회 — 251기 확인), 수집이 끝나면 스스로 다음 회차를 건다.
   # workflow_dispatch 는 GITHUB_TOKEN 으로도 새 실행을 만든다(GitHub 문서). 끄려면 저장소 변수 CHAIN_OFF=1.
   # (11/18 233기) 사슬이 끊기던 곳: ① process 걸기가 실패하면 뒤 단계가 다 건너뛰어 다음 수집이 안 걸림 ② run_started_at 조회가 실패하면
   #   bash -e 로 그 단계가 죽음 ③ 다음 수집 걸기에 재시도가 없음. → ①은 continue-on-error, ②는 실패 시 10분 쉼, ③은 5번 재시도.
