@@ -5,7 +5,7 @@
 
 맞추기: 좌표가 MAX_M(80m) 이내 + 이름이 같음(공백·기호·끝의 店 을 뗀 뒤 일치, 또는 한쪽이 다른 쪽으로 시작하고 3자 이상).
 출처가 ODbL 이므로 장소 팩과 섞지 않고 별도 층으로 낸다(편의시설 층과 같은 방식). PBF 는 읽기만 하고 네트워크는 쓰지 않는다.
-Wikidata 한국어 라벨은 OSM 의 wikidata 태그가 있는 행만 대상(qid 를 층에 싣고, --wikidata 를 주면 wbgetentities 50개 묶음으로 채운다).
+Wikidata 한국어 라벨: qid 만 층에 싣는다(라벨은 process 의 place-desc 단계가 QLever 로 받아 names-wd 층으로 — www.wikidata.org/w/api.php 는 robots Disallow).
 상호 사전: OSM 에서 같은 이름의 가게가 3곳 이상이고 영문 이름이 60% 이상 일치하면 체인으로 보고, 좌표로 못 맞춘 같은 상호 행에도 붙인다(via='brand').
 출력: {"schema":"names-1","license":"ODbL-1.0","attribution":…,"pack":…,"report":{…},"rows":{팩 id:{ko?,ks?(검색 열쇠 전용 한글),rd?,en?,q?,osm?,via?}}}
 """
@@ -69,10 +69,11 @@ def load_packs(files):
     for f in files:
         d = load_pack(f)
         cats = d.get('cats') or []
+        ko = d.get('ko') if isinstance(d.get('ko'), list) and len(d['ko']) == len(d['nm']) else [None] * len(d['nm'])  # 세계 타일에는 ko 열이 없는 파일이 있다(11/17 places-layers TypeError)
         for i in range(len(d['nm'])):
             out['id'].append(d['id'][i])
             out['nm'].append(d['nm'][i])
-            out['ko'].append(d['ko'][i])
+            out['ko'].append(ko[i])
             name = cats[d['c'][i]] if cats else ''
             out['c'].append(cat_ix.setdefault(name, len(cat_ix)))
             out['_lat'].append(d['_lat'][i])
@@ -95,8 +96,9 @@ def targets(d, only=None):
     """보충 대상: 한글 이름이 없고 이름에 한자가 있는 행(가나가 섞였어도 한자 읽기는 모르므로 포함). only = 분류 이름 집합."""
     cats = d.get('cats') or []
     out = []
+    ko = d.get('ko') if isinstance(d.get('ko'), list) else [None] * len(d['nm'])
     for i, nm in enumerate(d['nm']):
-        if not isinstance(nm, str) or d['ko'][i] is not None or not KANJI.search(nm):
+        if not isinstance(nm, str) or ko[i] is not None or not KANJI.search(nm):
             continue
         if only and cats[d['c'][i]] not in only:
             continue
@@ -216,34 +218,11 @@ def apply_brands(d, tgt, rows, br):
     return n
 
 
-def wikidata_ko(rows):
-    import urllib.request, urllib.parse
-    qs = sorted({v['q'] for v in rows.values() if v.get('q') and not v.get('ko')})
-    lab = {}
-    for i in range(0, len(qs), 50):
-        u = 'https://www.wikidata.org/w/api.php?' + urllib.parse.urlencode({'action': 'wbgetentities', 'ids': '|'.join(qs[i:i + 50]), 'props': 'labels', 'languages': 'ko', 'format': 'json'})
-        rq = urllib.request.Request(u, headers={'User-Agent': os.environ.get('TL_WIKI_UA', 'tl-names-pilot/0.1 (batch; contact via operator)')})
-        try:
-            j = json.load(urllib.request.urlopen(rq, timeout=30))
-        except Exception as ex:  # 429 등: 더 두드리지 않고 멈춘다(다음 실행에서 이어 받는다)
-            print('wikidata 중단:', getattr(ex, 'code', type(ex).__name__), '받은 묶음', i // 50, flush=True)
-            break
-        for q, e in (j.get('entities') or {}).items():
-            v = ((e.get('labels') or {}).get('ko') or {}).get('value')
-            if v and HANGUL.search(v):
-                lab[q] = v
-        time.sleep(1.0)
-    n = 0
-    for v in rows.values():
-        if not v.get('ko') and v.get('q') in lab:
-            v['ko'], v['kos'] = lab[v['q']], 'wikidata'
-            n += 1
-    return len(qs), n
-
-
 def main(argv):
-    wd = '--wikidata' in argv
-    argv = [a for a in argv if a != '--wikidata']
+    if '--wikidata' in argv:  # (11/18) www.wikidata.org/w/api.php 는 robots.txt Disallow /w/ → 쓰지 않는다. Wikidata 라벨은 place_names.py(QLever)가 names-wd 층으로 만든다
+        print('--wikidata 는 없앴다(robots). Wikidata 라벨 = process 의 place-desc 단계 names-wd-*.json.gz')
+        argv = [a for a in argv if a != '--wikidata']
+    wd = False
     if len(argv) < 4:
         print(__doc__)
         return 2
@@ -261,8 +240,6 @@ def main(argv):
     n_br = apply_brands(d, tgt, rows, br)
     rep = {'targets': len(tgt), 'osm_named': len(osm), 'matched': len(rows), 'ko': sum(1 for v in rows.values() if v.get('ko')), 'ks': sum(1 for v in rows.values() if v.get('ks')),
            'rd': sum(1 for v in rows.values() if v.get('rd')), 'en': sum(1 for v in rows.values() if v.get('en')), 'q': sum(1 for v in rows.values() if v.get('q')), 'brands': len(br), 'by_brand': n_br}
-    if wd:
-        rep['wikidata_asked'], rep['wikidata_ko'] = wikidata_ko(rows)
     doc = {'schema': 'names-1', 'license': 'ODbL-1.0', 'attribution': '© OpenStreetMap contributors (ODbL 1.0)' + (' · Wikidata (CC0)' if wd else ''),
            'pack': os.path.basename(pack_files[0]), 'packs': [os.path.basename(f) for f in pack_files],
            'bbox': [round(bbox[1], 4), round(bbox[0], 4), round(bbox[3], 4), round(bbox[2], 4)],  # [서, 남, 동, 북] — 앱이 좌표로 고를 때 쓴다

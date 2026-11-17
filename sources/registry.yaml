@@ -71,9 +71,28 @@ sources:
     status: active
     # (11/17, 218기) 장소 소개 층 desc-wd-*(scripts/place_desc.py, process 의 place-desc 단계)도 같은 끝점·예절로 받는다.
     #  www.wikidata.org/w/api.php 는 robots.txt 가 User-agent * 에 Disallow /w/ → place_desc 는 쓰지 않는다. 이름 검색 없이 QID(수집 층 wd · 타일 id · OSM wikidata 태그)로만 묻는다.
-    fields: [labels, descriptions]
+    # (11/18, 223기) 같은 SPARQL 한 번에 라벨·P18(대표 사진 파일)도 받아 scripts/place_names.py 가 이름 5개 언어 층 names-wd-*(CC0)·사진 층 photos-wd-* 를 만든다.
+    #  사진 라이선스·저작자는 Commons 구조화 데이터(아래 commons_sdc)에서 확인한 것만 싣는다.
+    fields: [labels, descriptions, P18]
     desc_langs: [ko, en, ja, zh-hans, zh-cn, zh-sg, zh-my, zh-hant, zh-tw, zh-hk, zh-mo, zh]
     desc_daily_limit: 3000      # place_desc 의 하루 SPARQL 요청 수(한 번에 QID 250개)
+    photo_daily_limit: 1500     # place_names 의 하루 Commons SDC 요청 수(한 번에 파일 40개)
+    photo_interval_s: 15
+    photo_extra_min: 8          # place-desc 예산 끝난 뒤 Commons 판정에 더 쓰는 분(process.yml place-desc 75분 한도 안)
+  - id: commons_sdc
+    name: Wikimedia Commons 구조화 데이터(QLever wikimedia-commons 공개 SPARQL) — 사진 파일의 라이선스(P275)·저작자(P170 의 P2093/P4174)만 (11/18)
+    kind: api
+    url: https://qlever.dev/api/wikimedia-commons
+    license: "사진마다 — CC0-1.0 · CC-BY · CC-BY-SA(국제판·Generic·Unported 판 목록, scripts/place_names.LICENSES)만 싣고, 행마다 photo_license·photo_credit(저작자)·photo_page 를 남긴다. 저작자 없음·목록 밖은 싣지 않음. 사진은 링크만"
+    attribution: "사진: 저작자 · 라이선스 (위키미디어 공용)"
+    license_url: https://commons.wikimedia.org/wiki/Commons:Reusing_content_outside_Wikimedia
+    robots: "commons.wikimedia.org/robots.txt 가 User-agent * 에 Disallow /w/(api.php 포함) → 쓰지 않음. qlever.dev robots.txt 없음(404 = 허용). 파일 40개씩 15초 간격"
+    refresh: quarterly
+    daily_limit: 1500           # = wikidata_official.photo_daily_limit (place_names 가 씀)
+    interval_s: 15
+    # process 의 place-desc 단계(scripts/place_names.py)가 부른다 — 수집 순환(collect)의 수집기가 아니라 external(osm·tourapi 와 같은 꼴)
+    status: external
+    fields: [P275, P170]
   - id: official_sites
     name: 공식 사이트 구조화 데이터(schema.org JSON-LD·microdata) — Wikidata P856 씨앗
     kind: crawl
@@ -194,11 +213,11 @@ sources:
   - id: commons_photos
     name: 장소 사진 층 — Wikidata P18 → Wikimedia Commons(CC0·CC BY·CC BY-SA) + 한국 TourAPI firstimage(공공누리 1·3유형)  (11/15)
     kind: api
-    url: https://www.wikidata.org/w/api.php · https://commons.wikimedia.org/w/api.php
+    url: https://www.wikidata.org/w/api.php · https://commons.wikimedia.org/w/api.php   # (11/18) 두 주소 모두 robots Disallow /w/ → 기본 꺼짐(TL_WIKI_API=1 일 때만). 지금은 한국 TourAPI 사진만, Commons 사진은 commons_sdc
     license: "사진마다 — CC0-1.0 · CC-BY · CC-BY-SA(판 무관)만 싣고, 행마다 photo_license·photo_credit(저작자)·photo_page 를 남긴다. 한국: KOGL 제1·3유형(3유형 no_modify)"
     attribution: "사진: 저작자 · 라이선스 (위키미디어 공용) / 사진: 한국관광공사 · 공공누리 제N유형"
     license_url: https://commons.wikimedia.org/wiki/Commons:Reusing_content_outside_Wikimedia
-    robots: "API 사용(robots 대상 아님). Wikimedia API 예절: 식별 UA(이 등록부 user_agent), 한 번에 한 요청(시간당 조각 1개 — run.HEAVY_CAP), 1.2초 간격, 429 면 Retry-After"
+    robots: "(11/18 정정) /w/api.php 는 robots.txt Disallow — 기본으로 부르지 않는다. 예전 설명: Wikimedia API 예절: 식별 UA(이 등록부 user_agent), 한 번에 한 요청(시간당 조각 1개 — run.HEAVY_CAP), 1.2초 간격, 429 면 Retry-After"
     refresh: weekly
     daily_limit: 1
     interval_s: 1
@@ -213,7 +232,7 @@ sources:
   - {id: jnto_jta, name: 일본 JNTO·관광청 오픈데이터, kind: dump, url: "", license: "공식 오픈데이터 위치·라이선스 확인 못 함", status: candidate}
   - {id: us_state_travel, name: 미국 국무부 여행경보 RSS, kind: feed, url: "https://travel.state.gov/_res/rss/TAsTWs.xml", license: "미국 정부 저작물(공공영역)로 알려짐 — robots 확인 결과 불명확", status: candidate}
   - {id: kr_mofa_alert, name: 외교부 국가·지역별 여행경보(data.go.kr), kind: api, url: "https://apis.data.go.kr/1262000/", license: "공공누리 — data.go.kr 활용신청 필요", secret: DATA_GO_KR_KEY, status: candidate}
-  - {id: osm, name: OpenStreetMap(places-layers 가 이미 처리), kind: dump, url: "https://download.geofabrik.de", license: ODbL-1.0, refresh: monthly, status: external, note: "places-layers.yml 이 수동 실행으로 갱신 — 월 1회 권장", fields: "opening_hours · wikidata · name:* · description:<ko|en|ja|zh|zh-Hans|zh-Hant|zh-CN|zh-TW> (11/17 장소 소개 — tools/desc_osm.py, 층 파일 desc-osm-<지역> 을 따로 둠)"}
+  - {id: osm, name: OpenStreetMap(places-layers 가 이미 처리), kind: dump, url: "https://download.geofabrik.de", license: ODbL-1.0, refresh: monthly, status: external, note: "places-layers.yml 이 수동 실행으로 갱신 — 월 1회 권장", fields: "opening_hours(11/18 tools/oh_check 로 알아듣는 값만) · wikidata · name:*(11/18 name:ko/en/ja/zh-Hans/zh-Hant → names-osm-<지역>, tools/names5_osm.py) · description:<ko|en|ja|zh|zh-Hans|zh-Hant|zh-CN|zh-TW> (11/17 장소 소개 — tools/desc_osm.py, 층 파일 desc-osm-<지역> 을 따로 둠)"}
   - {id: tourapi, name: 한국관광공사 TourAPI 4.0 KorService2 (tourapi_daily.yml 이 따로 수집), kind: api, url: "https://apis.data.go.kr/B551011/KorService2/", license: "KOGL — data.go.kr 15101578 '이용허락범위 제한 없음'(2026-11-17 확인). 소개(overview)는 cpyrhtDivCd Type1(공공누리 제1유형)만", license_url: "https://www.data.go.kr/data/15101578/openapi.do", secret: DATA_GO_KR_KEY, status: external, fields: "areaBasedList2 · detailIntro2 · detailInfo2 · detailCommon2 overview(11/17, 제1유형 첫 문장 → desc-kto). 영·일·중 서비스(EngService2 등)는 따로 활용신청이 필요해 받지 않음"}
   - {id: wikipedia_lead, name: 위키백과 첫 문단(장소 소개 후보), kind: dump, url: "https://dumps.wikimedia.org/", license: CC-BY-SA-4.0, status: candidate, note: "11/17 218기 판정: 보류. ko/en/ja/zh.wikipedia.org 는 robots.txt 가 /w/(api.php)·/api/(REST) 를 막아 공식 API 로 못 받고, 덤프는 위키 문법을 풀어야 해 '원문 그대로'가 아님. 쓰게 되면 desc-wp-* 따로 파일·문단 그대로·'위키백과 「제목」 기여자 (CC BY-SA 4.0)' + 문서·라이선스 링크, '왜 여기?' 문장과 섞지 않음(docs/LAYERS.md)"}
 catalogs:  # 발견기 질의 대상(응답이 CKAN 모양이 아니면 그 회차는 건너뜀)

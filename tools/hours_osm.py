@@ -15,6 +15,7 @@ import gzip, json, os, sys, time
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from names_osm import cell, dist_m, load_packs, norm, same_name, MAX_M  # noqa: E402
+from oh_check import oh_ok  # noqa: E402
 
 NAME_COLS = ('nm', 'ko', 'en', 'ja', 'zh')
 
@@ -50,7 +51,7 @@ def osm_hours(files, bbox=None):
             tg = o.tags
             if not tg.get('name'):
                 continue
-            oh, q = (tg.get('opening_hours') or '')[:120], tg.get('wikidata')
+            oh, q = oh_ok(tg.get('opening_hours')), tg.get('wikidata')  # (11/18) 못 알아듣는 값은 버린다(예전: 120자에서 잘라 뜻이 바뀌기도 함)
             if o.is_node():
                 if not o.location.valid():
                     continue

@@ -9,6 +9,10 @@
 재는 것: (a) 출처별 받은 조각·행 ÷ 공개 총수 (b) 종류(명소·식당·숙소·교통)·나라·도시별 장소 수와 속성 채움 비율
 (c) 게시 장소 수 ÷ 공개 출처 합집합(하한~상한) + 구글 공개 문구 대비 참고값.
 (d) (11/17) 장소 소개(desc-1) 언어별 커버리지 — ko·en·ja·zh_Hans·zh_Hant 칸마다 따로(다른 언어로 채운 값 없음).
+(e) (11/18, 223기) 이름 5개 언어 칸(ko·en·ja·zh_Hans·zh_Hant)·영업시간·사진 채움 — 수집 층 제 칸 + 이름 층(names-2: Wikidata 라벨·OSM name:xx,
+    names-1: OSM 한국어·영어) · 영업시간 층(hours-1) · 사진 층(photos-1)을 장소 id 또는 타일 id(wid)로 맞춰 센다.
+    언어 칸은 그 언어로 적힌 원천 값만 센다(원어 이름·다른 언어·간체↔번체 변환 값은 세지 않음). 수집 층 zh 칸은 글자로 간체·번체가 갈릴 때만 그 칸.
+    영업시간은 tools/oh_check.oh_ok 로 알아듣는 값만, 사진은 photo_url(또는 예전 photo)이 있는 행만.
 """
 import argparse, gzip, json, os, shutil, sys, tempfile
 
@@ -16,8 +20,13 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.join(HERE, '..')
 TYPES = ('sight', 'food', 'lodging', 'transport', 'other')
 TYPE_KO = {'sight': '명소', 'food': '식당·카페', 'lodging': '숙소', 'transport': '교통', 'other': '그 밖'}
-ATTRS = ('ko', 'en', 'ja', 'zh', 'h', 'photo', 'tel', 'url', 'multi')
-ATTR_KO = {'ko': '이름 한국어', 'en': '이름 영어', 'ja': '이름 일본어', 'zh': '이름 중국어', 'h': '영업시간', 'photo': '사진', 'tel': '전화', 'url': '웹', 'multi': '출처 2곳 이상'}
+NAME_SLOTS = ('ko', 'en', 'ja', 'zh_Hans', 'zh_Hant')
+ATTRS = NAME_SLOTS + ('h', 'photo', 'tel', 'url', 'multi')
+ATTR_KO = {'ko': '이름 한국어', 'en': '이름 영어', 'ja': '이름 일본어', 'zh_Hans': '이름 중국어 간체', 'zh_Hant': '이름 중국어 번체', 'h': '영업시간', 'photo': '사진',
+           'tel': '전화', 'url': '웹', 'multi': '출처 2곳 이상'}
+sys.path.insert(0, os.path.join(ROOT, 'tools'))
+from oh_check import oh_ok  # noqa: E402
+import place_names as PN  # noqa: E402
 _KW = (('lodging', ('hotel', 'hostel', 'motel', 'lodging', 'resort', 'guesthouse', 'ryokan', 'bedbreakfast', 'bedandbreakfast', 'vacationrental', 'campground', 'accommodation')),
        ('transport', ('station', 'airport', 'busstop', 'terminal', 'ferry', 'metro', 'transport', 'tramstop', 'platform', 'pier', 'railway', 'busline', 'taxistand')),
        ('sight', ('sight', 'museum', 'landmark', 'monument', 'park', 'temple', 'shrine', 'church', 'cathedral', 'mosque', 'castle', 'palace', 'gallery', 'viewpoint', 'scenic',
@@ -56,11 +65,12 @@ def _dblank():
 
 
 class Meter:
-    def __init__(self, cities=None, hours_ids=(), photo_ids=(), desc=None):
+    def __init__(self, cities=None, hours_ids=(), photo_ids=(), desc=None, names=None):
         self.cc, self.typ, self.city, self.src = {}, {t: _blank() for t in TYPES}, {}, {}
         self.cc_typ = {}
         self.cities = cities or {}
         self.h_ids, self.p_ids = set(hours_ids), set(photo_ids)
+        self.names = names or {}  # {칸: 그 언어 이름이 있는 장소 id set} — 이름 층(names-2·names-1)
         self.files = 0
         self.desc = desc  # {칸: 장소 id set} 또는 None(장소 소개 층을 읽지 않음)
         self.d_all, self.d_typ, self.d_city = _dblank(), {t: _dblank() for t in TYPES}, {}
@@ -84,11 +94,15 @@ class Meter:
         boxes = [(nm, b) for nm, b in self.cities.items()]
         la = lo = 0
         bcc, bct = self.cc.setdefault(cc, _blank()), self.cc_typ.setdefault(cc, {t: 0 for t in TYPES})
+        nm_sets = [self.names.get(k, ()) for k in NAME_SLOTS]
         for i in range(n):
             la += j['dla'][i]; lo += j['dlo'][i]
             t = tp[j['c'][i]] if 0 <= j['c'][i] < len(tp) else 'other'
-            f = (bool(ko[i]), bool(en[i]), bool(ja[i]), bool(zh[i]), bool(h[i]) or ids[i] in self.h_ids or (wid[i] in self.h_ids if wid[i] else False),
-                 ids[i] in self.p_ids or (wid[i] in self.p_ids if wid[i] else False), bool(tel[i]), bool(url[i]), (tr[i] or 1) >= 2)
+            keys = (ids[i], wid[i]) if wid[i] else (ids[i],)
+            zk = PN.zh_generic(PN.name_ok(zh[i])) if zh[i] else None
+            own = (bool(PN.name_ok(ko[i])), bool(PN.name_ok(en[i])), bool(PN.name_ok(ja[i])), zk == 'zh_Hans', zk == 'zh_Hant')
+            f = tuple(o or any(k in sset for k in keys) for o, sset in zip(own, nm_sets)) + (
+                bool(oh_ok(h[i])) or any(k in self.h_ids for k in keys), any(k in self.p_ids for k in keys), bool(tel[i]), bool(url[i]), (tr[i] or 1) >= 2)
             tg = [bcc, self.typ[t]]
             if boxes:
                 x, y = lo / 1e5, la / 1e5
@@ -116,7 +130,8 @@ class Meter:
         for b in self.cc.values():
             for k in tot:
                 tot[k] += b[k]
-        r = {'places': tot, 'by_type': self.typ, 'by_cc': self.cc, 'by_cc_type': self.cc_typ, 'by_city': self.city, 'by_source': self.src, 'layer_files': self.files}
+        r = {'places': tot, 'by_type': self.typ, 'by_cc': self.cc, 'by_cc_type': self.cc_typ, 'by_city': self.city, 'by_source': self.src, 'layer_files': self.files,
+             'side_files': {k: dict(v) for k, v in SIDE_FILES.items()}}
         if self.desc is not None:
             r['desc'] = {'all': self.d_all, 'by_type': self.d_typ, 'by_city': self.d_city, 'files': self.desc.get('_files', {})}
         return r
@@ -127,9 +142,14 @@ def _load(p):
         return json.loads(gzip.decompress(f.read()))
 
 
-def side_ids(paths):
-    """영업시간 층(hours-1)·사진 층(photos-1) → (영업시간 있는 장소 id, 사진 있는 장소 id)."""
+SIDE_FILES = {}  # 마지막 side_ids 가 읽은 층 파일 요약 {종류/출처: {'files', 'rows'}} — 보고서 0절
+
+
+def side_ids(paths, names=None):
+    """영업시간 층(hours-1)·사진 층(photos-1 등)·이름 층(names-2·names-1) → (영업시간 있는 장소 id, 사진 있는 장소 id).
+    names(dict)를 주면 {칸: 이름 있는 장소 id set} 를 채운다."""
     h, p = set(), set()
+    SIDE_FILES.clear()
     for f in paths:
         try:
             j = _load(f)
@@ -138,10 +158,21 @@ def side_ids(paths):
         rows = j.get('rows')
         if not isinstance(rows, dict):
             continue
-        if j.get('schema') == 'hours-1':
-            h.update(k for k, v in rows.items() if isinstance(v, dict) and v.get('oh'))
-        elif j.get('schema') in ('photos-1', 'popularity-1', 'tourapi-1'):
-            p.update(k for k, v in rows.items() if isinstance(v, dict) and (v.get('photo') or v.get('photos')))
+        sc = j.get('schema')
+        key = f"{sc}/{j.get('src') or j.get('region') or ''}".rstrip('/')
+        b = SIDE_FILES.setdefault(key, {'files': 0, 'rows': 0})
+        b['files'] += 1; b['rows'] += len(rows)
+        if sc == 'hours-1':
+            h.update(k for k, v in rows.items() if isinstance(v, dict) and oh_ok(v.get('oh')))
+        elif sc in ('photos-1', 'popularity-1', 'tourapi-1'):
+            p.update(k for k, v in rows.items() if isinstance(v, dict) and (v.get('photo_url') or v.get('photo') or v.get('photos')))
+        elif sc in ('names-2', 'names-1') and names is not None:
+            for k, v in rows.items():
+                if not isinstance(v, dict):
+                    continue
+                for slot in NAME_SLOTS:
+                    if PN.name_ok(v.get(slot)):  # names-1 은 ko(표시 이름)·en 만 — ks(검색 열쇠)·rd(읽는 법)는 세지 않음
+                        names.setdefault(slot, set()).add(k)
     return h, p
 
 
@@ -175,8 +206,9 @@ def desc_ids(paths):
 
 def measure_dir(d, cities):
     fs = sorted(os.path.join(d, f) for f in os.listdir(d) if f.endswith('.json.gz'))
-    h, p = side_ids([f for f in fs if not os.path.basename(f).startswith(('col_', 'desc-'))])
-    m = Meter(cities, h, p, desc_ids(fs))
+    nm = {}
+    h, p = side_ids([f for f in fs if not os.path.basename(f).startswith(('col_', 'desc-'))], nm)
+    m = Meter(cities, h, p, desc_ids(fs), nm)
     for f in fs:
         if os.path.basename(f).startswith('col_'):
             m.add_layer(_load(f))
@@ -187,9 +219,10 @@ def measure_store(store, cities, side_dir=None, batch=40, desc_dir=None):
     latest = store.get_json('processed/latest.json', None)
     if not latest:
         return None
-    h, p = side_ids([os.path.join(side_dir, f) for f in os.listdir(side_dir)]) if side_dir and os.path.isdir(side_dir) else (set(), set())
+    nm = {}
+    h, p = side_ids([os.path.join(side_dir, f) for f in sorted(os.listdir(side_dir))], nm) if side_dir and os.path.isdir(side_dir) else (set(), set())
     dd = desc_ids([os.path.join(desc_dir, f) for f in sorted(os.listdir(desc_dir))]) if desc_dir and os.path.isdir(desc_dir) else None
-    m = Meter(cities, h, p, dd)
+    m = Meter(cities, h, p, dd, nm)
     paths = latest.get('paths') or {f: f"processed/out/{latest['run']}/{f}" for f in latest.get('files', [])}
     keys = sorted(v for k, v in paths.items() if k.startswith('col_') and not k.startswith('col_info_'))
     for i in range(0, len(keys), batch):
@@ -261,6 +294,13 @@ def to_md(rep, prev=None, top=25):
         L.append(f"| {sid} | {s['shards']}/{s['shards_total'] or '-'} | {s['rows']:,} | {format(t['count'], ',') if t.get('count') else '미확인'} | {_pct(s['rows'], t.get('count'))} | {s['failing']} |")
     lay = rep.get('layers')
     if lay:
+        P0, pv = lay['places'], ((prev or {}).get('layers') or {}).get('places') or {}
+        dlt = lambda a: (f" (어제 {_pct(pv[a], pv['n'])})" if pv.get('n') and a in pv else '')
+        L += ['### 0. 이름 5개 언어·영업시간·사진 채움(게시 장소 전체, 그 언어로 적힌 원천 값만 — 원어 이름·번역·간체↔번체 변환 값은 세지 않음)',
+              '| 칸 | 장소 수 | 비율 |', '|---|---|---|']
+        L += [f"| {ATTR_KO[a]} | {P0[a]:,} | {_pct(P0[a], P0['n'])}{dlt(a)} |" for a in NAME_SLOTS + ('h', 'photo')]
+        if lay.get('side_files'):
+            L.append('- 읽은 층: ' + ', '.join(f"{k} 파일 {v['files']}·행 {v['rows']:,}" for k, v in sorted(lay['side_files'].items())))
         hdr = '| 장소 | ' + ' | '.join(ATTR_KO[a] for a in ATTRS) + ' |'
         row = lambda name, b: f"| {name} | {b['n']:,} | " + ' | '.join(_pct(b[a], b['n']) for a in ATTRS) + ' |'
         L += ['### 3. 종류별 장소 수·속성 채움', '| 종류 ' + hdr, '|---' * (len(ATTRS) + 2) + '|', row('전체', lay['places'])] + [row(TYPE_KO[t], lay['by_type'][t]) for t in TYPES]

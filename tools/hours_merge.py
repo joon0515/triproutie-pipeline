@@ -10,7 +10,12 @@
   어느 OSM 판에도 없는 지역(OSM 층을 아직 안 만든 나라)의 행은 hours-col-<나라>.json.gz 로 따로 낸다.
 행: {"oh": "...", "src": "official|osm|wikivoyage|…", "url"?: 공식 주소, "osm"?, "q"?, "hd"?: 1}
 """
-import glob, gzip, json, os, sys, time
+import glob, gzip, hashlib, json, os, sys, time
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from oh_check import oh_ok  # noqa: E402
+
+FILE_MAX = 7 * 1024 * 1024  # 앱·publish_layers 상한 8MB 아래로. 넘으면 id 해시로 나눈다(11/17 hours-eu-de 8.7MB 로 finalize 실패)
 
 RANK = {'official': 0, 'osm': 1}
 
@@ -27,7 +32,8 @@ def col_rows(fn):
     for i in range(len(j.get('id') or [])):
         la += j['dla'][i]; lo += j['dlo'][i]
         wid, h = (j.get('wid') or [None] * (i + 1))[i], (j.get('h') or [None] * (i + 1))[i]
-        if not wid or not isinstance(h, str) or not h or h.startswith('raw:'):
+        h = oh_ok(h) if isinstance(h, str) else None  # 표준형으로 알아들은 값만(파싱 실패는 버림)
+        if not wid or not h:
             continue
         src = 'official' if (j.get('rk') or [None] * (i + 1))[i] == 'o' else str((j.get('src') or [''] * (i + 1))[i] or 'collect').split('|')[0]
         url = (j.get('url') or [None] * (i + 1))[i] if src == 'official' else None
@@ -63,7 +69,11 @@ def merge(osm_dir, col_dir, out_dir):
         layers[os.path.basename(fn)] = json.loads(gzip.decompress(open(fn, 'rb').read()))
     where = {}  # wid → 파일
     for f, d in layers.items():
-        for wid in d.get('rows') or {}:
+        for wid, v in list((d.get('rows') or {}).items()):
+            if isinstance(v, dict) and v.get('oh') and not oh_ok(v['oh']):
+                v.pop('oh')  # 예전 판 OSM 원본(검사 전)에 남은 못 알아듣는 값
+                if not v.get('q'):
+                    d['rows'].pop(wid); continue
             where[wid] = f
     extra, rep = {}, {'col_rows': 0, 'into_osm_files': 0, 'into_col_files': 0, 'official': 0}
     for fn in sorted(glob.glob(os.path.join(col_dir, 'col_*.json.gz'))):
@@ -96,9 +106,32 @@ def merge(osm_dir, col_dir, out_dir):
     return rep
 
 
+def _gzb(doc):
+    return gzip.compress(json.dumps(doc, ensure_ascii=False, separators=(',', ':')).encode(), 9, mtime=0)
+
+
 def _write(path, doc):
-    with gzip.open(path, 'wt', encoding='utf-8') as f:
-        json.dump(doc, f, ensure_ascii=False, separators=(',', ':'))
+    """한 파일이 FILE_MAX 를 넘으면 rows 를 id 해시로 n 조각(<이름>-pNN.json.gz)으로 나눠 쓴다. 각 조각은 같은 머리(bbox 등)를 가진다."""
+    b = _gzb(doc)
+    if len(b) <= FILE_MAX or not isinstance(doc.get('rows'), dict):
+        open(path, 'wb').write(b)
+        return [path]
+    base = path[:-len('.json.gz')]
+    n = 2
+    while True:
+        parts = [{} for _ in range(n)]
+        for k, v in doc['rows'].items():
+            parts[int(hashlib.sha1(k.encode()).hexdigest()[:8], 16) % n][k] = v
+        bs = [_gzb(dict(doc, rows=p, part=[i, n])) for i, p in enumerate(parts)]
+        if max(len(x) for x in bs) <= FILE_MAX or n >= 64:
+            break
+        n *= 2
+    out = []
+    for i, x in enumerate(bs):
+        if parts[i]:
+            out.append(f'{base}-p{i:02d}.json.gz')
+            open(out[-1], 'wb').write(x)
+    return out
 
 
 if __name__ == '__main__':

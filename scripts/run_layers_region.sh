@@ -57,6 +57,17 @@ if [ -n "$TILES" ]; then
     echo "region $R: desc-osm skipped"
   fi
 fi
+# (11/18, 223기) 이름 5개 언어 층 OSM 판(name:ko·en·ja·zh-Hans·zh-Hant 태그 → 타일 id, ODbL 따로 파일 names-osm-<지역>-NN). 소개 층처럼 2단 목록(kind names5)이라
+# 수집 게시(process)가 넘겨 싣도록 layers_extra/ 에 둔다. 지난번 조각 수가 달랐을 수 있어 이 지역 파일을 먼저 지운다.
+if [ -n "$TILES" ]; then
+  mkdir -p "$W/names5"
+  if python3 tools/names5_osm.py "$W/names5" "$R" "$TILES" "$W"/pbf/*.osm.pbf | tail -1 && ls "$W"/names5/names-osm-*.json.gz >/dev/null 2>&1; then
+    gcloud storage rm -q "gs://$GCS_BUCKET/places/v1/layers_extra/names-osm-$R-[0-9][0-9].json.gz" >/dev/null 2>&1 || true
+    gcloud storage cp -q "$W"/names5/names-osm-*.json.gz "gs://$GCS_BUCKET/places/v1/layers_extra/" >/dev/null 2>&1 || echo "region $R: names-osm extra copy failed"
+  else
+    echo "region $R: names-osm skipped"
+  fi
+fi
 N=$(ls "$W"/out/*.json.gz 2>/dev/null | wc -l)
 [ "$N" -gt 0 ] || { echo "region $R: 0 files"; exit 1; }
 gcloud storage cp -q "$W"/out/*.json.gz "$DEST/" >/dev/null 2>&1
