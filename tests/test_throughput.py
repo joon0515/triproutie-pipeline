@@ -132,7 +132,8 @@ class Workflows(unittest.TestCase):
         import yaml
         y = yaml.safe_load(open(os.path.join(ROOT, '.github', 'workflows', 'process.yml'), encoding='utf-8'))
         j = y['jobs']
-        self.assertEqual(j['countries']['needs'], 'partition'); self.assertIn('countries', j['merge']['needs']); self.assertEqual(j['publish']['needs'], 'merge')
+        self.assertEqual(j['countries']['needs'], 'partition'); self.assertIn('countries', j['merge']['needs']); self.assertEqual(j['place-desc']['needs'], 'merge')
+        self.assertEqual(j['publish']['needs'], ['merge', 'place-desc']); self.assertTrue(j['place-desc'].get('continue-on-error'))  # 11/17: 소개 단계가 실패해도 게시는 계속
         n = len(j['countries']['strategy']['matrix']['shard'])
         txt = open(os.path.join(ROOT, '.github', 'workflows', 'process.yml'), encoding='utf-8').read()
         self.assertIn(f'--shard "${{{{ matrix.shard }}}}/{n}"', txt)

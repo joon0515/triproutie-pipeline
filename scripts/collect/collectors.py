@@ -218,6 +218,19 @@ def _dict_lists(o):
             yield from _dict_lists(v)
 
 
+def _tw_desc(d):
+    """(11/17) 장소 소개 층(scripts/place_desc.py desc-tw)용: 관광서 소개 글(Description → Toldescribe)의 첫 문장만, 원문 그대로(번체 zh_Hant).
+    첫 문장이 120자를 넘거나 4자 미만이면 싣지 않는다(중간에서 자르지 않음). 긴 본문·사진 주소는 담지 않는다."""
+    sys.path.insert(0, os.path.join(HERE, '..'))
+    import place_desc as PD
+    for k in ('Description', 'Toldescribe', 'DescriptionDetail'):
+        t = PD.first_sentence(_ci(d, k))
+        t = t and PD.ok_text(t, [_ci(d, 'Name', 'AttractionName', 'ScenicSpotName')])
+        if t:
+            return {'dsc': t}
+    return {}
+
+
 def parse_taiwan(zbytes, src):
     rows = []
     z = zipfile.ZipFile(io.BytesIO(zbytes))
@@ -231,7 +244,7 @@ def parse_taiwan(zbytes, src):
                 nm = _ci(d, 'Name', 'AttractionName', 'ScenicSpotName')
                 r = place(src, _ci(d, 'Id', 'AttractionID', 'ScenicSpotID') or nm, nm, lat, lon, cat=_ci(d, 'Class1', 'Class') or 'attraction',
                           names={'zh': nm}, hours=_ci(d, 'Opentime', 'OpenTime'), url=_ci(d, 'Website', 'WebsiteUrl'), addr=_ci(d, 'Add', 'Address'),
-                          tel=_ci(d, 'Tel', 'Phone'), price=_ci(d, 'Ticketinfo', 'TicketInfo'), extra={'cc': 'TW'})
+                          tel=_ci(d, 'Tel', 'Phone'), price=_ci(d, 'Ticketinfo', 'TicketInfo'), extra={'cc': 'TW', **_tw_desc(d)})
                 if r:
                     rows.append(r)
     return rows

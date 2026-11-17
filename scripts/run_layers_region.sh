@@ -48,6 +48,15 @@ if [ -n "$TILES" ]; then
     gcloud storage cp -q "$W/hours/hours-$R.json.gz" "gs://$GCS_BUCKET/places/v1/hours_src/" >/dev/null 2>&1 || echo "region $R: hours latest copy failed"
   fi
 fi
+# (11/17) 장소 소개 층 OSM 판(description:<lang> 태그 → 타일 id, ODbL 따로 파일). 수집 게시(process)가 뿌리 목록 밖(2단 목록)의 층은 넘겨 싣지 않으므로
+# layers_extra/ 에도 사본을 둔다 — process 의 publish 가 layers_extra 를 함께 싣는다.
+if [ -n "$TILES" ]; then
+  if python3 tools/desc_osm.py "$W/out/desc-osm-$R.json.gz" "$TILES" "$W"/pbf/*.osm.pbf | tail -1 && [ -f "$W/out/desc-osm-$R.json.gz" ]; then
+    gcloud storage cp -q "$W/out/desc-osm-$R.json.gz" "gs://$GCS_BUCKET/places/v1/layers_extra/" >/dev/null 2>&1 || echo "region $R: desc-osm extra copy failed"
+  else
+    echo "region $R: desc-osm skipped"
+  fi
+fi
 N=$(ls "$W"/out/*.json.gz 2>/dev/null | wc -l)
 [ "$N" -gt 0 ] || { echo "region $R: 0 files"; exit 1; }
 gcloud storage cp -q "$W"/out/*.json.gz "$DEST/" >/dev/null 2>&1

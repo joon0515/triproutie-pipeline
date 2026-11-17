@@ -32,13 +32,15 @@ jobs:
         with: {python-version: "3.12"}
       - run: pip install -q pyyaml >/dev/null
       - name: test
-        run: python3 -W ignore -m unittest tests/test_coverage.py 2>&1 | tail -3
+        run: python3 -W ignore -m unittest tests/test_coverage.py tests/test_place_desc.py 2>&1 | tail -3
       - name: 영업시간·사진 층(작다)과 어제 보고 받기
         run: |
           mkdir -p "$RUNNER_TEMP/side"
           P=$(gcloud storage cat "gs://$GCS_BUCKET/places/v1/layers.json" 2>/dev/null | python3 -c "import json,sys;m=json.load(sys.stdin);print('\n'.join('gs://$GCS_BUCKET/'+m['path']+e['file'] for e in m.get('layers',[]) if e.get('kind') in ('hours','photos','popularity','tourapi')))" 2>/dev/null || true)
           [ -z "$P" ] || echo "$P" | gcloud storage cp -q -I "$RUNNER_TEMP/side/" || true
           Y=$(date -u -d yesterday +%F); gcloud storage cp -q "$STORE/coverage/$Y.json" "$RUNNER_TEMP/prev.json" 2>/dev/null || true
+          # (11/17) 장소 소개 층(place_desc.py·desc_osm.py) — 게시 전 사본이 모이는 layers_extra 에서 받는다(개수·비율만 보고)
+          mkdir -p "$RUNNER_TEMP/desc"; gcloud storage cp -q "gs://$GCS_BUCKET/places/v1/layers_extra/desc-*.json.gz" "$RUNNER_TEMP/desc/" 2>/dev/null || true
       - name: Storage 용량(이름·크기만)
         run: |
           python3 - <<'PY' > "$RUNNER_TEMP/storage.json"
@@ -54,7 +56,7 @@ jobs:
           PY
       - name: measure
         run: |
-          python3 scripts/coverage.py --store "$STORE" --side "$RUNNER_TEMP/side" --prev "$RUNNER_TEMP/prev.json" --storage "$RUNNER_TEMP/storage.json" \
+          python3 scripts/coverage.py --store "$STORE" --side "$RUNNER_TEMP/side" --desc "$RUNNER_TEMP/desc" --prev "$RUNNER_TEMP/prev.json" --storage "$RUNNER_TEMP/storage.json" \
             --json "$RUNNER_TEMP/cov.json" --md "$RUNNER_TEMP/cov.md" >> "$GITHUB_STEP_SUMMARY"
           gcloud storage cp -q "$RUNNER_TEMP/cov.json" "$STORE/coverage/$(date -u +%F).json"
       - name: 이슈 하나에 누적

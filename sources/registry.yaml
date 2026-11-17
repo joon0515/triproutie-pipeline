@@ -69,6 +69,11 @@ sources:
     interval_s: 5
     script: wikidata_seeds
     status: active
+    # (11/17, 218기) 장소 소개 층 desc-wd-*(scripts/place_desc.py, process 의 place-desc 단계)도 같은 끝점·예절로 받는다.
+    #  www.wikidata.org/w/api.php 는 robots.txt 가 User-agent * 에 Disallow /w/ → place_desc 는 쓰지 않는다. 이름 검색 없이 QID(수집 층 wd · 타일 id · OSM wikidata 태그)로만 묻는다.
+    fields: [labels, descriptions]
+    desc_langs: [ko, en, ja, zh-hans, zh-cn, zh-sg, zh-my, zh-hant, zh-tw, zh-hk, zh-mo, zh]
+    desc_daily_limit: 3000      # place_desc 의 하루 SPARQL 요청 수(한 번에 QID 250개)
   - id: official_sites
     name: 공식 사이트 구조화 데이터(schema.org JSON-LD·microdata) — Wikidata P856 씨앗
     kind: crawl
@@ -208,7 +213,9 @@ sources:
   - {id: jnto_jta, name: 일본 JNTO·관광청 오픈데이터, kind: dump, url: "", license: "공식 오픈데이터 위치·라이선스 확인 못 함", status: candidate}
   - {id: us_state_travel, name: 미국 국무부 여행경보 RSS, kind: feed, url: "https://travel.state.gov/_res/rss/TAsTWs.xml", license: "미국 정부 저작물(공공영역)로 알려짐 — robots 확인 결과 불명확", status: candidate}
   - {id: kr_mofa_alert, name: 외교부 국가·지역별 여행경보(data.go.kr), kind: api, url: "https://apis.data.go.kr/1262000/", license: "공공누리 — data.go.kr 활용신청 필요", secret: DATA_GO_KR_KEY, status: candidate}
-  - {id: osm, name: OpenStreetMap(places-layers 가 이미 처리), kind: dump, url: "https://download.geofabrik.de", license: ODbL-1.0, refresh: monthly, status: external, note: "places-layers.yml 이 수동 실행으로 갱신 — 월 1회 권장"}
+  - {id: osm, name: OpenStreetMap(places-layers 가 이미 처리), kind: dump, url: "https://download.geofabrik.de", license: ODbL-1.0, refresh: monthly, status: external, note: "places-layers.yml 이 수동 실행으로 갱신 — 월 1회 권장", fields: "opening_hours · wikidata · name:* · description:<ko|en|ja|zh|zh-Hans|zh-Hant|zh-CN|zh-TW> (11/17 장소 소개 — tools/desc_osm.py, 층 파일 desc-osm-<지역> 을 따로 둠)"}
+  - {id: tourapi, name: 한국관광공사 TourAPI 4.0 KorService2 (tourapi_daily.yml 이 따로 수집), kind: api, url: "https://apis.data.go.kr/B551011/KorService2/", license: "KOGL — data.go.kr 15101578 '이용허락범위 제한 없음'(2026-11-17 확인). 소개(overview)는 cpyrhtDivCd Type1(공공누리 제1유형)만", license_url: "https://www.data.go.kr/data/15101578/openapi.do", secret: DATA_GO_KR_KEY, status: external, fields: "areaBasedList2 · detailIntro2 · detailInfo2 · detailCommon2 overview(11/17, 제1유형 첫 문장 → desc-kto). 영·일·중 서비스(EngService2 등)는 따로 활용신청이 필요해 받지 않음"}
+  - {id: wikipedia_lead, name: 위키백과 첫 문단(장소 소개 후보), kind: dump, url: "https://dumps.wikimedia.org/", license: CC-BY-SA-4.0, status: candidate, note: "11/17 218기 판정: 보류. ko/en/ja/zh.wikipedia.org 는 robots.txt 가 /w/(api.php)·/api/(REST) 를 막아 공식 API 로 못 받고, 덤프는 위키 문법을 풀어야 해 '원문 그대로'가 아님. 쓰게 되면 desc-wp-* 따로 파일·문단 그대로·'위키백과 「제목」 기여자 (CC BY-SA 4.0)' + 문서·라이선스 링크, '왜 여기?' 문장과 섞지 않음(docs/LAYERS.md)"}
 catalogs:  # 발견기 질의 대상(응답이 CKAN 모양이 아니면 그 회차는 건너뜀)
   - {id: open_canada, kind: ckan, url: "https://open.canada.ca/data/api/action/package_search"}
   - {id: data_gov_us, kind: ckan, url: "https://catalog.data.gov/api/3/action/package_search"}

@@ -10,6 +10,9 @@
   2) detail : 남은 한도로 detailIntro2(영업시간·휴무·주차·메뉴·체크인…). 순서 = 관광지12·음식점39 → 숙박32 → 문화14·레포츠28·쇼핑38,
               같은 종류 안에서는 앱 데이터에 이미 있는 곳(tourapi/priority_cids.json) → 서울·부산 외(소도시) → 서울·부산.
   3) info   : 요금이 detailInfo2 에만 있는 12·28 의 요금. 끝나면 회차(pass)+1, 1)부터 다시(내용 갱신).
+  (11/17) 소개: 목록을 한 번 다 받은 뒤부터 매일 한도의 --ov-share(기본 25%)를 먼저 detailCommon2 overview 에 쓴다. 관광지 12·문화시설 14 중
+              cpyrhtDivCd 가 Type1(공공누리 제1유형)인 곳만, 제주·경주 → 앱에 있는 곳 → 그 밖 순. overview 의 첫 문장만(원문 그대로, 120자 넘으면 버림)
+              카드 ov 에 두고 층 행에도 ov 로 싣는다 → scripts/place_desc.py 가 desc-kto(ko 칸)로 옮긴다. 제3유형(변경 금지)·그 밖은 받지 않는다.
 이어받기: 상태 파일(--state, 저장소에 커밋하는 작은 JSON)에는 단계·작업 번호·쪽·오늘 호출 수만. 장소별 진행(받은 회차·실패 횟수)은
   누적본(--store, GCS 와 동기화)의 카드에 있어 같은 곳을 두 번 부르지 않는다.
 한도: KST 날짜별 호출 수 ≤ --limit(기본 900, 개발계정). 한도 초과 응답(LIMITED_NUMBER…)·429 면 그날 즉시 멈춤.
@@ -41,6 +44,8 @@ BIG = {'11', '26'}  # 서울·부산(대화 세션 판에서 이미 많이 받�
 DETAIL_ORDER = {'12': 0, '39': 0, '32': 1, '14': 2, '28': 2, '38': 2}
 PHOTO_OK = {'Type1': 'KOGL-1', 'Type3': 'KOGL-3'}
 ATTR = '한국관광공사 TourAPI 4.0 (공공누리 제1·3유형, 출처표시)'
+OV_TYPES = ('12', '14')  # 소개를 받는 종류(관광지·문화시설 — '왜 여기?' 설명이 필요한 볼거리)
+OV_SHARE = 0.25
 
 
 def today():
@@ -337,14 +342,59 @@ def queue(store, st, prio, step):
     return [(a, cid) for *_, a, cid in L]
 
 
-def run(state, store, cl, prio=None):
+def ov_queue(store, st, prio):
+    """소개(detailCommon2 overview)를 아직 안 받은 제1유형 관광지·문화시설 — 제주·경주 → 앱에 있는 곳 → 그 밖."""
+    P, L = st['pass'], []
+    for a in AREAS:
+        for cid, c in store.area(a).items():
+            if c.get('type') not in OV_TYPES or c.get('cpy') != 'Type1':
+                continue
+            if c.get('opass') == P or (c.get('ofail') or [0, 0])[0] == P and c['ofail'][1] >= 3:
+                continue
+            L.append((front_tier(a, c, cid in prio), OV_TYPES.index(c['type']), int(cid) if cid.isdigit() else 0, a, cid))
+    L.sort()
+    return [(a, cid) for *_, a, cid in L]
+
+
+def overview(st, store, cl, prio, share):
+    """하루 한도의 share 몫까지 소개를 받는다. 돌려줌 = 받은 곳 수. Stop 은 그대로 올린다."""
+    from place_desc import first_sentence
+    o = st.setdefault('ov', {})
+    if o.get('date') != today():
+        o.update(date=today(), calls=0)
+    cap, n = int(cl.limit * share), 0
+    for a, cid in ov_queue(store, st, prio):
+        if o['calls'] >= cap or cl.left() <= 0:
+            break
+        c = store.area(a)[cid]
+        before = st['calls']
+        try:
+            r = cl.get('detailCommon2', contentId=cid)
+        finally:
+            o['calls'] += st['calls'] - before
+        if r is None:
+            k = c['ofail'][1] + 1 if (c.get('ofail') or [0])[0] == st['pass'] else 1
+            c['ofail'] = [st['pass'], k]; store.dirty.add(a); continue
+        it = (r[1] or [{}])[0] if isinstance(r[1], list) else {}
+        t = first_sentence(it.get('overview') if isinstance(it, dict) else None)
+        if t:
+            c['ov'] = t
+        else:
+            c.pop('ov', None)
+        c['opass'] = st['pass']; c.pop('ofail', None); store.dirty.add(a); n += 1
+    return n
+
+
+def run(state, store, cl, prio=None, ov_share=0.0):
     st = state
     prio = load_prio() if prio is None else prio
     for k, v in (('pass', 1), ('phase', 'list'), ('task', 0), ('page', 1), ('totals', {})):
         st.setdefault(k, v)
     st.pop('retry', None)
-    T = tasks(); new = {'list': 0, 'detail': 0, 'info': 0}; stop = None
+    T = tasks(); new = {'list': 0, 'detail': 0, 'info': 0, 'overview': 0}; stop = None
     try:
+        if ov_share > 0 and st.get('list_done'):
+            new['overview'] = overview(st, store, cl, prio, ov_share)
         while True:
             if st['phase'] == 'list':
                 if st['task'] >= len(T):
@@ -411,6 +461,8 @@ def build_outputs(store, layers_dir, agg_path):
                 e['lat'], e['lon'] = c['lat'], c['lon']
             if c.get('photo'):
                 e['photo'] = c['photo']
+            if c.get('ov') and c.get('cpy') == 'Type1':  # 소개 첫 문장 — 공공누리 제1유형만
+                e['ov'] = c['ov']
             lr['kto:' + cid] = e
             agg['kto:' + cid] = dict(name=c['name'], city=c['addr'][:20], tourapi_cid=cid, type=TYPE_KO[c['type']], cpy=c.get('cpy'),
                                      area=AREA_KO[a], sigungu=c['sigungu'], cat=c.get('cat'), lat=c.get('lat'), lon=c.get('lon'),
@@ -434,13 +486,14 @@ def main():
     ap.add_argument('--layers', required=True)
     ap.add_argument('--agg', required=True)
     ap.add_argument('--limit', type=int, default=int(os.environ.get('TOURAPI_DAILY_LIMIT', '900')))
+    ap.add_argument('--ov-share', type=float, default=float(os.environ.get('TOURAPI_OV_SHARE', OV_SHARE)), help='하루 한도 가운데 소개(overview)에 먼저 쓰는 몫')
     a = ap.parse_args()
     key = os.environ.get('TOURAPI_KEY', '').strip()
     if not key:
         sys.exit('TOURAPI_KEY 없음(Actions secret DATA_GO_KR_KEY)')
     state = json.load(open(a.state)) if os.path.exists(a.state) else {}
     store = Store(a.store)
-    stop = run(state, store, Client(key, state, a.limit))
+    stop = run(state, store, Client(key, state, a.limit), ov_share=a.ov_share)
     os.makedirs(os.path.dirname(a.state) or '.', exist_ok=True)
     json.dump(state, open(a.state, 'w'), ensure_ascii=False, indent=1, sort_keys=True)
     n = build_outputs(store, a.layers, a.agg)
