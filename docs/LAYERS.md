@@ -99,3 +99,30 @@ python3 scripts/publish_layers.py --tag t --dir <층 폴더> --bucket b --tools 
 3. 쓰게 될 때의 표시(대표 승인 뒤): `desc-wp-*` 따로 파일, `license_class: by-sa`. 첫 문단을 고치지 않고 통째로, '왜 여기?' 문장과 **떨어진 문단**으로만 보여 주고
    바로 아래에 '출처: 위키백과 「문서 제목」 기여자, CC BY-SA 4.0' + 문서 링크 + 라이선스 링크(https://creativecommons.org/licenses/by-sa/4.0/). 자르거나 요약하지 않는다.
    registry `wikipedia_lead`(candidate) 에 같은 내용을 적어 두었다.
+
+## 11/18 추가 — 이름 5개 언어 층(names-2)·영업시간 검사·Commons 사진(223기)
+근거: 파이프라인 이슈 #29(11/17 보고 — 게시 86,885,183곳, 이름 ko·en·ja·zh 0.0%, 영업시간·사진 0.0%), kit_1114/CC_bench/DOMINANCE_222.md 5절.
+
+### 왜 0.0% 였나(원인)
+1. **수집하지 않음(대부분)**: 게시 행의 99.99%가 Foursquare OS Places(`fsq_os_places`) — 원천에 이름이 한 칸(`name`)뿐이고 영업시간도 없다. 다국어 이름을 주는 Overture 는 0행(2/229 조각).
+2. **수집했는데 빠짐**: ① OSM 이름 보충 층(`names_osm.py`)이 11/17 places-layers 에서 `TypeError`(세계 타일에 `ko` 열이 없음)로 매번 실패 ② OSM 영업시간 층은 만들어졌지만 finalize 가 `hours-eu-de.json.gz 8,730,158 bytes > 8 MiB` 로 멈춰 목록에 못 실림
+   ③ place-desc 가 QLever 에서 Wikidata 라벨을 받고도 설명 거르기에만 쓰고 버림 ④ coverage 가 이름 층·사진 층을 세지 않음(사진 행 칸 `photo_url` 을 `photo` 로 찾음), 중국어를 한 칸(zh)으로만 셈.
+
+### 고친 것
+| 파일 | 만드는 곳 | 출처·라이선스 | 칸 |
+|---|---|---|---|
+| `names-wd-NN.json.gz` | process 의 place-desc 단계(`scripts/place_names.py`, place_desc 와 **같은 SPARQL·같은 캐시**) | Wikidata 라벨, CC0 | ko·en·ja·zh_Hans·zh_Hant |
+| `names-osm-<지역>-NN.json.gz` | places-layers 지역 빌드(`tools/names5_osm.py`) | OSM `name:ko/en/ja/zh-Hans/zh-Hant(zh-CN·SG/zh-TW·HK)`, **ODbL — 따로 파일** | 태그 언어대로 |
+| `photos-wd-NN.json.gz` (photos-1) | place-desc 단계(`place_names.py`) | Wikidata P18 → Commons 구조화 데이터(QLever `wikimedia-commons`)의 P275·P170 | 사진 링크 + 저작자·라이선스 |
+- 행(names-2): `{장소 id: {ko, en, ja, zh_Hans, zh_Hant: 이름|null, q?|osm?}}`. 파일 머리 `src · license · credit · page · langs`. 2단 목록(kind `names5`, 앱 연결 전) — `layers_extra/` 에 두어 process 의 publish 가 싣는다.
+- **없는 언어는 null → 앱은 원어 이름(nm)을 보여 준다.** 번역·음역·간체↔번체 변환을 하지 않는다. 꼬리표 없는 zh 는 글자로 간체·번체가 갈릴 때만 그 칸(못 가리면 비움).
+- 공식 관광 API 이름: 대만 관광서(zh)·Wikidata 씨앗·Wikivoyage 의 언어별 이름은 수집 층 제 칸에 이미 있다(coverage 가 그대로 셈). TourAPI 영·일·중 서비스는 활용 신청 전이라 받지 않는다.
+- 사진: CC0·CC BY·CC BY-SA(1.0~4.0 국제판·Generic·Unported, `place_names.LICENSES`)만, **저작자 이름(P2093 또는 P4174)이 있는 것만**. 나라별 판·GFDL·PD 표기·NC/ND·저작자 없음 = 싣지 않음.
+  행 `{photo_url, photo_thumb(?width=640), photo_credit('사진: 저작자 · CC BY-SA 3.0 (위키미디어 공용)'), photo_license, photo_license_url, photo_author, photo_page, photo_src: commons, photo_file, q}` — 링크만, 파일을 받거나 복사하지 않는다.
+- 영업시간: `tools/oh_check.py` 가 알아듣는 opening_hours(요일·시각·PH·달·24/7 …)만 싣고 나머지는 버린다(`hours_osm.py`·`hours_merge.py`, 예전 120자 자르기 없앰). 합본이 7 MiB 를 넘으면 `hours-<지역>-pNN.json.gz` 로 나눈다.
+- robots: `www.wikidata.org/w/api.php`·`commons.wikimedia.org/w/api.php`·`ko.wikipedia.org/w/api.php` 는 Disallow `/w/` → `names_osm.py --wikidata` 없앰, `photo_layer.py` 의 위키 API 경로는 기본 꺼짐(`TL_WIKI_API=1` 일 때만, 한국 TourAPI 사진은 그대로).
+- coverage-report 0절: 이름 5개 언어·영업시간·사진 채움(그 언어로 적힌 원천 값만 셈, 어제 값 함께).
+
+### 앱 표시(앱 팀)
+- 이름: 앱 언어 칸이 있으면 그 이름, 없으면 원어 이름(nm). 우선순위 = 수집 층 제 칸(공식·Wikidata 씨앗) > names-wd > names-osm. OSM 이름을 보여 줄 때 출처 줄 '© OpenStreetMap contributors (ODbL)'.
+- 사진: `photo_credit` 를 사진 아래 그대로, 누르면 `photo_page`. 라이선스 주소 `photo_license_url`. 문구에 '추정' 같은 말을 쓰지 않는다.

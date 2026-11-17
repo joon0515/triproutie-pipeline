@@ -61,6 +61,12 @@ def log(msg):
     print(f'[place-desc] {msg}', flush=True)
 
 
+def _pn():
+    """place_names.py(이름 5개 언어·사진 층, 223기) — 서로 불러 쓰므로 쓸 때 들여온다."""
+    import place_names
+    return place_names
+
+
 def han_script(s):
     """'Hans' | 'Hant' | 'neutral'(갈리는 글자 없음) | None(둘 다 있음)."""
     a, b = any(c in SIMP for c in s), any(c in TRAD for c in s)
@@ -134,8 +140,9 @@ def sparql(qids):
     langs = ','.join(f'"{t}"' for t in ALL_TAGS)
     return ('PREFIX wd: <http://www.wikidata.org/entity/> PREFIX wdt: <http://www.wikidata.org/prop/direct/> PREFIX schema: <http://schema.org/> '
             'PREFIX rdfs: <http://www.w3.org/2000/01/rdf-schema#> SELECT ?item ?k ?v WHERE { VALUES ?item { ' + vals + ' } '
-            '{ ?item schema:description ?v BIND("d" AS ?k) } UNION { ?item rdfs:label ?v BIND("l" AS ?k) } '
-            f'FILTER(LANG(?v) IN ({langs})) FILTER NOT EXISTS {{ ?item wdt:P31 wd:{DISAMBIG} }} }}')
+            f'{{ ?item schema:description ?v BIND("d" AS ?k) FILTER(LANG(?v) IN ({langs})) }} UNION {{ ?item rdfs:label ?v BIND("l" AS ?k) FILTER(LANG(?v) IN ({langs})) }} '
+            '''UNION { ?item wdt:P18 ?v BIND("p" AS ?k) } '''  # (11/18, 223기) 대표 사진 파일 — place_names.py 의 사진 층(Commons 라이선스 확인 뒤)
+            f'FILTER NOT EXISTS {{ ?item wdt:P31 wd:{DISAMBIG} }} }}')
 
 
 def parse_bindings(j):
@@ -147,7 +154,7 @@ def parse_bindings(j):
             k, v, t = b['k']['value'], b['v']['value'], b['v'].get('xml:lang', '').lower()
         except (KeyError, IndexError):
             continue
-        out.setdefault(q, {'d': {}, 'l': {}}).setdefault(k, {})[t] = v
+        out.setdefault(q, {'d': {}, 'l': {}, 'p': {}}).setdefault(k, {})[t] = v
     return out
 
 
@@ -171,7 +178,12 @@ def fetch_wd(http, endpoint, qids, cache, budget_end, clock=time.time):
         d = today()
         for q in part:
             g = got.get(q) or {}
-            cache[q] = [d, {k: v for k, v in pick_slots(g.get('d'), g.get('l')).items() if v}]
+            # [받은 날, 설명 칸, {'l': 라벨 칸, 'p': P18 파일 주소}] — 셋째 칸은 place_names.py(이름 5개 언어·사진 층)가 같은 조회를 함께 쓴다(223기)
+            ex = {'l': {k: v for k, v in _pn().wd_label_slots(g.get('l')).items() if v}}
+            p18 = sorted((g.get('p') or {}).values())
+            if p18:
+                ex['p'] = p18[0]
+            cache[q] = [d, {k: v for k, v in pick_slots(g.get('d'), g.get('l')).items() if v}, ex]
         done += len(part)
     return done, None
 
@@ -408,7 +420,8 @@ def order_qids(seeds, cache, now_day=None):
     """물어볼 QID 순서: 한 번도 안 물은 것(앱 타일·OSM 쪽 먼저) → 30일 지난 것(오래된 것 먼저)."""
     d0 = datetime.date.fromisoformat(now_day or today())
     new = sorted((q for q in seeds.q if q not in cache), key=lambda q: (q not in seeds.prio, int(q[1:])))
-    old = sorted((q for q in seeds.q if q in cache and (d0 - datetime.date.fromisoformat(cache[q][0])).days >= REFRESH_DAYS), key=lambda q: cache[q][0])
+    old = sorted((q for q in seeds.q if q in cache and ((d0 - datetime.date.fromisoformat(cache[q][0])).days >= REFRESH_DAYS or len(cache[q]) < 3)),
+                 key=lambda q: (len(cache[q]) >= 3, cache[q][0]))  # 라벨·사진 칸이 없는 예전 캐시(11/17)도 다시 묻는다
     return new + old
 
 
@@ -436,9 +449,10 @@ def run(store, bucket=None, extra_dir=None, out=None, budget_min=45.0, http=None
     for f in glob.glob(os.path.join(out, 'desc-*.json.gz')):
         os.remove(f)
     rep = build_layers(seeds, cache, out)
+    nrep, nfiles = _pn().build(store, seeds, cache, out, src, t_end + 60 * float(src.get('photo_extra_min', 10)), clock)  # 이름·사진 층(223기) — 같은 씨앗·캐시
     tot = summarize(rep)
     st.update(last={'at': datetime.datetime.now(datetime.timezone.utc).isoformat(), 'asked': asked, 'left': left, 'stop': stop, 'qids': len(seeds.q),
-                    'cached': len(cache), 'rows': tot})
+                    'cached': len(cache), 'rows': tot, 'names': nrep})
     store.put_json('processed/desc/state.json', st)
     if bucket and not dry_run:
         dest = f'gs://{bucket}/places/v1/layers_extra/'
@@ -452,11 +466,22 @@ def run(store, bucket=None, extra_dir=None, out=None, budget_min=45.0, http=None
                  and u.rsplit('/', 1)[1] not in {os.path.basename(m) for m in mine}]
         if stale:
             gs('rm', '-q', '-I', stdin='\n'.join(stale).encode())
+        # 이름·사진 층(names-wd-*, photos-wd-*): 같은 곳에 올리고, 이번에 만들지 않은 같은 이름 꼴 파일은 지운다(names-osm-* 은 places-layers 몫)
+        mine2 = [os.path.join(out, f) for f in nfiles]
+        if mine2:
+            r = gs('cp', '-q', '-I', dest, stdin='\n'.join(mine2).encode())
+            if r.returncode != 0:
+                raise SystemExit('이름·사진 층 올리기 실패')
+        r = gs('ls', dest + 'names-wd-*.json.gz', dest + 'photos-wd-*.json.gz')
+        stale = [u for u in (r.stdout.decode().split() if r.stdout else []) if u.endswith('.json.gz') and u.rsplit('/', 1)[1] not in set(nfiles)]
+        if stale:
+            gs('rm', '-q', '-I', stdin='\n'.join(stale).encode())
     lines = [f'## 장소 소개(place-desc) {today()}', f"- QID {len(seeds.q):,} · 이번에 물은 것 {asked:,} · 남은 것 {left:,} · 캐시 {len(cache):,}" + (f' · 멈춘 까닭 {stop}' if stop else ''),
              '| 파일 | 행 | ' + ' | '.join(SLOTS) + ' |', '|---' * (len(SLOTS) + 2) + '|']
     lines += [f"| {f} | {v['rows']:,} | " + ' | '.join(f'{v[k]:,}' for k in SLOTS) + ' |' for f, v in sorted(rep.items()) if not f.startswith('desc-wd-')]
     wd = summarize({f: v for f, v in rep.items() if f.startswith('desc-wd-')})
     lines.append(f"| desc-wd-* ({sum(1 for f in rep if f.startswith('desc-wd-'))}개) | {wd['rows']:,} | " + ' | '.join(f'{wd[k]:,}' for k in SLOTS) + ' |')
+    lines += _pn().report_lines(nrep)
     p = os.environ.get('GITHUB_STEP_SUMMARY')
     if p:
         open(p, 'a', encoding='utf-8').write('\n'.join(lines) + '\n')

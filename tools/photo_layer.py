@@ -6,7 +6,7 @@
 출처(앞이 먼저):
   ① 한국(타일 cc=KR): TourAPI firstimage — tourapi_daily.py 가 공공누리 제1유형·제3유형만 남긴 kto_*.json.gz 의 photo 를 이름(공백·기호 뗀 뒤 같음)+좌표 150m 로 맞춤.
      3유형은 no_modify=true(자르기·보정 금지), 출처 '한국관광공사'.
-  ② Wikidata P18 → Commons(pop_build.py 의 요청 예절·캐시 그대로: 한 번에 한 요청, 1.2초 간격, 429 면 Retry-After). Q-id 씨앗 =
+  ② (기본 꺼짐 — robots, 위 WIKI_API) Wikidata P18 → Commons(pop_build.py 의 요청 예절·캐시 그대로: 한 번에 한 요청, 1.2초 간격, 429 면 Retry-After). Q-id 씨앗 =
      타일 id 의 'kowiki:Q…' · 한국어 위키 제목(pop_build.candidates — 좌표 3km 검증) · 영업시간 층의 q(OSM wikidata 태그, 80m+이름으로 맞춘 것).
      라이선스는 CC0 · CC BY · CC BY-SA(판 번호 무관)만. 퍼블릭 도메인 표기·그 밖은 싣지 않는다.
 행: {"photo_url","photo_thumb","photo_credit"("사진: 저작자 · 라이선스"),"photo_license","photo_license_url"?,"photo_author"?,"photo_page"?,"photo_src":"tourapi|commons","no_modify"?}
@@ -16,6 +16,9 @@ import glob, gzip, json, os, re, sys, time, urllib.parse
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import pop_build as PB  # noqa: E402
 
+# (11/18, 223기) www.wikidata.org/w/api.php · commons.wikimedia.org/w/api.php · ko.wikipedia.org/w/api.php 는 robots.txt 가 User-agent * 에 Disallow /w/
+#  → 기본은 부르지 않는다(TourAPI 사진만). Commons 사진은 process 의 place-desc 단계 scripts/place_names.py 가 QLever(SDC 라이선스·저작자)로 photos-wd 층을 만든다.
+WIKI_API = os.environ.get('TL_WIKI_API') == '1'
 LIC_OK = re.compile(r'^(cc0( 1\.0)?|cc[ -]by([ -]\d\.\d)?( [a-z-]+)?|cc[ -]by-sa([ -]\d\.\d)?( [a-z-]+)?)$', re.I)
 QID = re.compile(r'(?:^|:)(Q\d+)$')
 STRIP = re.compile(r'[\s　・·\-‐－—.,()（）「」『』&＆\'’]+')
@@ -108,7 +111,7 @@ def build(region, tiles, hours_dir=None, kto_dir=None, top=20000):
     for fn in tiles:
         d = PB.load_pack(fn)
         rep['rows'] += d['n']
-        cand = {i: (t, lim) for i, t, lim, _ in PB.candidates(d)}
+        cand = {i: (t, lim) for i, t, lim, _ in PB.candidates(d)} if WIKI_API else {}
         wd = PB.wikidata([t for t, _ in cand.values()]) if cand else {}
         for i in range(d['n']):
             rid = d['id'][i]
@@ -127,7 +130,7 @@ def build(region, tiles, hours_dir=None, kto_dir=None, top=20000):
             if q:
                 seeds[rid] = (q, d['s'][i] if isinstance(d.get('s'), list) else 0, d['_lat'][i], d['_lon'][i])
     # 요청 수를 묶어 두려고 점수 높은 순 top 개만(한 지역 20000 = wbgetentities 400회 + imageinfo 400회 안쪽)
-    pick = sorted(seeds.items(), key=lambda kv: -kv[1][1])[:top]
+    pick = sorted(seeds.items(), key=lambda kv: -kv[1][1])[:top] if WIKI_API else []
     rep['seeds'] = len(pick)
     p18 = p18_by_qid([v[0] for _, v in pick])
     ph = PB.photos(sorted(set(p18.values())))

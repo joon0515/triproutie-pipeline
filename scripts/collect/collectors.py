@@ -810,6 +810,9 @@ def photos(ctx):
         raise Stop('NO_GCS')
     bucket = ctx.store.root[5:].split('/', 1)[0]
     region, base = ctx.shard, f'gs://{bucket}/places/v1'
+    if region != 'korea' and os.environ.get('TL_WIKI_API') != '1':
+        # (11/18) 위키미디어 /w/api.php 는 robots Disallow → photo_layer 는 TourAPI(한국)만. 다른 지역 Commons 사진은 place-desc 단계 photos-wd(QLever SDC)
+        ctx.note(f'{region}: Commons 사진은 place-desc 단계(photos-wd)로 — 건너뜀'); return
     ver = (_gs_json(f'{base}/manifest.json') or {}).get('version')
     man = (_gs_json(f'{base}/{ver}/regions/{region}.json') or _gs_json(f'{base}/{ver}/parts/{region}.json')) if ver else None
     files = [t.get('file') for t in (man or {}).get('tiles') or [] if isinstance(t.get('file'), str) and t['file'].startswith('w-') and '/' not in t['file']]

@@ -117,7 +117,7 @@ class TestRun(unittest.TestCase):
         h = FakeHttp(self.data)
         (rep, last), out = self.go(h)
         self.assertEqual(sorted(h.asked), ['Q183536', 'Q287165', 'Q626162'])
-        files = sorted(os.listdir(out))
+        files = sorted(f for f in os.listdir(out) if f.startswith('desc-'))  # names-wd-*·photos-wd-* 는 place_names(223기) — test_place_names.py
         self.assertIn('desc-kto.json.gz', files); self.assertIn('desc-tw.json.gz', files)
         wd = {}
         for f in files:
