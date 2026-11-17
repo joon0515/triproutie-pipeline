@@ -225,6 +225,21 @@ class Flow(unittest.TestCase):
         errs = P.gate({'col_JP_0.json.gz': lay}, {}, {'JP': 1})
         self.assertTrue(any('글자 깨짐' in e for e in errs)); self.assertTrue(any('금지 도메인' in e for e in errs))
 
+    def test_publish_scrubs_newly_forbidden_links(self):
+        # 금지 목록이 나중에 늘어난 경우(PR #23 블로그 도메인 등): 예전 층에 남은 링크 때문에 게시가 멈추지 않고, 링크 칸만 비워 게시한다
+        d = tempfile.mkdtemp(); store = K.Store(os.path.join(d, 'store'))
+        rows = [{'id': 'x:1', 'nm': '浅草寺', 'lat': 35.7148, 'lon': 139.7967, 'src': 'x', 'lic': 'CC0', 'c': 'temple', 'url': 'https://www.youtube.com/watch?v=a'},
+                {'id': 'x:2', 'nm': '東京タワー', 'lat': 35.6586, 'lon': 139.7454, 'src': 'x', 'lic': 'CC0', 'c': 'sight', 'url': 'https://www.tokyotower.co.jp/'}]
+        store.put_json('processed/out/r1/col_JP_0.json.gz', P.to_layer('JP', rows))
+        store.put_json('processed/latest.json', {'run': 'r1', 'files': ['col_JP_0.json.gz'], 'paths': {'col_JP_0.json.gz': 'processed/out/r1/col_JP_0.json.gz'}, 'counts': {'JP': 2}})
+        self.assertTrue(any('금지 도메인' in e for e in P.gate({'f': store.get_json('processed/out/r1/col_JP_0.json.gz')}, {}, {'JP': 2})))
+        cur = os.path.join(d, 'cur'); os.makedirs(cur)
+        tag, msg = P.publish(store, 'bucket', '', dry_run=True, tools=os.path.join(HERE, '..', 'tools'), current_dir=cur)
+        self.assertTrue(tag, msg)
+        self.assertTrue(any('금지 도메인 링크 지움' in m and '1행' in m for m in msg), msg)
+        j = {'url': [None, 'https://www.tokyotower.co.jp/'], 'dataset': 'places'}
+        self.assertEqual(P.scrub_forbidden(j), 0)
+
     def test_fail_streak_alert(self):
         d = tempfile.mkdtemp(); store = K.Store(d)
         for _ in range(3):

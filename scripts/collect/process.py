@@ -674,6 +674,19 @@ def to_layer(cc, rows):
 
 
 # ---------- 3단: 품질 관문 + 게시 ----------
+def scrub_forbidden(j, fix=False):
+    """수집 층(dict)의 url 가운데 금지 도메인인 것 수. fix 면 그 칸을 None 으로 비운다(장소 행은 남김 — 1단 partition 이 받을 때 하는 일과 같음)."""
+    if not isinstance(j, dict) or j.get('dataset') != 'places' or not isinstance(j.get('url'), list):
+        return 0
+    n = 0
+    for i, u in enumerate(j['url']):
+        if u and forbidden(u):
+            n += 1
+            if fix:
+                j['url'][i] = None
+    return n
+
+
 def gate(layers, prev_counts, counts):
     """layers = {파일: dict}. 실패 사유 list(비면 통과)."""
     return gate_stream(list(layers), layers.__getitem__, prev_counts, counts)
@@ -741,7 +754,7 @@ def publish(store, bucket, kms_key, dry_run=False, tools='tools', current_dir=No
     paths = layer_paths(latest)
     files = list(latest['files'])
     ld = tempfile.mkdtemp(dir=os.environ.get('RUNNER_TEMP') or None)
-    entries = {}
+    entries, scrubbed = {}, {}
 
     def load(f):
         p = os.path.join(ld, f)
@@ -751,9 +764,16 @@ def publish(store, bucket, kms_key, dry_run=False, tools='tools', current_dir=No
         if not os.path.exists(p):
             return {}
         try:
+            j = json.loads(gzip.decompress(open(p, 'rb').read()))
+            n = scrub_forbidden(j, fix=True)  # 금지 목록이 늘면 예전에 받은 링크가 층에 남는다 → 링크 칸만 비우고 Storage 의 층 파일도 고쳐 둔다
+            if n and f not in entries:
+                scrubbed[f] = n
+                open(p, 'wb').write(gzip.compress(dumps(j).encode(), 6))
+                if not dry_run:
+                    store.push([p], paths[f].rsplit('/', 1)[0])
             if f not in entries:
                 entries[f] = PL.describe(p)
-            return json.loads(gzip.decompress(open(p, 'rb').read()))
+            return j
         except ValueError as e:
             return {'_err': str(e)}
         finally:
@@ -793,7 +813,8 @@ def publish(store, bucket, kms_key, dry_run=False, tools='tools', current_dir=No
             subprocess.run(['gcloud', 'storage', 'rm', '-r', '-q', f"gs://{bucket}/places/v1/{h['tag']}/"], capture_output=True)
         hist = [h for h in hist if h not in old]
     store.put_json('published/history.json', hist[-20:])
-    return tag, r.stdout.splitlines()[:3]
+    note = [f'금지 도메인 링크 지움: 층 파일 {len(scrubbed)}개 · {sum(scrubbed.values())}행'] if scrubbed else []
+    return tag, note + r.stdout.splitlines()[:3]
 
 
 def _summary(lines):
