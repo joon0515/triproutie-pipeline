@@ -30,9 +30,9 @@
   },
   "fsq_os_places": {
    "failing": 0,
-   "ok_today": 21,
-   "rows_last": 88875578,
-   "shards": 143
+   "ok_today": 24,
+   "rows_last": 89117634,
+   "shards": 146
   },
   "holidays_lib": {
    "failing": 0,
@@ -58,6 +58,12 @@
    "rows_last": 1268,
    "shards": 4
   },
+  "overture_places": {
+   "failing": 0,
+   "ok_today": 0,
+   "rows_last": 0,
+   "shards": 1
+  },
   "wikidata_official": {
    "failing": 0,
    "ok_today": 0,
@@ -65,5 +71,5 @@
    "shards": 1
   }
  },
- "updated": "2026-11-17T06:33Z"
+ "updated": "2026-11-17T07:21Z"
 }
