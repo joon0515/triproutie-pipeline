@@ -1,0 +1,29 @@
+# 지킴이 CI — PR·main push 마다(+주 1회). 비밀값·클라우드 권한 없음(읽기 전용 토큰).
+#  1) 모든 단위 시험(네트워크·키 없음)  2) 라이선스·출처 표기 검사(scripts/guards/license_check.py)
+# 산출 데이터는 만들지 않는다. 실패는 failure-digest 가 이슈 하나에 모은다.
+name: guards
+on:
+  pull_request: {}
+  push:
+    branches: [main]
+  schedule:
+    - cron: "11 4 * * 1"     # 월요일 UTC 04:11 — 예외 만료일 확인용
+  workflow_dispatch: {}
+permissions:
+  contents: read
+concurrency:
+  group: guards-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: {python-version: "3.12"}
+      - run: pip install -q pyyaml holidays "duckdb==1.*" >/dev/null
+      - name: 단위 시험 전부
+        run: python3 -W ignore -m unittest discover -s tests 2>&1 | tail -25
+      - name: 라이선스·출처 표기
+        run: python3 scripts/guards/license_check.py

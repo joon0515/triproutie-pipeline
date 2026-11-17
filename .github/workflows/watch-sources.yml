@@ -1,0 +1,41 @@
+# 출처 약관 변경·깨진 링크 감시 — 주 1회(+수동). 본문은 저장하지 않고 해시·길이만 Storage collect/v1/guards/watch.json 에.
+# 바뀌었거나 깨진 것이 있을 때만 이슈 '출처 약관·링크 감시' 하나에 댓글로 누적한다(메일 폭주 없음).
+name: watch-sources
+on:
+  schedule:
+    - cron: "29 2 * * 3"     # 수요일 UTC 02:29
+  workflow_dispatch: {}
+permissions:
+  contents: read
+  id-token: write
+  issues: write
+concurrency:
+  group: watch-sources
+  cancel-in-progress: false
+env:
+  GCS_BUCKET: ${{ vars.GCS_BUCKET || 'trip-mate-0vum9k.firebasestorage.app' }}
+jobs:
+  watch:
+    if: github.repository == 'joon0515/triproutie-pipeline' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+      - uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ vars.GCP_WIF_PROVIDER || 'projects/222914945328/locations/global/workloadIdentityPools/github-pool/providers/github-provider' }}
+          service_account: ${{ vars.GCP_SA_EMAIL || 'pipeline-uploader@trip-mate-0vum9k.iam.gserviceaccount.com' }}
+      - uses: google-github-actions/setup-gcloud@v2
+      - uses: actions/setup-python@v5
+        with: {python-version: "3.12"}
+      - run: pip install -q pyyaml >/dev/null
+      - name: watch
+        run: python3 scripts/guards/watch_sources.py --state "gs://$GCS_BUCKET/collect/v1/guards/watch.json" --md "$RUNNER_TEMP/w.md" >> "$GITHUB_STEP_SUMMARY"
+      - name: 바뀜·깨짐이 있으면 이슈 하나에 누적
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          grep -q '^### ' "$RUNNER_TEMP/w.md" || { echo "변화 없음"; exit 0; }
+          T="출처 약관·링크 감시"
+          N="$(gh issue list --state open --search "\"$T\" in:title" --json number,title -q "[.[]|select(.title==\"$T\")][0].number")"
+          if [ -z "$N" ]; then gh issue create --title "$T" --body-file "$RUNNER_TEMP/w.md"; else gh issue comment "$N" --body-file "$RUNNER_TEMP/w.md"; fi

@@ -1,0 +1,6 @@
+# 라이선스 검사(scripts/guards/license_check.py)의 '알고 있는 예외'. 이유·만료일 필수 — 만료일이 지나면 검사가 다시 실패한다.
+exceptions:
+  - id: wikivoyage
+    rule: share_alike_in_main
+    reason: "CC BY-SA 4.0 인데 수집 층(col_*)에 다른 출처와 합쳐 실린다. 사실값(이름·좌표·시간·요금·공식 주소)만 싣고 본문은 싣지 않지만, 대표 지시는 'share-alike 자료는 분리 층으로만'. 분리 층으로 옮기거나 끌 때까지의 임시 예외"
+    until: "2026-12-17"
