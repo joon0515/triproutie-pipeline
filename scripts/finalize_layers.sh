@@ -14,8 +14,14 @@ H="$RUNNER_TEMP/hours_merge"; mkdir -p "$H/osm" "$H/col"
 gcloud storage cp -q "gs://$GCS_BUCKET/places/v1/$TAG/hours_src/*.json.gz" "$H/osm/" >/dev/null 2>&1 || true
 RUN=$(gcloud storage cat "gs://$GCS_BUCKET/collect/v1/processed/latest.json" 2>/dev/null | python3 -c "import json,sys;print(json.load(sys.stdin).get('run',''))" || true)
 if [ -n "$RUN" ]; then gcloud storage cp -q "gs://$GCS_BUCKET/collect/v1/processed/out/$RUN/col_*.json.gz" "$H/col/" >/dev/null 2>&1 || true; fi
-rm -f "$W"/hours-*.json.gz   # 옛 합본은 버리고 원본에서 다시 합친다(두 번 합치지 않게)
-python3 tools/hours_merge.py "$H/osm" "$H/col" "$W" | tail -1 || echo "hours merge skipped"
+# (11/17) 이 판에 OSM 원본이 없으면(수집 게시 c… 판, PR #9 전에 만든 판) 판과 상관없는 최신 사본(places/v1/hours_src/)을 쓴다.
+if ! ls "$H"/osm/hours-*.json.gz >/dev/null 2>&1; then gcloud storage cp -q "gs://$GCS_BUCKET/places/v1/hours_src/*.json.gz" "$H/osm/" >/dev/null 2>&1 || true; fi
+if ls "$H"/osm/hours-*.json.gz >/dev/null 2>&1 || ! ls "$W"/hours-*.json.gz >/dev/null 2>&1; then
+  rm -f "$W"/hours-*.json.gz   # 옛 합본은 버리고 원본에서 다시 합친다(두 번 합치지 않게)
+  python3 tools/hours_merge.py "$H/osm" "$H/col" "$W" | tail -1 || echo "hours merge skipped"
+else
+  echo "hours: OSM 원본 없음 — 지난 합본을 그대로 둔다(다시 합치면 OSM 영업시간이 빠진다)"
+fi
 rm -rf "$H"
 N=$(ls "$W"/*.json.gz | wc -l)
 python3 scripts/publish_layers.py --tag "$TAG" --dir "$W" --bucket "$GCS_BUCKET" --kms-key "$KMS_SIGN_KEY" --tools tools | tail -1

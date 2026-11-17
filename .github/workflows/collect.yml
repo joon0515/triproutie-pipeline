@@ -132,3 +132,30 @@ jobs:
           last=$(gh run list -w tourapi_daily.yml -L 1 --json createdAt -q '.[0].createdAt' 2>/dev/null)
           lastk=$( [ -n "$last" ] && TZ=Asia/Seoul date -d "$last" +%F || echo none)
           if [ "$lastk" != "$today" ] && [ "$h" -ge 0 ]; then gh workflow run tourapi_daily.yml --ref main && echo "tourapi 걸음"; else echo "tourapi 오늘 이미 실행($lastk)"; fi
+      - name: places-layers 주 1회 merge · 월 1회 full all (예약 실행이 빠질 때 보충, 끄려면 저장소 변수 LAYERS_CHAIN_OFF=1)
+        if: ${{ vars.LAYERS_CHAIN_OFF != '1' }}
+        run: |
+          # 사진·영업시간 층은 places-layers 가 돌아야 게시된다. 진행 중인 실행이 있으면 걸지 않는다.
+          runs=$(gh run list -w places-layers.yml -L 40 --json displayTitle,createdAt,status 2>/dev/null || echo '[]')
+          dec=$(python3 - "$runs" <<'PY'
+          # 판단(시험: tests/test_layers_chain.py 가 이 토막을 그대로 꺼내 돌린다). 이 job 은 checkout 을 하지 않아 스크립트를 여기 둔다.
+          import datetime, json, os, sys
+          runs = json.loads(sys.argv[1] or '[]')
+          now = datetime.datetime.fromisoformat(os.environ.get('NOW') or datetime.datetime.now(datetime.timezone.utc).isoformat())
+          at = lambda r: datetime.datetime.fromisoformat(r['createdAt'].replace('Z', '+00:00'))
+          is_full = lambda r: r.get('displayTitle', '').startswith(('places-layers full all', 'places-layers 40 17 2'))
+          if any(r.get('status') != 'completed' for r in runs):
+              print('skip: 실행 중인 places-layers 가 있음')
+          elif (now.day, now.hour) >= (2, 19) and not any(is_full(r) and (at(r).year, at(r).month) == (now.year, now.month) for r in runs):
+              print('full: 이번 달 전 지역 빌드가 아직 없음')   # 성공·실패와 상관없이 한 달에 한 번만 건다
+          elif not any((now - at(r)).days < 7 for r in runs):
+              print('merge: 최근 7일 실행 없음')
+          else:
+              print('skip: 최근 실행 있음')
+          PY
+          )
+          echo "places-layers: $dec"
+          case "$dec" in
+            full*)  gh workflow run places-layers.yml --ref main -f mode=full -f groups=all ;;
+            merge*) gh workflow run places-layers.yml --ref main -f mode=merge ;;
+          esac

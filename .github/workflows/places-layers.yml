@@ -2,8 +2,10 @@
 # places-world.yml 과 같은 방식: 수동 실행(workflow_dispatch)만, WIF(OIDC) 로그인, KMS Ed25519 서명, 산출물은 GitHub(Release·artifact·cache·로그)에 남기지 않음.
 # (11/15) 자동 실행: 매월 2일 = 전 지역(all — 태국·라오스·프랑스 포함 29개) OSM 다시 받기 + 영업시간 층(OSM opening_hours → 타일 id) 원본 만들기,
 #   매주 월요일 = merge 만(OSM 은 그대로, 세계 수집의 공식 사이트 JSON-LD 영업시간·사진 층을 최신 판에 다시 합쳐 서명). 수동 실행은 그대로.
+# (11/17) GitHub 예약 실행은 자주 빠진다(11/16 월요일 merge 미실행). collect.yml 의 chain 이 같은 주기(주 1회 merge·월 1회 full all)를 보충한다.
 # 인기 층(pop_*.json.gz — 위키 조회수)은 여기서 만들지 않는다(위키미디어 요청 제한 때문에 따로 천천히 만든 것을 layers_extra/ 로 넣는다 — README).
 name: places-layers
+run-name: "places-layers ${{ inputs.mode || github.event.schedule || 'full' }} ${{ inputs.groups || '' }}"   # 연쇄(collect.yml chain)가 full·merge 실행을 가려 본다
 on:
   schedule:
     - cron: "40 17 2 * *"     # 매월 2일 UTC 17:40(KST 3일 02:40) — 전 지역 다시 만들기(Geofabrik 예절: 월 1회)
