@@ -24,9 +24,9 @@
   },
   "commons_photos": {
    "failing": 0,
-   "ok_today": 2,
+   "ok_today": 3,
    "rows_last": 11791,
-   "shards": 10
+   "shards": 11
   },
   "fsq_os_places": {
    "failing": 0,
@@ -47,9 +47,9 @@
    "shards": 8
   },
   "official_sites": {
-   "failing": 0,
-   "ok_today": 3,
-   "rows_last": 76,
+   "failing": 1,
+   "ok_today": 5,
+   "rows_last": 79,
    "shards": 6
   },
   "open_dataset": {
@@ -83,5 +83,5 @@
    "shards": 10
   }
  },
- "updated": "2026-11-18T01:43Z"
+ "updated": "2026-11-18T03:10Z"
 }
