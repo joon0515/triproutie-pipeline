@@ -60,9 +60,9 @@
   },
   "overture_places": {
    "failing": 0,
-   "ok_today": 6,
-   "rows_last": 8305410,
-   "shards": 13
+   "ok_today": 7,
+   "rows_last": 10202611,
+   "shards": 14
   },
   "taiwan_tourism": {
    "failing": 0,
@@ -83,5 +83,5 @@
    "shards": 10
   }
  },
- "updated": "2026-11-18T17:22Z"
+ "updated": "2026-11-18T18:51Z"
 }
