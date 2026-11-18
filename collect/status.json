@@ -24,9 +24,9 @@
   },
   "commons_photos": {
    "failing": 0,
-   "ok_today": 10,
+   "ok_today": 11,
    "rows_last": 11791,
-   "shards": 18
+   "shards": 19
   },
   "fsq_os_places": {
    "failing": 0,
@@ -83,5 +83,5 @@
    "shards": 10
   }
  },
- "updated": "2026-11-18T09:22Z"
+ "updated": "2026-11-18T10:23Z"
 }
