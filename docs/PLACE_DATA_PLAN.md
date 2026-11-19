@@ -71,7 +71,14 @@
 - CUR_1117c 확인: 일정 지도 = **MapLibre GL 4.7.1 + OpenFreeMap 'liberty' 타일**(비구글). 구글 장소로 만든 여행에는 3D 지도를 띄우지 않는 규칙(TL-G-3)이 이미 있다.
 - Google 정책(Places API Policies, 2026-11-18 확인): "Places API results displayed on a map must be shown on a Google Map" · "When displaying Places API data without a Google Map, you must include the Google logo"(공간이 좁으면 'Google Maps' 글자) · place ID 는 무기한 저장 가능 · 사진·리뷰는 받은 작성자 표기를 그대로.
 - 그래서: 장소 상세 **시트(지도 없음)**에서, 우리 자료에 없는 칸만, 'Google Maps' 표기와 함께 보여 준다. 같은 화면 묶음에 MapLibre 지도가 있으면 부르지 않는다. 결과는 화면이 열린 동안 메모리에만. → 앱 준비물 `kit_1114/CC_bench/place_detail252/`.
-- 245기 `tl_rec245.dart` 의 `tlLiveAllowed`(Google 은 Google 지도 위에서만)는 정책보다 좁아 우리 앱에선 영원히 꺼진다. place_detail252 는 정책 문구대로(지도 없는 시트 + 표기) 연다 — 둘 중 하나로 맞추는 것은 비서실 결정.
+- **비서실 결정(11/19)**: 판정은 하나(`tlLiveGoogleDisplayOk`, tl_pd252). Google 값은 **지도가 없는 상세 시트에서만**, 'Google Maps' 표기와 함께. 이 시트를 MapLibre 지도 위나 지도와 같은 화면에 그리지 않는다. 245기 `tlLiveAllowed` 도 같은 함수를 쓰게 고치는 ops 를 냈다(place_detail252/ops_rec245).
+- 근거 — Google Maps Platform 공식 문서 'Policies for Places API'(https://developers.google.com/maps/documentation/places/web-service/policies, 2026-11-18 확인):
+  - "Places API results displayed on a map must be shown on a Google Map"
+  - "When displaying Places API data without a Google Map, you must include the Google logo"
+  - "Attribution should take the form of the Google Maps logo whenever possible." · "In cases where space is limited, the text Google Maps is acceptable."
+  - "You can therefore store place ID values indefinitely."
+  - "You must retrieve and display attributions for place details, photos, and reviews"
+  - 필드별 SKU(https://developers.google.com/maps/documentation/places/web-service/data-fields): regularOpeningHours·rating·userRatingCount·websiteUri·nationalPhoneNumber = Place Details Enterprise, photos = Essentials (IDs Only) 칸(사진 받기는 Place Details Photos), editorialSummary = Enterprise + Atmosphere.
 - 우리 장소(FSQ·Overture)에는 Google place_id 가 없다. 서버 함수에 'id 찾기'(Text Search Essentials IDs Only — 공식 가격표상 무료·무제한)를 더하면 place_id 만 저장해 둘 수 있다(정책상 무기한 허용). 서버 팀 몫.
 
 ## 6. 비용 — 공식 가격표(Google Maps Platform core services pricing, 2026-11-18 확인)
@@ -89,7 +96,11 @@
 | 1만 명 | 기기 상한 15회(최악) | 150,000 | 4,050달러 | — |
 | 10만 명 | 1회 | 100,000 | 2,700달러 | 약 81,000달러(10만 건 넘는 몫은 16·5.6달러 단가로 조금 낮음) |
 | 10만 명 | 기기 상한 15회(최악) | 1,500,000 | 40,500달러 | — |
-**권고**: 서버 함수에 하루 예산 상한을 둔다(예: 하루 30달러 = 약 1,100회, 월 900달러). 상한에 닿으면 우리 자료 + '정보 없음 · 제보하기'. 우선 도시·명소·우리 영업시간이 빈 곳부터 쓴다. 기기 상한은 앱 코드 `kTlPd252DailyCap = 15`. **금액 승인은 대표.**
+**비서실 결정(11/19) — 기본값은 '월 무료 사용량 안에서만'(추가 비용 0원)**:
+- 상수 `kTlPd252FreeMonthly = {details_enterprise: 1000, details_photos: 1000}`(위 공식 가격표). 서버가 결제 계정 전체로 이번 달 호출 수를 세고(`liveBudget`), 앱과 서버가 같은 판정으로 한도를 넘으면 실시간을 끄고 우리 자료만 보인다. 집계를 모르면 부르지 않는다.
+- 하루 추가 예산은 원격 설정 `config/live_budget.google_extra_daily_usd`(기본 0). 대표가 나중에 올리면 그 금액 안에서만 무료 한도를 넘겨 부른다(예: 30달러 = Enterprise 약 1,500회).
+- 호출 줄이기: 우리 자료에 영업시간이나 사진이 있으면 부르지 않는다. 필드 마스크는 빈 칸만(regularOpeningHours·websiteUri·nationalPhoneNumber·rating·userRatingCount·photos 중). 사진 SKU 한도가 차면 photos 칸을 빼고 부른다. 기기 하루 15회.
+- 무료 한도만으로는 월 약 1,000번 상세(하루 33번 꼴)라 위 표의 사용자 수에서는 대부분 우리 자료 + '정보 없음 · 제보하기'로 보인다 — 그래서 공개 데이터 채움(3절)과 제보(8절 ③)가 본선이다.
 
 ## 7. 국내 공식 API(카카오·네이버) — 정책 문서만 읽음, 수집 없음
 | 공급자 | 확인한 것 | 쓸 수 있는 범위 | 대표 확인 |
