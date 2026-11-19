@@ -66,5 +66,48 @@ class T(unittest.TestCase):
         self.assertEqual(rows['city:paris']['photo_license'], 'CC BY-SA 4.0')
 
 
+    def test_geo_match_and_false_positives(self):
+        import photo_pri as PP
+        box = [135.35, 34.55, 135.65, 34.8]
+        o = 100 / 111320.0
+        items = [['Q1', 34.6873, 135.5259, 80, WD.FILEPATH + 'Castle.jpg', ['Osaka Castle', '大阪城']],
+                 ['Q2', 34.6600, 135.5000, 5, WD.FILEPATH + 'Park.jpg', ['公園']],
+                 ['Q3', 34.7000, 135.4000, 9, WD.FILEPATH + 'A.jpg', ['Umeda Sky Building']],
+                 ['Q4', 34.7000 + 0.2 * o, 135.4000, 9, WD.FILEPATH + 'B.jpg', ['Umeda Sky Building']]]
+        d = {'id': ['fsq:castle', 'fsq:far', 'fsq:cafe', 'fsq:park2', 'fsq:twin', 'Q9', 'fsq:short'],
+             '_lat': [34.6875, 34.6873 + 1.5 * o, 34.6873, 34.6601, 34.7001, 34.6873, 34.6873],
+             '_lon': [135.5259, 135.5259, 135.5260, 135.5000, 135.4000, 135.5259, 135.5259],
+             'nm': ['大阪城', 'Osaka Castle', 'Osaka Castle Cafe & Bar Rooftop', '公園', 'Umeda Sky Building', 'Osaka Castle', '大阪'],
+             'en': [None, None, None, None, None, None, None]}
+        got = PP.geo_match([d], items, box)
+        self.assertEqual(got.get('fsq:castle'), ('Q1', WD.FILEPATH + 'Castle.jpg'))  # 다국어 별칭 · 30m
+        self.assertNotIn('fsq:far', got)      # 150m — 거리 넘음
+        self.assertNotIn('fsq:cafe', got)     # 이름이 길게 다름(닮음 < 0.8) — 가게를 명소로 잘못 붙이지 않음
+        self.assertIn('fsq:park2', got)       # 같은 이름 · 가까움
+        self.assertNotIn('fsq:twin', got)     # 같은 점수의 서로 다른 항목 두 개 → 버림
+        self.assertNotIn('Q9', got)           # QID 행은 P18 길 몫
+        self.assertNotIn('fsq:short', got)    # '大阪' ⊂ '大阪城' 이지만 짧은 쪽 2글자 → 0
+
+    def test_city_fallback_files(self):
+        import photo_pri as PP
+        a, b = WD.FILEPATH + 'NonFree.jpg', WD.FILEPATH + 'Banner.jpg'
+        it = {'paris': {'q': 'Q90', 'p': a, 'files': [a, b]}}
+        cc = {a: ['2026-11-17', {}], b: ['2026-11-17', {'lic': 'Q6938433', 'by': 'B'}]}
+        rows, files = PP.city_rows([{'key': 'paris', 'bbox': [2.1, 48.7, 2.6, 49.0]}], {}, cc, None, 0, items=it, now_day='2026-11-20')
+        self.assertEqual(rows['city:paris']['photo_file'], 'Banner.jpg')
+        e = WD.city_entry([400, 'Q90', a, [a, b]], [[5, 'Q7', 'X', ['X']]], {'Q2': ['Q2', 0, 0, 900, 'L', ['l']], 'Q3': ['Q3', 0, 0, 1, 'M', ['m']]})
+        self.assertEqual(e['files'], [a, b, 'X', 'L', 'M'])
+
+    def test_geo_item(self):
+        WD.city_setup([{'key': 'osaka', 'bbox': [135.35, 34.55, 135.65, 34.8]}])
+        ent = {'id': 'Q1', 'labels': {'en': {'value': 'Osaka Castle'}, 'ja': {'value': '大阪城'}}, 'aliases': {'ja': [{'value': '大坂城'}]}, 'sitelinks': {'a': {}},
+               'claims': {'P625': [{'mainsnak': {'datavalue': {'value': {'latitude': 34.6873, 'longitude': 135.5259}}}}],
+                          'P18': [{'mainsnak': {'datavalue': {'value': 'C.jpg'}}}]}}
+        keys, g = WD.geo_item(ent)
+        self.assertEqual((keys, g[0], g[4], g[5]), (['osaka'], 'Q1', WD.FILEPATH + 'C.jpg', ['Osaka Castle', '大坂城', '大阪城']))
+        ent['claims']['P625'][0]['mainsnak']['datavalue']['value']['latitude'] = 10.0
+        self.assertIsNone(WD.geo_item(ent))  # 상자 밖
+
+
 if __name__ == '__main__':
     unittest.main()

@@ -67,12 +67,8 @@ def city_hit(ent, names):
         v = ((c.get('mainsnak') or {}).get('datavalue') or {}).get('value')
         if isinstance(v, dict) and isinstance(v.get('latitude'), (int, float)) and c.get('rank') != 'deprecated':
             pts.append((v['latitude'], v['longitude']))
-    p18 = []
-    for c in cl.get('P18') or []:
-        v = ((c.get('mainsnak') or {}).get('datavalue') or {}).get('value')
-        if isinstance(v, str) and v and c.get('rank') != 'deprecated':
-            p18.append((0 if c.get('rank') == 'preferred' else 1, FILEPATH + urllib.parse.quote(v, safe='')))
-    if not pts or not p18:
+    files = image_files(cl)
+    if not pts or not files:
         return []
     sl = len(ent.get('sitelinks') or {})
     out = []
@@ -80,8 +76,58 @@ def city_hit(ent, names):
         for k in CITY_OF.get(n, ()):
             b = CITY_BOX[k]
             if any(b[0] <= lo <= b[2] and b[1] <= la <= b[3] for la, lo in pts):
-                out.append((k, [sl, ent.get('id'), sorted(p18)[0][1]]))
+                out.append((k, [sl, ent.get('id'), files[0], files]))
     return out
+
+
+IMG_PROPS = ('P18', 'P948', 'P2716')  # (270기) 대표 사진 · 위키여행 배너 · 콜라주 — 앞 것이 먼저. 판정에서 비자유면 다음 후보
+
+
+def image_files(cl, props=IMG_PROPS):
+    """claims → 사진 파일 주소 목록(속성 순 · preferred 먼저 · 중복 없음, deprecated 제외)."""
+    out = []
+    for pi, pr in enumerate(props):
+        for c in cl.get(pr) or []:
+            v = ((c.get('mainsnak') or {}).get('datavalue') or {}).get('value')
+            if isinstance(v, str) and v and c.get('rank') != 'deprecated':
+                out.append((pi, 0 if c.get('rank') == 'preferred' else 1, FILEPATH + urllib.parse.quote(v, safe='')))
+    return list(dict.fromkeys(u for _, _, u in sorted(out)))
+
+
+GEO_LANGS = ('en', 'ja', 'ko', 'zh', 'zh-hans', 'zh-hant', 'zh-tw', 'zh-cn', 'fr', 'th', 'vi', 'id', 'es', 'it', 'cs', 'tr', 'ar', 'de', 'tl', 'ms')
+
+
+def geo_item(ent):
+    """(270기) 해외 타일 행 이름+좌표 맞추기용: 우선 도시 상자 안 좌표 + P18 이 있는 항목 → [(도시 key…)], [QID, 위도, 경도, sitelinks, P18, 이름들] | None."""
+    cl = ent.get('claims') or {}
+    if any(((c.get('mainsnak') or {}).get('datavalue') or {}).get('value', {}).get('id') == DISAMBIG for c in cl.get('P31') or []):
+        return None
+    pt = None
+    for c in cl.get('P625') or []:
+        v = ((c.get('mainsnak') or {}).get('datavalue') or {}).get('value')
+        if isinstance(v, dict) and isinstance(v.get('latitude'), (int, float)) and isinstance(v.get('longitude'), (int, float)) and c.get('rank') != 'deprecated':
+            pt = (v['latitude'], v['longitude'])
+            break
+    if not pt:
+        return None
+    keys = [k for k, b in CITY_BOX.items() if b[0] <= pt[1] <= b[2] and b[1] <= pt[0] <= b[3]]
+    if not keys:
+        return None
+    files = image_files(cl, ('P18',))
+    if not files:
+        return None
+    names = set()
+    for t in GEO_LANGS:
+        v = (ent.get('labels') or {}).get(t)
+        if isinstance(v, dict) and v.get('value'):
+            names.add(v['value'])
+        for a in (ent.get('aliases') or {}).get(t) or []:
+            if isinstance(a, dict) and a.get('value'):
+                names.add(a['value'])
+    names = sorted(n[:80] for n in names)[:24]
+    if not names:
+        return None
+    return keys, [ent.get('id'), round(pt[0], 6), round(pt[1], 6), len(ent.get('sitelinks') or {}), files[0], names]
 
 
 def log(m):
@@ -302,6 +348,15 @@ class Lines:
                             self.out['_city'][k] = v
                 except ValueError:
                     self.bad += 1
+        if CITY_BOX and b'"P625"' in ln and b'"P18"' in ln:
+            try:
+                g = geo_item(json.loads(ln.rstrip(b',\r\n ')))
+            except ValueError:
+                g = None
+                self.bad += 1
+            if g:
+                for k in g[0]:
+                    self.out.setdefault('_geo', {}).setdefault(k, []).append(g[1])
         m = ID_RE.search(ln, 0, 120)
         if not m or int(m.group(1)) not in self.want:
             return
@@ -391,6 +446,19 @@ def meta_of(url=DUMP, opener=None):
     return {'url': url, 'size': size, 'date': day, 'eos_bit': eos[-1]}
 
 
+CITY_FILES_MAX = 12
+LANDMARKS = 5
+
+
+def city_entry(best, cands, geo):
+    """도시 하나 → {q, p, sl, files}. files = 가장 큰 항목의 P18·P948·P2716 → 다른 같은 이름 항목 → 상자 안 sitelinks 큰 명소 P18 순(270기)."""
+    files = list(best[3] if len(best) > 3 else [best[2]])
+    for v in sorted(cands, key=lambda x: -x[0]):
+        files += v[3] if len(v) > 3 else [v[2]]
+    files += [g[4] for g in sorted(geo.values(), key=lambda g: -g[3])[:LANDMARKS]]
+    return {'sl': best[0], 'q': best[1], 'p': best[2], 'files': list(dict.fromkeys(files))[:CITY_FILES_MAX]}
+
+
 def load_cities():
     j = json.load(open(os.path.join(HERE, '..', 'sources', 'priority_cities.json'), encoding='utf-8'))
     return [c for c in j['cities'] if isinstance(c.get('bbox'), list) and len(c['bbox']) == 4]
@@ -417,6 +485,8 @@ def main():
         qn = len(load_qids(store))
         m['qids'] = qn
         skip = (not a.force) and st.get('date') == m['date'] and st.get('qids', -1) >= qn and st.get('jobs') == a.jobs  # 조각이 빠졌으면 다시
+        if skip and ((store.get_json('processed/photos/city_items.json', None) or {}).get('cities') or {}).get('tokyo', {}).get('files') is None:
+            skip = False  # (270기 2차) 도시 후보 여러 장·상자 안 명소(geo_items)를 아직 모으지 않음
         if skip and (store.get_json('processed/photos/city_items.json', None) or {}).get('date') != m['date']:
             skip = False  # (270기) 도시 대표 항목을 이 덤프로 아직 고르지 않음
         if qn == 0:
@@ -441,21 +511,27 @@ def main():
             for ck, v in (o.pop('_city', None) or {}).items():  # 프로세스마다 고른 도시 항목 — 큰 쪽(sitelinks)만
                 if ck not in out.setdefault('_city', {}) or v[0] > out['_city'][ck][0]:
                     out['_city'][ck] = v
+            for ck, v in (o.pop('_geo', None) or {}).items():
+                out.setdefault('_geo', {}).setdefault(ck, []).extend(v)
             out.update(o)
             log(f"조각 {s['part']}/{parts}: 줄 {s['lines']:,} · 맞은 QID {s['hit']:,} · {s.get('mb', 0)} MB · {s['sec']}초")
         store.put_json(f"processed/desc/dump/{m['date']}/job-{a.job:03d}.json.gz", out)
         return 0
     # merge
     keys = [k for k in store.list(f"processed/desc/dump/{m['date']}/") if k.endswith('.json.gz')]
-    allc, cities = {}, {}
+    allc, cities, cands, geo = {}, {}, {}, {}
     for k in keys:
         part = store.get_json(k, {}) or {}
         for ck, v in (part.pop('_city', None) or {}).items():
+            cands.setdefault(ck, []).append(v)
             if ck not in cities or v[0] > cities[ck][0]:
                 cities[ck] = v
+        for ck, v in (part.pop('_geo', None) or {}).items():
+            geo.setdefault(ck, {}).update({x[0]: x for x in v})
         allc.update(part)
     store.put_json('processed/desc/wd_dump.json.gz', allc)
-    store.put_json('processed/photos/city_items.json', {'date': m['date'], 'cities': {k: {'sl': v[0], 'q': v[1], 'p': v[2]} for k, v in sorted(cities.items())}})
+    store.put_json('processed/photos/city_items.json', {'date': m['date'], 'cities': {k: city_entry(v, cands.get(k, []), geo.get(k, {})) for k, v in sorted(cities.items())}})
+    store.put_json('processed/photos/geo_items.json.gz', {'date': m['date'], 'cities': {k: sorted(v.values()) for k, v in sorted(geo.items())}})
     n_desc = sum(1 for v in allc.values() if v[1])
     n_lab = sum(1 for v in allc.values() if (v[2] or {}).get('l'))
     store.put_json('processed/desc/dump/state.json', {'date': m['date'], 'qids': m.get('qids'), 'jobs': len(keys), 'found': len(allc),

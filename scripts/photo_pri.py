@@ -316,12 +316,16 @@ def city_rows(cities, cstate, ccache, http_wd, budget_end, key=None, opener=None
         if st.get('src') == 'unsplash' and st.get('row'):
             rows[f'city:{k}'] = dict(st['row'], city=k)
         elif st.get('p'):
-            cc = ccache.get(st['p'])
-            v = PN.photo_row(st['p'], cc[1]) if cc else None
-            if v:
-                rows[f'city:{k}'] = dict(v, city=k, q=st.get('q'))
-            elif not cc:
-                files.append(st['p'])
+            # (270기 2차) 후보 여러 장(P18·P948 배너·P2716 콜라주·같은 이름 다른 항목·상자 안 명소 P18) 중 판정이 자유 라이선스+저작자인 첫 장
+            cands = list(dict.fromkeys([st['p']] + list((it or {}).get('files') or [])))
+            for u in cands:
+                cc = ccache.get(u)
+                v = PN.photo_row(u, cc[1]) if cc else None
+                if v:
+                    rows[f'city:{k}'] = dict(v, city=k, q=st.get('q'))
+                    break
+                if not cc:
+                    files.append(u)
     return rows, files
 
 
@@ -520,10 +524,14 @@ def run(store, bucket=None, tiles_dir=None, out=None, budget_min=50.0, http_wd=N
                     kto_stat[c['key']] = (nc, nm)
         except Exception as e:  # noqa: BLE001 — TourAPI 붙이기가 실패해도 P18 길은 계속(이름만 기록)
             log(f'TourAPI 붙이기 실패 {type(e).__name__}')
-        city_ids = {}
+        city_ids, geo_hits = {}, {}
+        geo = (store.get_json('processed/photos/geo_items.json.gz', None) or {}).get('cities') or {}
         try:
             for c in cities:
-                city_ids[c['key']] = city_tile_ids(tiles_for(c['bbox']), c['bbox'])
+                ts = tiles_for(c['bbox'])
+                city_ids[c['key']] = city_tile_ids(ts, c['bbox'])
+                if geo.get(c['key']):
+                    geo_hits.update(geo_match(ts, geo[c['key']], c['bbox']))
         except Exception as e:  # noqa: BLE001 — 측정 실패는 층 만들기를 막지 않는다(이름만)
             log(f'도시별 타일 행 측정 실패 {type(e).__name__}')
     finally:
@@ -564,6 +572,12 @@ def run(store, bucket=None, tiles_dir=None, out=None, budget_min=50.0, http_wd=N
     rows, by_city = pri_rows(prio, cache, pcache, ccache, keys_of)
     for rk, v in kto_rows.items():
         rows.setdefault(rk, v)  # P18(Commons)가 이미 있는 행이 먼저
+    geo_n = 0
+    for rk, (q, u) in sorted(geo_hits.items()):  # (270기 2차) 이름+좌표로 맞춘 덤프 항목의 P18 — 판정이 자유+저작자인 것만
+        cc = ccache.get(u)
+        v = PN.photo_row(u, cc[1]) if cc else None
+        if v and rk not in rows:
+            rows[rk] = dict(v, q=q, match='name_geo'); geo_n += 1
     out = out or tempfile.mkdtemp(prefix='ppri_', dir=os.environ.get('RUNNER_TEMP') or None)
     os.makedirs(out, exist_ok=True)
     for f in glob.glob(os.path.join(out, 'photos-pri-*.json.gz')) + glob.glob(os.path.join(out, 'photos-city-*.json.gz')):
@@ -578,7 +592,7 @@ def run(store, bucket=None, tiles_dir=None, out=None, budget_min=50.0, http_wd=N
         made['photos-city-1.json.gz'] = len(crow)
     rep = {'p18_asked': p_asked, 'p18_left': len(need) - p_asked, 'p18_stop': p_stop, 'commons_asked': asked, 'commons_left': len(todo) - asked,
            'commons_stop': stop, 'rows': len(rows), 'cities': len(crow), 'unsplash': sum(1 for v in crow.values() if v.get('photo_src') == 'unsplash'),
-           'by_city': by_city, 'city_diag': cdiag, 'kto': {k: list(v) for k, v in kto_stat.items()}, 'tile_cov': tile_cov(city_ids, rows)}
+           'by_city': by_city, 'city_diag': cdiag, 'kto': {k: list(v) for k, v in kto_stat.items()}, 'tile_cov': tile_cov(city_ids, rows), 'geo_matched': len(geo_hits), 'geo_rows': geo_n}
     st['last'] = dict(rep, at=datetime.datetime.now(datetime.timezone.utc).isoformat())
     store.put_json('processed/photos/state.json', st)
     if bucket and not dry_run:
@@ -600,6 +614,69 @@ def run(store, bucket=None, tiles_dir=None, out=None, budget_min=50.0, http_wd=N
 
 
 TOP_N = 50
+GEO_MAX_M = 100.0
+GEO_SIM = 0.8
+GEO_TIE_M = 25.0
+
+
+def geo_norm(s):
+    return norm_name(s) if isinstance(s, str) else ''
+
+
+def name_sim(a, b):
+    """정규화한 두 이름의 닮음 0~1. 같으면 1, 한쪽이 다른 쪽을 품으면 짧은/긴 길이 비, 그 밖은 0(글자 순서까지 같아야 — 오탐 방지)."""
+    if not a or not b:
+        return 0.0
+    if a == b:
+        return 1.0
+    s, l = (a, b) if len(a) <= len(b) else (b, a)
+    return len(s) / len(l) if len(s) >= 3 and s in l else 0.0
+
+
+def geo_match(tiles, items, bbox, max_m=GEO_MAX_M, sim=GEO_SIM):
+    """(270기 2차) 해외 타일 행(QID 없음) ↔ 덤프 항목(좌표 P625 + 라벨·별칭 다국어 + P18). 100m 이내 · 이름 닮음 ≥ 0.8 · 가장 닮고 가까운 것.
+    같은 행에 서로 다른 항목이 같은 점수로 겹치면 버린다(오탐 방지). 돌려줌 {타일 행 id: (QID, P18 주소)}."""
+    grid = {}
+    for g in items or []:
+        if not (isinstance(g, list) and len(g) >= 6):
+            continue
+        q, la, lo, _, p, names = g[:6]
+        ns = {geo_norm(n) for n in names} - {''}
+        if ns:
+            grid.setdefault((int(la * 500), int(lo * 500)), []).append((la, lo, q, p, ns))
+    out = {}
+    if not grid:
+        return out
+    for d in tiles:
+        ids, la_, lo_ = d.get('id') or [], d.get('_lat') or [], d.get('_lon') or []
+        cols = [d[k] for k in ('nm', 'ko', 'en', 'ja', 'zh') if isinstance(d.get(k), list)]
+        for i in range(min(len(ids), len(la_), len(lo_))):
+            rid, la, lo = ids[i], la_[i], lo_[i]
+            if not isinstance(rid, str) or rid in out or QID_IN_ID.search(rid) or not (bbox[0] <= lo <= bbox[2] and bbox[1] <= la <= bbox[3]):
+                continue
+            mine = {geo_norm(c[i]) for c in cols if i < len(c)} - {''}
+            if not mine:
+                continue
+            gi, gj = int(la * 500), int(lo * 500)
+            cand = []
+            for di in (-1, 0, 1):
+                for dj in (-1, 0, 1):
+                    for gla, glo, q, p, ns in grid.get((gi + di, gj + dj), ()):
+                        dm = _dist_m(la, lo, gla, glo)
+                        if dm > max_m:
+                            continue
+                        sc = max(name_sim(a, b) for a in mine for b in ns)
+                        if sc >= sim:
+                            cand.append((-sc, dm, q, p))
+            if not cand:
+                continue
+            cand.sort()
+            b0 = cand[0]
+            # 같은 닮음의 다른 항목이 GEO_TIE_M 안쪽 거리 차로 또 있으면 어느 것인지 모름 → 버린다(오탐 방지)
+            if any(c[2] != b0[2] and c[0] == b0[0] and c[1] - b0[1] < GEO_TIE_M for c in cand[1:]):
+                continue
+            out[rid] = (b0[2], b0[3])
+    return out
 
 
 def city_tile_ids(tiles, bbox):
@@ -626,6 +703,7 @@ def report_lines(rep, cities):
          + f" · Commons 판정 물음 {rep['commons_asked']:,}(남음 {rep['commons_left']:,})" + (f" · 멈춘 까닭 {rep['commons_stop']}" if rep['commons_stop'] else ''),
          f"- 장소 사진 행 {rep['rows']:,} · 도시 대표 사진 {rep['cities']}/{len(cities)}(Unsplash {rep['unsplash']})",
          f"- 도시 사진 단계: {rep.get('city_diag')}",
+         f"- 덤프 이름+좌표(100m·닮음 0.8) 맞춤 타일 행 {rep.get('geo_matched', 0):,} · 그중 사진(자유+저작자) {rep.get('geo_rows', 0):,}",
          f"- 한국 TourAPI 사진 붙임(도시: 상자 안 사진 카드 · 붙은 타일 행): {rep.get('kto')}",
          '| 순위 | 도시 | 일정 후보(QID) | QID 사진 | 타일 행(전체, QID 없는 행 포함) | 사진 있음 | 비율 | 상위 50 중 사진 |', '|---|---|---|---|---|---|---|---|']
     tc = rep.get('tile_cov') or {}

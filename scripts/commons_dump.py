@@ -127,8 +127,13 @@ def want_files(store, now_day=None):
             if isinstance(v, list) and len(v) > 2 and isinstance(v[2], dict) and isinstance(v[2].get('p'), str) and v[2]['p'].startswith(FILEPATH):
                 urls.add(v[2]['p'])
     for v in ((store.get_json('processed/photos/city_items.json', None) or {}).get('cities') or {}).values():
-        if isinstance(v.get('p'), str) and v['p'].startswith(FILEPATH):
-            urls.add(v['p'])
+        for u in [v.get('p')] + list(v.get('files') or []):  # (270기 2차) 도시 후보 여러 장
+            if isinstance(u, str) and u.startswith(FILEPATH):
+                urls.add(u)
+    for items in ((store.get_json('processed/photos/geo_items.json.gz', None) or {}).get('cities') or {}).values():
+        for g in items:  # 도시 상자 안 좌표+P18 항목(해외 타일 행 이름 맞추기)
+            if isinstance(g, list) and len(g) > 4 and isinstance(g[4], str) and g[4].startswith(FILEPATH):
+                urls.add(g[4])
     known = {}
     for k in ('processed/desc/commons.json.gz', 'processed/photos/commons.json.gz'):
         for u, v in (store.get_json(k, None) or {}).items():
