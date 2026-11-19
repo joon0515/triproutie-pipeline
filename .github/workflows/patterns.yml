@@ -59,6 +59,8 @@ jobs:
         run: |
           mkdir -p "$RUNNER_TEMP/gaz"
           [ -n "${{ vars.PATTERNS_GAZ_PREFIX }}" ] && gcloud storage cp -q -r "${{ vars.PATTERNS_GAZ_PREFIX }}" "$RUNNER_TEMP/gaz/" || echo "장소 자료 없음 — 낱말 규칙으로만 종류 판정"
+          # (256기) 브랜드 이름 사전(shop_index.py 가 만든 이름→QID) — 언급 수(숫자)만 세는 데 쓴다
+          gcloud storage cp -q "gs://${{ vars.GCS_BUCKET || 'trip-mate-0vum9k.firebasestorage.app' }}/places/v1/shop/brands_gaz.jsonl.gz" "$RUNNER_TEMP/gaz/" 2>/dev/null || echo "브랜드 사전 없음"
       - if: steps.once.outputs.skip != '1'
         name: learn
         run: python3 scripts/patterns/learn.py run --store "$STORE" --gazetteer-dir "$RUNNER_TEMP/gaz" | tee -a "$GITHUB_STEP_SUMMARY"

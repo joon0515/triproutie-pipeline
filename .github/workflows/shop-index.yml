@@ -1,0 +1,103 @@
+# 여행지 쇼핑 층(shop-1)·행사 층(events-1, 대만·공식 사이트) — 256기. 판정식 docs/SHOP_EVENTS.md.
+# 매주 수요일(rec-index 다음 날) + 수동. 나라를 8묶음으로 나눠 러너 4대씩. 결과는 Storage places/v1/layers_extra/ 에만(로그에는 개수만).
+# 끄기: 저장소 변수 SHOP_INDEX_OFF=1. 다른 서비스의 평점·리뷰·글은 받지 않는다(금지 도메인은 이 단계에 아예 없다).
+name: shop-index
+on:
+  schedule:
+    - cron: "41 21 * * 3"
+  workflow_dispatch:
+    inputs:
+      ccs:
+        description: "나라 코드(쉼표, 비우면 전부)"
+        default: ""
+permissions:
+  contents: read
+  id-token: write
+concurrency:
+  group: shop-index
+  cancel-in-progress: false
+env:
+  GCS_BUCKET: ${{ vars.GCS_BUCKET || 'trip-mate-0vum9k.firebasestorage.app' }}
+  STORE: gs://${{ vars.GCS_BUCKET || 'trip-mate-0vum9k.firebasestorage.app' }}/collect/v1
+jobs:
+  shops:
+    if: github.repository == 'joon0515/triproutie-pipeline' && github.ref == 'refs/heads/main' && vars.SHOP_INDEX_OFF != '1'
+    runs-on: ubuntu-latest
+    timeout-minutes: 300
+    strategy:
+      fail-fast: false
+      max-parallel: 4
+      matrix:
+        chunk: [0, 1, 2, 3, 4, 5, 6, 7]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ vars.GCP_WIF_PROVIDER || 'projects/222914945328/locations/global/workloadIdentityPools/github-pool/providers/github-provider' }}
+          service_account: ${{ vars.GCP_SA_EMAIL || 'pipeline-uploader@trip-mate-0vum9k.iam.gserviceaccount.com' }}
+      - uses: google-github-actions/setup-gcloud@v2
+      - uses: actions/setup-python@v5
+        with: {python-version: "3.12"}
+      - run: pip install -q pyyaml "duckdb==1.*" >/dev/null
+      - name: test
+        run: set -o pipefail; python3 -W ignore -m unittest tests/test_shop_events.py 2>&1 | tail -3
+      - name: 학습 통계(숫자만, 있으면)
+        run: |
+          gcloud storage cp -q "gs://$GCS_BUCKET/patterns/v1/patterns.clean.json" "$RUNNER_TEMP/patterns.json" 2>/dev/null || echo "patterns 없음 — 언급 비율 빼고 계산"
+          gcloud storage cp -q "gs://$GCS_BUCKET/patterns/v1/brand_hist.json" "$RUNNER_TEMP/brand_hist.json" 2>/dev/null || echo "브랜드 언급 이력 없음 — 트렌드 없음"
+      - name: build chunk ${{ matrix.chunk }}/8
+        env:
+          DUCK_MEM: 10GB
+          CCS: ${{ inputs.ccs }}
+        run: |
+          set -o pipefail
+          mkdir -p "$RUNNER_TEMP/shop"
+          python3 scripts/shop_index.py build --store "$STORE" --out "$RUNNER_TEMP/shop" --chunk "${{ matrix.chunk }}/8" ${CCS:+--ccs "$CCS"} \
+            --patterns "$RUNNER_TEMP/patterns.json" --brand-hist "$RUNNER_TEMP/brand_hist.json" | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: upload
+        run: |
+          cd "$RUNNER_TEMP/shop"
+          for C in $(ls shop-*.json.gz 2>/dev/null | sed -E 's/^shop-([A-Z]{2})-.*/\1/' | sort -u); do
+            gcloud storage rm -q "gs://$GCS_BUCKET/places/v1/layers_extra/shop-$C-*.json.gz" >/dev/null 2>&1 || true; done
+          for f in shop-*.json.gz; do [ -e "$f" ] || continue; gcloud storage cp -q "$f" "gs://$GCS_BUCKET/places/v1/layers_extra/$f"; done
+          for f in brands_gaz_*.jsonl.gz shop_summary_*.json; do [ -e "$f" ] || continue; gcloud storage cp -q "$f" "gs://$GCS_BUCKET/places/v1/shop/parts/$f"; done
+          ls | sed -E 's/-?[A-Z]{2}(-[0-9]+)?\.json\.gz$//' | sort | uniq -c
+  merge-gaz:
+    needs: shops
+    if: always() && needs.shops.result != 'skipped'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ vars.GCP_WIF_PROVIDER || 'projects/222914945328/locations/global/workloadIdentityPools/github-pool/providers/github-provider' }}
+          service_account: ${{ vars.GCP_SA_EMAIL || 'pipeline-uploader@trip-mate-0vum9k.iam.gserviceaccount.com' }}
+      - uses: google-github-actions/setup-gcloud@v2
+      - name: 브랜드 이름 사전 하나로(학습기용, 앱에는 보내지 않음)
+        run: |
+          set -o pipefail
+          mkdir -p g && gcloud storage cp -q "gs://$GCS_BUCKET/places/v1/shop/parts/brands_gaz_*.jsonl.gz" g/ 2>/dev/null || { echo "사전 조각 없음"; exit 0; }
+          zcat g/*.jsonl.gz | sort -u | gzip -9 > brands_gaz.jsonl.gz
+          echo "브랜드 이름 $(zcat brands_gaz.jsonl.gz | wc -l)줄"
+          gcloud storage cp -q brands_gaz.jsonl.gz "gs://$GCS_BUCKET/places/v1/shop/brands_gaz.jsonl.gz"
+  events:
+    if: github.repository == 'joon0515/triproutie-pipeline' && github.ref == 'refs/heads/main' && vars.SHOP_INDEX_OFF != '1'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ vars.GCP_WIF_PROVIDER || 'projects/222914945328/locations/global/workloadIdentityPools/github-pool/providers/github-provider' }}
+          service_account: ${{ vars.GCP_SA_EMAIL || 'pipeline-uploader@trip-mate-0vum9k.iam.gserviceaccount.com' }}
+      - uses: google-github-actions/setup-gcloud@v2
+      - uses: actions/setup-python@v5
+        with: {python-version: "3.12"}
+      - run: pip install -q pyyaml >/dev/null
+      - name: 대만 활동(등록부 taiwan_events 가 active 일 때만 — 라이선스 쪽을 사람이 읽은 뒤)
+        run: |
+          set -o pipefail
+          ST=$(python3 -c "import yaml;print(next((s.get('status') for s in yaml.safe_load(open('sources/registry.yaml'))['sources'] if s['id']=='taiwan_events'),''))")
+          [ "$ST" = active ] || { echo "taiwan_events: $ST — 받지 않음"; exit 0; }
+          mkdir -p ev && curl -fsS -A "TripRoutie-collector" -m 120 -o ev/ev.zip https://media.taiwan.net.tw/XMLReleaseAll_public/v2.0/Zh_tw/Event-json.zip
+          python3 scripts/events_layer.py taiwan --zip ev/ev.zip --out ev | tee -a "$GITHUB_STEP_SUMMARY"
+          gcloud storage cp -q ev/events_tw.json.gz "gs://$GCS_BUCKET/places/v1/layers_extra/events_tw.json.gz"

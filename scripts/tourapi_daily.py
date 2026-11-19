@@ -9,6 +9,7 @@
   1) list   : 96개 작업(시도×종류)의 areaBasedList2 를 1000곳/쪽으로 전부 받는다(이름·주소·좌표·대표사진·분류). 약 130회 → 첫날 끝.
   2) detail : 남은 한도로 detailIntro2(영업시간·휴무·주차·메뉴·체크인…). 순서 = 관광지12·음식점39 → 숙박32 → 문화14·레포츠28·쇼핑38,
               같은 종류 안에서는 앱 데이터에 이미 있는 곳(tourapi/priority_cids.json) → 서울·부산 외(소도시) → 서울·부산.
+  0) festival: (11/20 256기) 하루 한 번 searchFestival2 → store/festivals.json → 층 events_kto.json.gz(schema events-1). 2~3회/일.
   3) info   : 요금이 detailInfo2 에만 있는 12·28 의 요금. 끝나면 회차(pass)+1, 1)부터 다시(내용 갱신).
   (11/17) 소개: 목록을 한 번 다 받은 뒤부터 매일 한도의 --ov-share(기본 25%)를 먼저 detailCommon2 overview 에 쓴다. 관광지 12·문화시설 14 중
               cpyrhtDivCd 가 Type1(공공누리 제1유형)인 곳만, 제주·경주 → 앱에 있는 곳 → 그 밖 순. overview 의 첫 문장만(원문 그대로, 120자 넘으면 버림)
@@ -306,6 +307,67 @@ class Store:
             os.replace(p + '.tmp', p)
 
 
+# ---------- 행사·축제(searchFestival2, 11/20 256기) ----------
+# 하루 한 번: 오늘보다 FEST_BACK_DAYS 앞에 시작한 행사부터 받아(이미 열리고 있는 긴 행사 포함) 끝난 것은 버린다. 1000건/쪽이라 하루 2~3회.
+# 사실 값만(이름·기간·주소·좌표·전화). 사진은 장소와 같은 규칙(공공누리 1·3유형만). 결과 = store/festivals.json(전체 교체 — 실패한 날은 앞 것 유지).
+FEST_BACK_DAYS = 180
+
+
+def fest_card(x):
+    c = {'cid': str(x.get('contentid') or ''), 'name': (x.get('title') or '')[:80], 'start': str(x.get('eventstartdate') or '')[:8],
+         'end': str(x.get('eventenddate') or '')[:8], 'addr': (x.get('addr1') or '')[:60], 'area': str(x.get('lDongRegnCd') or x.get('areacode') or ''),
+         'cpy': x.get('cpyrhtDivCd') or None}
+    if (x.get('tel') or '').strip():
+        c['tel'] = x['tel'].strip()[:40]
+    try:
+        c['lon'], c['lat'] = round(float(x['mapx']), 6), round(float(x['mapy']), 6)
+    except Exception:
+        pass
+    lic = PHOTO_OK.get(x.get('cpyrhtDivCd') or '')
+    if lic and (x.get('firstimage') or '').startswith('http'):
+        c['photo'] = {'url': x['firstimage'], 'license': lic, 'credit': '한국관광공사', **({'no_modify': True} if lic == 'KOGL-3' else {})}
+    return c
+
+
+def festivals(st, store, cl, back=FEST_BACK_DAYS):
+    """오늘(KST) 처음 부를 때만. 돌려줌 = 받은 행사 수(0 = 오늘 이미 받음·실패)."""
+    if st.get('fest_day') == today():
+        return 0
+    d0 = (datetime.datetime.now(KST) - datetime.timedelta(days=back)).strftime('%Y%m%d')
+    now = today().replace('-', '')
+    got, page = {}, 1
+    while True:
+        r = cl.get('searchFestival2', eventStartDate=d0, numOfRows=ROWS, pageNo=page, arrange='A')
+        if r is None:
+            return 0  # 실패한 날은 앞 파일 유지
+        body, items = r
+        for x in items:
+            c = fest_card(x)
+            if c['cid'] and c['name'] and len(c['start']) == 8 and (c['end'] or c['start']) >= now:
+                got[c['cid']] = c
+        if not items or page * ROWS >= int(body.get('totalCount') or 0):
+            break
+        page += 1
+    p = os.path.join(store.d, 'festivals.json')
+    with open(p + '.tmp', 'w', encoding='utf-8') as fh:
+        json.dump(got, fh, ensure_ascii=False, separators=(',', ':'))
+    os.replace(p + '.tmp', p)
+    st['fest_day'] = today()
+    return len(got)
+
+
+def build_events(store, layers_dir):
+    """store/festivals.json → layers events_kto.json.gz (schema events-1, 공통 모양 = scripts/events_layer.py)."""
+    p = os.path.join(store.d, 'festivals.json')
+    if not os.path.exists(p):
+        return 0
+    import events_layer as EV
+    rows = EV.kto_rows(json.load(open(p, encoding='utf-8')))
+    os.makedirs(layers_dir, exist_ok=True)
+    EV.write(os.path.join(layers_dir, 'events_kto.json.gz'), EV.doc('KR', 'tourapi', rows))
+    return len(rows)
+
+
 # ---------- 하루 실행 ----------
 def load_prio():
     try:
@@ -392,7 +454,7 @@ def overview(st, store, cl, prio, share):
     return n
 
 
-def run(state, store, cl, prio=None, ov_share=0.0):
+def run(state, store, cl, prio=None, ov_share=0.0, fest=False):
     st = state
     prio = load_prio() if prio is None else prio
     for k, v in (('pass', 1), ('phase', 'list'), ('task', 0), ('page', 1), ('totals', {})):
@@ -400,6 +462,8 @@ def run(state, store, cl, prio=None, ov_share=0.0):
     st.pop('retry', None)
     T = tasks(); new = {'list': 0, 'detail': 0, 'info': 0, 'overview': 0}; stop = None
     try:
+        if fest:
+            new['festival'] = festivals(st, store, cl)  # (11/20 256기) 행사·축제 — 하루 한 번, 몇 번만(1000건/쪽)
         if ov_share > 0 and st.get('list_done'):
             new['overview'] = overview(st, store, cl, prio, ov_share)
         while True:
@@ -500,12 +564,13 @@ def main():
         sys.exit('TOURAPI_KEY 없음(Actions secret DATA_GO_KR_KEY)')
     state = json.load(open(a.state)) if os.path.exists(a.state) else {}
     store = Store(a.store)
-    stop = run(state, store, Client(key, state, a.limit), ov_share=a.ov_share)
+    stop = run(state, store, Client(key, state, a.limit), ov_share=a.ov_share, fest=os.environ.get('TOURAPI_FEST_OFF') != '1')
     os.makedirs(os.path.dirname(a.state) or '.', exist_ok=True)
     json.dump(state, open(a.state, 'w'), ensure_ascii=False, indent=1, sort_keys=True)
     n = build_outputs(store, a.layers, a.agg)
+    ne = build_events(store, a.layers)
     T = tasks(); tot = sum(state['totals'].values())
-    print(f"tourapi: calls={state['calls']} new={state['last']['new']} stored={n} phase={state['phase']} task={state['task']}/{len(T)} pass={state['pass']} known_total={tot} stop={stop}")
+    print(f"tourapi: calls={state['calls']} new={state['last']['new']} stored={n} events={ne} phase={state['phase']} task={state['task']}/{len(T)} pass={state['pass']} known_total={tot} stop={stop}")
     return 2 if stop in ('KEY', 'FAIL20', 'LISTFAIL') else 0
 
 
