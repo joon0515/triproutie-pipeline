@@ -6,4 +6,5 @@ initializeApp();
 Object.assign(exports, require('./flight_fn').makeFlightFunctions());
 Object.assign(exports, require('./geo_fn').makeGeoFunctions());
 Object.assign(exports, require('./acct_fn').makeAcctFunctions()); // 169기 계정 삭제
-for (const k of ['flightLookup', 'geoLookup']) if (!exports[k]) throw new Error('index: ' + k + ' 없음');
+Object.assign(exports, require('./live_fn').makeLiveFunctions()); // 252기 장소 상세 실시간(liveBudget·placeDetailsLive) — 기존 placeDetails·g 는 Cloud Shell 원본 그대로
+for (const k of ['flightLookup', 'geoLookup', 'liveBudget', 'placeDetailsLive']) if (!exports[k]) throw new Error('index: ' + k + ' 없음');
