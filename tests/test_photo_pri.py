@@ -65,10 +65,13 @@ class PhotoPri(unittest.TestCase):
         q = urllib.parse.unquote_plus(asked[0])
         self.assertNotIn('wd:Q2 ', q)  # 덤프에 있는 것은 다시 묻지 않음
         self.assertIn('wd:Q3', q)
-        doc = json.loads(gzip.decompress(open(os.path.join(out, made[0]), 'rb').read()))
-        self.assertEqual(doc['schema'], 'photos-1')
-        self.assertEqual(set(doc['rows']), {'Q2', 'Q3'})
-        r = doc['rows']['Q2']
+        allrows = {}
+        for f in made:
+            doc = json.loads(gzip.decompress(open(os.path.join(out, f), 'rb').read()))
+            self.assertEqual(doc['schema'], 'photos-1')
+            allrows.update(doc['rows'])
+        self.assertEqual(set(allrows), {'Q2', 'Q3'})
+        r = allrows['Q2']
         self.assertEqual(r['photo_license'], 'CC BY-SA 4.0'); self.assertEqual(r['photo_author'], 'Kim')
         self.assertTrue(r['photo_thumb'].startswith('https://commons.wikimedia.org/'))
         self.assertTrue(r['photo_page'].startswith('https://commons.wikimedia.org/wiki/File:'))
@@ -133,6 +136,30 @@ class PhotoPri(unittest.TestCase):
         self.assertEqual(v['photo_license_url'], 'https://www.kogl.or.kr/info/licenseType3.do')
         grid2 = {k: [(a, b, n, dict(p, url='http://other.example/a.jpg'))] for k, [(a, b, n, p)] in grid.items()}
         self.assertIsNone(PL.from_kto(d, grid2, 0))  # https 로 바꿀 수 없는 주소는 싣지 않음
+
+    def test_prio_map_from_place_desc_keys_rows_by_wid(self):
+        import place_desc as PD
+        S = PD.Seeds()
+        S.cities = [{'rank': 1, 'key': 'osaka', 'bbox': [135.35, 34.55, 135.65, 34.8]}]
+        S.city_q = {'osaka': {}}
+        S.add_col({'schema': 'collect-1', 'dataset': 'places', 'id': ['c1', 'c2'], 'wid': ['w1', None], 'wd': ['Q2', 'Q9'], 'nm': ['a', 'b'],
+                   'dla': [3469000, 100000], 'dlo': [13550000, 100000]})
+        self.assertEqual(S.city_q['osaka'], {'Q2': {'c1', 'w1'}})  # 두 번째 행은 상자 밖(35.69, 136.5)
+        self.store.put_json('processed/photos/prio_map.json.gz', {'built': 'x', 'cities': [['osaka', [['Q2', ['c1', 'w1']]]]]})
+        self.store.put_json('processed/desc/wd.json.gz', {'Q2': ['2026-11-11', {}, {'l': {}, 'p': FP + 'A.jpg'}]})
+        h = FakeHttp(lic={FP + 'A.jpg': ('Q18199165', 'Kim')})
+        # 시험 모드(tiles_dir)는 지도를 안 쓰므로 gs 경로 대신 local_tiles_for 를 바꿔 끼운다
+        orig = PP.gcs_tiles_for
+        PP.gcs_tiles_for = lambda b, wd: ('v1', lambda bb: [])
+        try:
+            rep, made = PP.run(self.store, bucket=None, out=os.path.join(self.tmp, 'o2'), http_wd=h, http_c=h, budget_min=5, dry_run=True)
+        finally:
+            PP.gcs_tiles_for = orig
+        got = set()
+        for f in made:
+            got |= set(json.loads(gzip.decompress(open(os.path.join(self.tmp, 'o2', f), 'rb').read()))['rows'])
+        self.assertEqual(got, {'Q2', 'c1', 'w1'})
+        self.assertEqual(rep['by_city']['osaka'], (1, 1))
 
     def test_tile_box_from_center(self):
         self.assertEqual(PP.tile_box({'bbox': [1, 2, 3, 4]}), [1, 2, 3, 4])

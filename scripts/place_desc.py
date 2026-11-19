@@ -64,6 +64,14 @@ except (OSError, ValueError):
 KANA = re.compile(r'[぀-ヿ]')
 
 
+def _prio_cities():
+    try:
+        j = json.load(open(os.path.join(ROOT, 'sources', 'priority_cities.json'), encoding='utf-8'))
+        return sorted((c for c in j['cities'] if isinstance(c.get('bbox'), list) and len(c['bbox']) == 4), key=lambda c: c['rank'])
+    except (OSError, ValueError, KeyError):
+        return []
+
+
 def log(msg):
     print(f'[place-desc] {msg}', flush=True)
 
@@ -207,6 +215,9 @@ class Seeds:
     def __init__(self):
         self.q, self.names, self.tw, self.kto, self.n_rows = {}, {}, {}, {}, 0
         self.prio = set()
+        # (11/20 262기) 인기 도시 상자 안 수집 행의 QID → 행 열쇠(id·wid). photo_pri 가 사진 순서를 '일정에 나오는 행' 기준으로 잡는다.
+        self.cities = _prio_cities()
+        self.city_q = {c['key']: {} for c in self.cities}
 
     def add_q(self, q, ids, prio=False):
         m = QID.search(q or '')
@@ -224,10 +235,16 @@ class Seeds:
         n = len(j.get('id') or [])
         col = lambda k: j.get(k) if isinstance(j.get(k), list) and len(j[k]) == n else [None] * n
         ids, wid, wd, dsc = col('id'), col('wid'), col('wd'), col('dsc')
+        dla, dlo = col('dla'), col('dlo')
         nm = [col(k) for k in ('nm', 'ko', 'en', 'ja', 'zh')]
+        la = lo = 0
         for i in range(n):
             self.n_rows += 1
             keys = [ids[i], wid[i]]
+            if isinstance(dla[i], int) and isinstance(dlo[i], int):
+                la += dla[i]; lo += dlo[i]
+                if wd[i] and self.cities:
+                    self.add_city(wd[i], keys, la / 1e5, lo / 1e5)
             names = [c[i] for c in nm if c[i]]
             if wd[i]:
                 self.add_q(wd[i], keys)
@@ -240,6 +257,18 @@ class Seeds:
                 for k in keys:
                     if k:
                         self.tw[k] = t
+
+    def add_city(self, q, keys, lat, lon, cap=5000):
+        m = QID.search(q or '')
+        if not m:
+            return
+        for c in self.cities:
+            w, so, e, no = c['bbox']
+            if w <= lon <= e and so <= lat <= no:
+                d = self.city_q[c['key']]
+                if m.group(1) in d or len(d) < cap:
+                    d.setdefault(m.group(1), set()).update(k for k in keys if k)
+                return
 
     def add_tile_ids(self, ids):
         for i in ids or ():
@@ -445,6 +474,8 @@ def run(store, bucket=None, extra_dir=None, out=None, budget_min=45.0, http=None
     seeds = gather(store, bucket, extra_dir, clock() + budget_min * 60 * 0.3, clock)
     # (11/18 233기) 씨앗 QID 를 남긴다 — wikidata-dump.yml(scripts/wd_dump.py)이 같은 씨앗으로 주간 덤프를 훑는다(223기 이름 층과 같은 조인)
     store.put_json('processed/desc/qids.json.gz', {'built': today(), 'q': sorted(int(q[1:]) for q in seeds.q), 'prio': sorted(int(q[1:]) for q in seeds.prio)})
+    # (11/20 262기) 인기 도시별 QID → 행 열쇠 — scripts/photo_pri.py 가 사진 순서·행 열쇠로 쓴다
+    store.put_json('processed/photos/prio_map.json.gz', {'built': today(), 'cities': [[c['key'], [[q, sorted(k)] for q, k in seeds.city_q[c['key']].items()]] for c in seeds.cities]})
     cache = store.get_json('processed/desc/wd.json.gz', {}) or {}
     for q, v in (store.get_json('processed/desc/wd_dump.json.gz', None) or {}).items():  # 덤프 조인 결과(받은 날 = 덤프 날짜) — 더 새것만 덮어 씀
         if q not in cache or len(cache[q]) < 3 or cache[q][0] < v[0]:

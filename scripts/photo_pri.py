@@ -320,7 +320,9 @@ def judge_files(prio, cache, pcache):
     return out
 
 
-def pri_rows(prio, cache, pcache, ccache):
+def pri_rows(prio, cache, pcache, ccache, keys_of=None):
+    """행 열쇠 = QID(타일 행 id 가 QID 인 곳) + keys_of 의 수집 행 id·wid(앱 타일 행 id) — photos-wd 와 같은 열쇠."""
+    keys_of = keys_of or {}
     rows, by_city = {}, {}
     for k, qs in prio:
         n = 0
@@ -329,7 +331,9 @@ def pri_rows(prio, cache, pcache, ccache):
             cc = ccache.get(u) if u else None
             v = PN.photo_row(u, cc[1]) if cc else None
             if v:
-                rows[q] = dict(v, q=q); n += 1
+                for rk in {q, *keys_of.get(q, ())}:
+                    rows[rk] = dict(v, q=q)
+                n += 1
         by_city[k] = (len(qs), n)
     return rows, by_city
 
@@ -348,13 +352,24 @@ def run(store, bucket=None, tiles_dir=None, out=None, budget_min=50.0, http_wd=N
     t_end = clock() + budget_min * 60
     src = src or {}
     cities = load_cities()
+    pm = None if tiles_dir else store.get_json('processed/photos/prio_map.json.gz', None)
+    keys_of = {}
+    if pm and any(rows for _, rows in pm.get('cities') or []):
+        # place-desc 가 남긴 '인기 도시 상자 안 수집 행' 지도(행 열쇠 = 앱 타일 행 id 포함) — 이것을 먼저 쓴다
+        prio = []
+        for key, rows in pm['cities']:
+            prio.append((key, [q for q, _ in rows]))
+            for q, ks in rows:
+                keys_of.setdefault(q, set()).update(ks)
+        log(f"순서(수집 행 지도 {pm.get('built')}): 도시 {sum(1 for _, qs in prio if qs)}/{len(prio)} · QID {sum(len(qs) for _, qs in prio):,}")
     wd = tempfile.mkdtemp(dir=os.environ.get('RUNNER_TEMP') or None)
     try:
         ver, tiles_for = local_tiles_for(tiles_dir) if tiles_dir else gcs_tiles_for(bucket, wd)
         pkey = f'processed/photos/prio_{ver}.json.gz'
-        cached = store.get_json(pkey, None) if ver != 'local' else None
-        prio = [tuple(x) for x in cached] if cached else prio_order(cities, tiles_for)
-        if not cached and ver and ver != 'local' and any(qs for _, qs in prio):  # 빈 순서는 남기지 않는다(다음 실행에서 다시)
+        cached = store.get_json(pkey, None) if ver != 'local' and not keys_of else None
+        if not keys_of:
+            prio = [tuple(x) for x in cached] if cached else prio_order(cities, tiles_for)
+        if not keys_of and not cached and ver and ver != 'local' and any(qs for _, qs in prio):  # 빈 순서는 남기지 않는다(다음 실행에서 다시)
             store.put_json(pkey, prio)
         log(f"순서: 도시 {sum(1 for _, qs in prio if qs)}/{len(prio)} · 일정 후보 QID {sum(len(qs) for _, qs in prio):,}")
     finally:
@@ -389,7 +404,7 @@ def run(store, bucket=None, tiles_dir=None, out=None, budget_min=50.0, http_wd=N
     store.put_json('processed/photos/commons.json.gz', mine)
     crow, _ = city_rows(cities, cstate, ccache, None, 0, key=None, clock=clock)  # 판정 뒤 다시(요청 없음)
     store.put_json('processed/photos/cities.json', cstate)
-    rows, by_city = pri_rows(prio, cache, pcache, ccache)
+    rows, by_city = pri_rows(prio, cache, pcache, ccache, keys_of)
     out = out or tempfile.mkdtemp(prefix='ppri_', dir=os.environ.get('RUNNER_TEMP') or None)
     os.makedirs(out, exist_ok=True)
     for f in glob.glob(os.path.join(out, 'photos-pri-*.json.gz')) + glob.glob(os.path.join(out, 'photos-city-*.json.gz')):
