@@ -181,3 +181,9 @@ class Export(unittest.TestCase):
         A.export_layers(st, os.path.join(d, 'o'))
         e = P.describe(os.path.join(d, 'o', 'names-ai-%03d.json.gz' % [int(f[9:12]) for f in os.listdir(os.path.join(d, 'o'))][0]))
         self.assertEqual((e['kind'], e['prio'], e['license']), ('names5', 9, 'AI-generated'))
+
+
+class Wiring(unittest.TestCase):
+    def test_main_pieces_exist(self):   # 11/20 합치다 gather_store 가 빠졌던 일 방지
+        for n in ('gather_store', 'CITY_CC', 'export_layers', 'run', 'main'):
+            self.assertTrue(hasattr(A, n), n)
