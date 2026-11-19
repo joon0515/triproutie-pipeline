@@ -54,12 +54,12 @@ jobs:
         run: |
           set -o pipefail
           node test_live_fn.js | tail -1 | tee /tmp/live.txt
-          grep -qx 'live_fn: 27/0' /tmp/live.txt
+          grep -qx 'live_fn: 29/0' /tmp/live.txt
       - name: transit test (257기 transitLive*)
         run: |
           set -o pipefail
           node test_transit_fn.js | tail -1 | tee /tmp/transit.txt
-          grep -qx 'transit_fn: 41/0' /tmp/transit.txt
+          grep -qx 'transit_fn: 43/0' /tmp/transit.txt
       - name: notice test (264기 transitNotices)
         run: |
           set -o pipefail
