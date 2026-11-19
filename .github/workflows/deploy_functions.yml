@@ -60,8 +60,13 @@ jobs:
           set -o pipefail
           node test_transit_fn.js | tail -1 | tee /tmp/transit.txt
           grep -qx 'transit_fn: 41/0' /tmp/transit.txt
+      - name: notice test (264기 transitNotices)
+        run: |
+          set -o pipefail
+          node test_notice_fn.js | tail -1 | tee /tmp/notice.txt
+          grep -qx 'notice_fn: 12/0' /tmp/notice.txt
       - name: entry loads
-        run: node -e "const e=require('./index.js'); for (const k of ['flightLookup','geoLookup','deleteAccount','liveBudget','placeDetailsLive','transitLiveMta','transitLiveTfl','transitLiveLta','transitLiveOba','transitLiveIdfm']) if(!e[k]) throw new Error(k)"
+        run: node -e "const e=require('./index.js'); for (const k of ['flightLookup','geoLookup','deleteAccount','liveBudget','placeDetailsLive','transitLiveMta','transitLiveTfl','transitLiveLta','transitLiveOba','transitLiveIdfm','transitNotices']) if(!e[k]) throw new Error(k)"
   deploy:
     needs: test
     # Workload Identity 조건이 main 만 허용 → 배포는 main 의 push·수동 실행에서만.
