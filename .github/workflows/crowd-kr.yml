@@ -1,0 +1,43 @@
+# 한국 관광지 혼잡 예측 층(crowd-1) — 262기. scripts/crowd_kr.py 머리말. 하루 1번 + 수동.
+# 키 = DATA_GO_KR_KEY(TourAPI 와 같은 키, 이 API '관광지 집중률 방문자 추이 예측 정보' 활용신청이 따로 필요). 결과 = Storage places/v1/layers_extra/crowd-kr-1.json.gz 만.
+# 끄기: 변수 CROWD_KR_OFF=1.
+name: crowd-kr
+on:
+  schedule:
+    - cron: "47 19 * * *"
+  workflow_dispatch:
+permissions:
+  contents: read
+  id-token: write
+concurrency:
+  group: crowd-kr
+  cancel-in-progress: false
+env:
+  GCS_BUCKET: ${{ vars.GCS_BUCKET || 'trip-mate-0vum9k.firebasestorage.app' }}
+jobs:
+  crowd:
+    if: github.repository == 'joon0515/triproutie-pipeline' && github.ref == 'refs/heads/main' && vars.CROWD_KR_OFF != '1'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ vars.GCP_WIF_PROVIDER || 'projects/222914945328/locations/global/workloadIdentityPools/github-pool/providers/github-provider' }}
+          service_account: ${{ vars.GCP_SA_EMAIL || 'pipeline-uploader@trip-mate-0vum9k.iam.gserviceaccount.com' }}
+      - uses: google-github-actions/setup-gcloud@v2
+      - uses: actions/setup-python@v5
+        with: {python-version: "3.12"}
+      - run: pip install -q pyyaml >/dev/null
+      - name: test (mock, no network)
+        run: set -o pipefail; python3 -W ignore -m unittest tests/test_crowd_kr.py 2>&1 | tail -3
+      - name: build
+        env:
+          TOURAPI_KEY: ${{ secrets.DATA_GO_KR_KEY }}
+        run: |
+          set -o pipefail
+          mkdir -p "$RUNNER_TEMP/kto" "$RUNNER_TEMP/crowd"
+          gcloud storage cp -q "gs://$GCS_BUCKET/places/v1/layers_extra/kto_*.json.gz" "$RUNNER_TEMP/kto/" || { echo "kto 층 없음"; exit 0; }
+          [ -n "$TOURAPI_KEY" ] || { echo "키 없음: DATA_GO_KR_KEY"; exit 1; }
+          python3 scripts/crowd_kr.py --kto "$RUNNER_TEMP/kto" --out "$RUNNER_TEMP/crowd"
+          if [ -f "$RUNNER_TEMP/crowd/crowd-kr-1.json.gz" ]; then gcloud storage cp -q "$RUNNER_TEMP/crowd/crowd-kr-1.json.gz" "gs://$GCS_BUCKET/places/v1/layers_extra/"; fi

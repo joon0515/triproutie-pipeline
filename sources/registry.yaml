@@ -119,6 +119,18 @@ sources:
     secret: UNSPLASH_ACCESS_KEY
     daily_limit: 60
     status: external            # 열쇠가 없으면 건너뛰고 도시 사진은 Wikidata P18 → Commons
+  - id: kto_crowd
+    name: 한국관광공사 관광지 집중률 방문자 추이 예측 정보(data.go.kr 15128555) — 인기 한국 도시 시군구 관광지 30일 혼잡 예측 (11/20 262기, scripts/crowd_kr.py)
+    kind: api
+    url: https://apis.data.go.kr/B551011/TatsCnctrRateService
+    license: "이용허락범위 제한 없음(data.go.kr 표기)"
+    attribution: "한국관광공사 관광지 집중률 방문자 추이 예측 정보"
+    license_url: https://www.data.go.kr/data/15128555/openapi.do
+    robots: "공식 오픈 API(키) — 화면 긁기 0. 요청 1초 간격, 하루 300회 이하"
+    secret: DATA_GO_KR_KEY
+    daily_limit: 300
+    interval_s: 1
+    status: external
   - id: official_sites
     name: 공식 사이트 구조화 데이터(schema.org JSON-LD·microdata) — Wikidata P856 씨앗
     kind: crawl

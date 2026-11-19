@@ -35,7 +35,7 @@
 """
 import argparse, base64, datetime, glob, gzip, hashlib, json, os, subprocess, sys
 
-OK_SCHEMA = {'popularity-1': 'popularity', 'amenities-1': 'amenities', 'lockers-1': 'lockers', 'names-1': 'names', 'tourapi-1': 'tourapi', 'collect-1': 'collect', 'hours-1': 'hours', 'photos-1': 'photos', 'desc-1': 'desc', 'names-2': 'names5', 'rec-1': 'rec', 'shop-1': 'shop', 'events-1': 'events'}  # hours·photos: 11/15 · desc: 11/17 장소 소개(place_desc.py·desc_osm.py) · names5: 11/18 이름 5개 언어(place_names.py·names5_osm.py)
+OK_SCHEMA = {'popularity-1': 'popularity', 'amenities-1': 'amenities', 'lockers-1': 'lockers', 'names-1': 'names', 'tourapi-1': 'tourapi', 'collect-1': 'collect', 'hours-1': 'hours', 'photos-1': 'photos', 'desc-1': 'desc', 'names-2': 'names5', 'rec-1': 'rec', 'shop-1': 'shop', 'events-1': 'events', 'crowd-1': 'crowd'}  # hours·photos: 11/15 · desc: 11/17 장소 소개(place_desc.py·desc_osm.py) · names5: 11/18 이름 5개 언어(place_names.py·names5_osm.py)
 MAX_BYTES = 8 * 1024 * 1024  # 앱의 파일 크기 상한(타일과 같음)
 SIGN_MAX = 64 * 1024         # KMS asymmetric-sign 이 한 번에 받는 본문 크기(Ed25519 는 본문 그대로 서명)
 ROOT_MAX = 62 * 1024         # 뿌리 목록 파일(서명 포함) 절대 상한 — 앱 kTlPlMaxRootBytes(64 KiB)·SIGN_MAX 보다 작게
@@ -47,7 +47,7 @@ PART_MAX = 60 * 1024         # 2단 목록 한 장(서명 포함) 상한 — 2�
 #  모든 종류는 2단 목록(parts)에 다 싣고, 이 종류만 뿌리 layers 에도 앱이 쓰는 칸만 남긴다(하위 호환). 뿌리 상한 안에 다 못 들면 작은 종류부터 넣고
 #  못 넣은 종류는 legacy_omitted 에 적는다(그 종류는 parts 를 읽는 앱만 받는다). 그래서 뿌리 크기는 층이 늘어도 상한에 닿지 않는다.
 INDEX_AT = 16 * 1024         # 뿌리 목표(ROOT_TARGET) 중 이만큼은 옛 항목(하위 호환) 자리로 남기고, 장 목록이 나머지를 넘으면 색인(3단)으로
-LEGACY_KINDS = ('popularity', 'amenities', 'names', 'lockers', 'labels', 'hours', 'photos')
+LEGACY_KINDS = ('popularity', 'amenities', 'names', 'lockers', 'labels', 'hours', 'photos', 'crowd')  # crowd: 262기 혼잡 예측(앱 tl_p2262 가 뿌리에서 읽음)
 LEGACY_FIELDS = ('file', 'kind', 'size', 'sha256', 'bbox', 'packs')
 
 
