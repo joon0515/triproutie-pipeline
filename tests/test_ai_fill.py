@@ -202,3 +202,14 @@ class Retry(unittest.TestCase):
         r = A.Router([p], post=post, sleep=lambda s: None)
         self.assertTrue(r.ask('s', 'u'))
         self.assertEqual(len(n), 3)
+
+
+class Wait(unittest.TestCase):
+    def test_retry_in(self):
+        t = [100.0]
+        p = A.Provider('gemini', A.SPEC['gemini'], {'GEMINI_API_KEY': 'k'}, clock=lambda: t[0])
+        r = A.Router([p], post=None, clock=lambda: t[0])
+        p.cool_until = 130.0
+        self.assertEqual(round(r.retry_in()), 31)
+        p.dead = True
+        self.assertIsNone(r.retry_in())

@@ -47,7 +47,7 @@ def today():
 SPEC = {
     'gemini':   {'keys': ('GEMINI_API_KEY',), 'model': 'gemini-3.1-flash-lite', 'rpm': 30, 'rpd': 1500, 'kind': 'gemini',
                  'url': 'https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent'},
-    'gemini_b': {'keys': ('GEMINI_API_KEY',), 'model': 'gemini-2.5-flash-lite', 'rpm': 30, 'rpd': 1000, 'kind': 'gemini',   # 같은 키·다른 모델(모델별 한도 따로) — 앞 모델이 503/429 일 때 이어받음
+    'gemini_b': {'keys': ('GEMINI_API_KEY',), 'model': 'gemini-3.5-flash', 'rpm': 30, 'rpd': 500, 'kind': 'gemini',   # 같은 키·다른 모델(모델별 한도 따로) — 앞 모델이 503/429 일 때 이어받음. (2.5-flash-lite 는 새 키에 404 라 3.5-flash)
                  'url': 'https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent'},
     'cerebras': {'keys': ('CEREBRAS_API_KEY',), 'model': 'gpt-oss-120b', 'rpm': 5, 'rpd': 200, 'kind': 'openai',   # 공식 표: RPM 5(Free Trial)
                  'url': 'https://api.cerebras.ai/v1/chat/completions'},
@@ -175,6 +175,11 @@ class Router:
     def names(self):
         return [p.name for p in self.ps]
 
+    def retry_in(self):
+        """지금은 못 쓰지만 곧 쓸 수 있는 공급자가 있으면 그때까지 초, 없으면 None(오늘은 끝)."""
+        w = [max(0.0, p.cool_until - self.clock()) for p in self.ps if not p.dead and p.day_count < p.rpd]
+        return min(w) + 1 if w else None
+
     def ask(self, system, user):
         """돌려줌 = (글, 공급자 이름, 모델) 또는 None(오늘 쓸 곳이 없음). 여러 스레드에서 불러도 된다."""
         for p in self.ps:
@@ -205,7 +210,7 @@ class Router:
                 log(f'{p.name}: 실패({e}) — 다음 공급자로')
                 with p.lock:
                     p.cool_until = self.clock() + (30 if str(e).startswith('network') else 300)
-                    if str(e).startswith('auth') or str(e).startswith('http 402'):
+                    if str(e).startswith('auth') or str(e).startswith(('http 402', 'http 404')):
                         p.dead = True
                 continue
             with p.lock:
@@ -392,9 +397,17 @@ def run(store, col_files, have_names, have_desc, router, max_places=20000, budge
 
     def work(t):
         mode, items = t
-        if clock() > end:
-            return t, 'time'
-        return t, router.ask(system[mode], make_prompt(items, mode))
+        for _ in range(30):   # 일시 오류(503 등)로 모두 쉬는 중이면 풀릴 때까지 기다렸다 다시(실행 시간 예산 안에서)
+            if clock() > end:
+                return t, 'time'
+            ans = router.ask(system[mode], make_prompt(items, mode))
+            if ans is not None:
+                return t, ans
+            w = router.retry_in()
+            if w is None or clock() + w > end:
+                break
+            time.sleep(min(w, 120))
+        return t, None
 
     rows, meta, st_stop = {}, {}, ''
     with concurrent.futures.ThreadPoolExecutor(max_workers=max(1, workers)) as ex:
