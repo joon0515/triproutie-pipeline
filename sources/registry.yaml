@@ -95,6 +95,30 @@ sources:
     # process 의 place-desc 단계(scripts/place_names.py)가 부른다 — 수집 순환(collect)의 수집기가 아니라 external(osm·tourapi 와 같은 꼴)
     status: external
     fields: [P275, P170]
+  - id: photo_pri
+    name: 사진 우선 층(scripts/photo_pri.py, photo-pri.yml) — 인기 도시 일정 후보·도시 대표 사진부터. P18 = 덤프·캐시 먼저 + QLever wikidata, 판정 = commons_sdc 와 같은 규칙 (11/20 262기)
+    kind: api
+    url: https://qlever.dev/api/wikimedia-commons
+    license: "commons_sdc 와 같음(CC0·CC BY·CC BY-SA, 저작자 있는 것만, 링크만)"
+    attribution: "사진: 저작자 · 라이선스 (위키미디어 공용)"
+    license_url: https://commons.wikimedia.org/wiki/Commons:Reusing_content_outside_Wikimedia
+    robots: "qlever.dev robots.txt 없음(404 = 허용). 끝점마다 따로 쉼(429·403 기록 지킴). 파일 40개씩·QID 200개씩 15초 간격"
+    daily_limit: 1200           # Commons 판정 요청(40개씩)
+    p18_daily_limit: 300        # QLever wikidata P18 요청(200개씩) — 덤프에 없는 우선 QID 만
+    interval_s: 15
+    status: external
+    fields: [P18, P275, P170]
+  - id: unsplash
+    name: Unsplash 공식 API — 도시 대표 사진만(도시당 검색 1회·90일마다, photo_pri.py) (11/20 262기)
+    kind: api
+    url: https://api.unsplash.com
+    license: "Unsplash License(https://unsplash.com/license) — API 가이드라인: photo.urls 핫링크, 고를 때 download_location 1회, 작가·Unsplash 표기 + utm_source=triproutie&utm_medium=referral"
+    attribution: "Photo: 작가 이름 · Unsplash (작가 쪽·사진 쪽 링크)"
+    license_url: https://help.unsplash.com/en/articles/2511245-unsplash-api-guidelines
+    robots: "api.unsplash.com 은 열쇠로 부르는 공식 API — 크롤러용 robots(Disallow /) 대상이 아니라 API 가이드라인을 따름. 화면 긁기 0"
+    secret: UNSPLASH_ACCESS_KEY
+    daily_limit: 60
+    status: external            # 열쇠가 없으면 건너뛰고 도시 사진은 Wikidata P18 → Commons
   - id: official_sites
     name: 공식 사이트 구조화 데이터(schema.org JSON-LD·microdata) — Wikidata P856 씨앗
     kind: crawl

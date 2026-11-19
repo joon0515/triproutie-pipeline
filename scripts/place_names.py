@@ -267,6 +267,9 @@ def build(store, seeds, cache, out, src, budget_end, clock=time.time, http=None)
     if nrows:
         made.update(write_sharded(out, 'names-wd', nrows, lambda p, part: names_doc('wikidata', p, {'part': part})))
     ccache = store.get_json('processed/desc/commons.json.gz', {}) or {}
+    for u, v in (store.get_json('processed/photos/commons.json.gz', {}) or {}).items():  # (11/20 262기) photo_pri 단계의 판정(같은 규칙) — 더 새것만
+        if u not in ccache or ccache[u][0] < v[0]:
+            ccache[u] = v
     st = store.get_json('processed/desc/commons_state.json', {}) or {}
     todo = order_files(seeds, cache, ccache)
     asked, stop = 0, None
