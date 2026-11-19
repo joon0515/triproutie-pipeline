@@ -50,8 +50,13 @@ jobs:
         run: |
           node test_acct_fn.js | tail -1 | tee /tmp/acct.txt
           grep -qx 'acct_fn: 62/0' /tmp/acct.txt
+      - name: live test (252기 liveBudget·placeDetailsLive)
+        run: |
+          set -o pipefail
+          node test_live_fn.js | tail -1 | tee /tmp/live.txt
+          grep -qx 'live_fn: 27/0' /tmp/live.txt
       - name: entry loads
-        run: node -e "const e=require('./index.js'); for (const k of ['flightLookup','geoLookup','deleteAccount']) if(!e[k]) throw new Error(k)"
+        run: node -e "const e=require('./index.js'); for (const k of ['flightLookup','geoLookup','deleteAccount','liveBudget','placeDetailsLive']) if(!e[k]) throw new Error(k)"
   deploy:
     needs: test
     # Workload Identity 조건이 main 만 허용 → 배포는 main 의 push·수동 실행에서만.
