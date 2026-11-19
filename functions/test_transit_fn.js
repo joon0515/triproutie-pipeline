@@ -138,6 +138,15 @@ const req = (body, auth = true) => ({ method: 'POST', body, get: (h) => (h === '
     const r2 = await c2.handle('lta', req({ lat: 1.3, lon: 103.85 }));
     ok(r2.body.ok === false && r2.body.reason === 'upstream', '위쪽 오류 → upstream');
   }
+  // 268기: 사용자별 캐시 미스 상한(좌표를 바꿔 캐시 피하기 차단) · 캐시 적중은 세지 않음
+  {
+    const c = core([[/StopPoint\/\?/, { stopPoints: [] }]]);
+    let last;
+    for (let i = 0; i <= T.USER_MISS_PER_10M; i++) last = await c.handle('tfl', req({ lat: 51.5 + i * 0.001, lon: -0.12 }));
+    ok(last.status === 429 && last.body.reason === 'rate', '268 사용자별 미스 상한 → rate');
+    const hit = await c.handle('tfl', req({ lat: 51.5, lon: -0.12 }));
+    ok(hit.status === 200, '268 캐시 적중은 상한과 무관');
+  }
   console.log(`transit_fn: ${pass}/${fail}`);
   process.exit(fail ? 1 : 0);
 })();

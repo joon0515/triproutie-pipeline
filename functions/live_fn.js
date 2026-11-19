@@ -22,6 +22,7 @@ const FREE_MONTHLY = Object.freeze({ details_enterprise: 1000, details_photos: 1
 const USD_PER_CALL = Object.freeze({ details_enterprise: 20 / 1000, details_photos: 7 / 1000 });
 const DAILY_FREE = Object.freeze({ detailsRich: 29, livePhotos: 29 }); // 무료 월 한도 ÷ 31일 × 0.9
 const USER_PER_DAY = 15; // 앱 kTlPd252DailyCap 과 같음
+const USER_PHOTOS_PER_DAY = 15; // 268기: 사진 SKU 도 사용자별 상한(없으면 한 사람이 사진만 요청해 하루 무료 몫 29·추가 예산을 다 씀)
 // 필드 허용 목록 — 이 밖의 칸은 요청하지 않는다(요금 등급을 올리지 않게). 모두 Place Details Enterprise 이하.
 const ALLOWED = Object.freeze(['regularOpeningHours', 'websiteUri', 'nationalPhoneNumber', 'rating', 'userRatingCount', 'photos']);
 const ENTERPRISE = new Set(['regularOpeningHours', 'websiteUri', 'nationalPhoneNumber', 'rating', 'userRatingCount']);
@@ -110,14 +111,15 @@ function makeLiveCore(deps) {
     return deps.db.runTransaction(async (tx) => {
       const [q, m, d, c, u] = await Promise.all([tx.get(D.q), tx.get(D.m), tx.get(D.d), tx.get(D.cfg), tx.get(uref)]);
       const Q = (q.exists && q.data()) || {}, M = (m.exists && m.data()) || {}, Dd = (d.exists && d.data()) || {}, C = (c.exists && c.data()) || {}, U = (u.exists && u.data()) || {};
-      const un = U.d === day ? int(U.n) : 0;
+      const un = U.d === day ? int(U.n) : 0, up = U.d === day ? int(U.p) : 0;
       if (sku === 'details_enterprise' && un >= USER_PER_DAY) return 'user';
+      if (sku === 'details_photos' && up >= USER_PHOTOS_PER_DAY) return 'user';
       const j = judge(sku, Q, num(C.google_extra_daily_usd), num(Dd.extra_usd));
       if (!j.ok) return 'quota';
       tx.set(D.q, { [j.key]: int(Q[j.key]) + 1, ...(sku === 'details_enterprise' ? { details: int(Q.details) + 1 } : {}) }, { merge: true });
       tx.set(D.m, { [sku]: int(M[sku]) + 1 }, { merge: true });
       if (j.paid) tx.set(D.d, { extra_usd: Math.round((num(Dd.extra_usd) + j.paid) * 1e6) / 1e6 }, { merge: true });
-      if (sku === 'details_enterprise') tx.set(uref, { d: day, n: un + 1 }, { merge: true });
+      tx.set(uref, sku === 'details_enterprise' ? { d: day, n: un + 1, p: up } : { d: day, n: un, p: up + 1 }, { merge: true });
       return 'ok';
     });
   }
@@ -172,4 +174,4 @@ function makeLiveFunctions({ region = REGION } = {}) {
   return { liveBudget: onRequest(opts, wrap(core.budget)), placeDetailsLive: onRequest({ ...opts, secrets: [KEY] }, wrap(core.details)) };
 }
 
-module.exports = { makeLiveFunctions, makeLiveCore, vLive, judge, shape, photoName, pacificParts, ALLOWED, FREE_MONTHLY, DAILY_FREE, USER_PER_DAY };
+module.exports = { makeLiveFunctions, makeLiveCore, vLive, judge, shape, photoName, pacificParts, ALLOWED, FREE_MONTHLY, DAILY_FREE, USER_PER_DAY, USER_PHOTOS_PER_DAY };
