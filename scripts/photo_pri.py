@@ -321,6 +321,30 @@ def city_rows(cities, cstate, ccache, http_wd, budget_end, key=None, opener=None
 
 
 # ---------- 4. 실행 ----------
+def city_diag(cities, cstate, ccache):
+    """도시 사진이 왜 0 인지 보이게(263기 관측): 단계별 도시 수. 상태 파일의 오류 이름만 센다(주소·열쇠 없음)."""
+    d = {'no_state': 0, 'unsplash': 0, 'wd_hit': 0, 'judged': 0, 'free_license': 0}
+    errs = {}
+    for c in cities:
+        st = cstate.get(c['key']) or {}
+        if not st:
+            d['no_state'] += 1
+        if st.get('src') == 'unsplash' and st.get('row'):
+            d['unsplash'] += 1
+        if st.get('p'):
+            d['wd_hit'] += 1
+            cc = ccache.get(st['p'])
+            if cc:
+                d['judged'] += 1
+                if PN.photo_row(st['p'], cc[1]):
+                    d['free_license'] += 1
+        for k in ('wd_err', 'unsplash_err'):
+            if st.get(k):
+                errs[f"{k}:{st[k]}"] = errs.get(f"{k}:{st[k]}", 0) + 1
+    d['errs'] = errs
+    return d
+
+
 def judge_files(prio, cache, pcache):
     """우선 순서대로 Commons 파일 주소(중복 없이)."""
     seen, out = set(), []
@@ -422,6 +446,7 @@ def run(store, bucket=None, tiles_dir=None, out=None, budget_min=50.0, http_wd=N
     store.put_json('processed/photos/commons.json.gz', mine)
     crow, _ = city_rows(cities, cstate, ccache, None, 0, key=None, clock=clock)  # 판정 뒤 다시(요청 없음)
     store.put_json('processed/photos/cities.json', cstate)
+    cdiag = city_diag(cities, cstate, ccache)
     rows, by_city = pri_rows(prio, cache, pcache, ccache, keys_of)
     out = out or tempfile.mkdtemp(prefix='ppri_', dir=os.environ.get('RUNNER_TEMP') or None)
     os.makedirs(out, exist_ok=True)
@@ -437,7 +462,7 @@ def run(store, bucket=None, tiles_dir=None, out=None, budget_min=50.0, http_wd=N
         made['photos-city-1.json.gz'] = len(crow)
     rep = {'p18_asked': p_asked, 'p18_left': len(need) - p_asked, 'p18_stop': p_stop, 'commons_asked': asked, 'commons_left': len(todo) - asked,
            'commons_stop': stop, 'rows': len(rows), 'cities': len(crow), 'unsplash': sum(1 for v in crow.values() if v.get('photo_src') == 'unsplash'),
-           'by_city': by_city}
+           'by_city': by_city, 'city_diag': cdiag}
     st['last'] = dict(rep, at=datetime.datetime.now(datetime.timezone.utc).isoformat())
     store.put_json('processed/photos/state.json', st)
     if bucket and not dry_run:
@@ -463,6 +488,7 @@ def report_lines(rep, cities):
          f"- P18 물음 {rep['p18_asked']:,}(남음 {rep['p18_left']:,})" + (f" · 멈춘 까닭 {rep['p18_stop']}" if rep['p18_stop'] else '')
          + f" · Commons 판정 물음 {rep['commons_asked']:,}(남음 {rep['commons_left']:,})" + (f" · 멈춘 까닭 {rep['commons_stop']}" if rep['commons_stop'] else ''),
          f"- 장소 사진 행 {rep['rows']:,} · 도시 대표 사진 {rep['cities']}/{len(cities)}(Unsplash {rep['unsplash']})",
+         f"- 도시 사진 단계: {rep.get('city_diag')}",
          '| 순위 | 도시 | 일정 후보(QID) | 사진 있음 | 비율 |', '|---|---|---|---|---|']
     for c in cities:
         n, k = rep['by_city'].get(c['key'], (0, 0))
