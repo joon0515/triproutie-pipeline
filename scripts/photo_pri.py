@@ -285,8 +285,9 @@ def unsplash_pick(name, key, opener=None):
     return None, 'none'
 
 
-def city_rows(cities, cstate, ccache, http_wd, budget_end, key=None, opener=None, clock=time.time, now_day=None):
-    """도시마다 행 'city:<key>'. cstate = {key: {at, src, row?, q?, p?}} (processed/photos/cities.json)."""
+def city_rows(cities, cstate, ccache, http_wd, budget_end, key=None, opener=None, clock=time.time, now_day=None, items=None):
+    """도시마다 행 'city:<key>'. cstate = {key: {at, src, row?, q?, p?}} (processed/photos/cities.json).
+    items = Wikidata 덤프에서 고른 도시 항목 {key: {q, p, sl}} (processed/photos/city_items.json, 270기) — 있으면 QLever 에 묻지 않는다."""
     d0 = datetime.date.fromisoformat(now_day or today())
     rows, files = {}, []
     for c in cities:
@@ -298,6 +299,10 @@ def city_rows(cities, cstate, ccache, http_wd, budget_end, key=None, opener=None
                 st = {'at': today(), 'src': 'unsplash', 'row': row}
             else:
                 st['unsplash_err'] = why
+        it = (items or {}).get(k)
+        if st.get('src') != 'unsplash' and it and it.get('p') and (st.get('q'), st.get('p')) != (it.get('q'), it['p']):
+            st.update(q=it.get('q'), p=it['p'], at=today(), src='commons')
+            st.pop('wd_err', None)
         if st.get('src') != 'unsplash' and not st.get('q') and http_wd is not None and clock() < budget_end:
             url = WD_EP + '?' + urllib.parse.urlencode({'query': city_sparql(city_en(k))})
             try:
@@ -323,7 +328,7 @@ def city_rows(cities, cstate, ccache, http_wd, budget_end, key=None, opener=None
 # ---------- 4. 실행 ----------
 def city_diag(cities, cstate, ccache):
     """도시 사진이 왜 0 인지 보이게(263기 관측): 단계별 도시 수. 상태 파일의 오류 이름만 센다(주소·열쇠 없음)."""
-    d = {'no_state': 0, 'unsplash': 0, 'wd_hit': 0, 'judged': 0, 'free_license': 0}
+    d = {'no_state': 0, 'unsplash': 0, 'wd_hit': 0, 'judged': 0, 'free_license': 0, 'judged_not_free': 0}
     errs = {}
     for c in cities:
         st = cstate.get(c['key']) or {}
@@ -338,6 +343,8 @@ def city_diag(cities, cstate, ccache):
                 d['judged'] += 1
                 if PN.photo_row(st['p'], cc[1]):
                     d['free_license'] += 1
+                else:
+                    d['judged_not_free'] += 1
         for k in ('wd_err', 'unsplash_err'):
             if st.get(k):
                 errs[f"{k}:{st[k]}"] = errs.get(f"{k}:{st[k]}", 0) + 1
@@ -513,6 +520,12 @@ def run(store, bucket=None, tiles_dir=None, out=None, budget_min=50.0, http_wd=N
                     kto_stat[c['key']] = (nc, nm)
         except Exception as e:  # noqa: BLE001 — TourAPI 붙이기가 실패해도 P18 길은 계속(이름만 기록)
             log(f'TourAPI 붙이기 실패 {type(e).__name__}')
+        city_ids = {}
+        try:
+            for c in cities:
+                city_ids[c['key']] = city_tile_ids(tiles_for(c['bbox']), c['bbox'])
+        except Exception as e:  # noqa: BLE001 — 측정 실패는 층 만들기를 막지 않는다(이름만)
+            log(f'도시별 타일 행 측정 실패 {type(e).__name__}')
     finally:
         shutil.rmtree(wd, ignore_errors=True)
     cache = store.get_json('processed/desc/wd.json.gz', {}) or {}
@@ -537,13 +550,14 @@ def run(store, bucket=None, tiles_dir=None, out=None, budget_min=50.0, http_wd=N
         if u not in ccache or ccache[u][0] < v[0]:
             ccache[u] = v
     cstate = store.get_json('processed/photos/cities.json', {}) or {}
-    crow, cfiles = city_rows(cities, cstate, ccache, http_wd, t_end - budget_min * 60 * 0.4, key=key, opener=opener, clock=clock)
+    items = (store.get_json('processed/photos/city_items.json', None) or {}).get('cities') or {}
+    crow, cfiles = city_rows(cities, cstate, ccache, http_wd, t_end - budget_min * 60 * 0.4, key=key, opener=opener, clock=clock, items=items)
     todo = [u for u in cfiles + judge_files(prio, cache, pcache) if u not in ccache]
     todo = list(dict.fromkeys(todo))
     asked, stop = PN.fetch_commons(http_c, todo, mine, t_end, clock) if todo else (0, None)
     ccache.update({u: v for u, v in mine.items() if u in todo})
     store.put_json('processed/photos/commons.json.gz', mine)
-    crow, _ = city_rows(cities, cstate, ccache, None, 0, key=None, clock=clock)  # 판정 뒤 다시(요청 없음)
+    crow, _ = city_rows(cities, cstate, ccache, None, 0, key=None, clock=clock, items=items)  # 판정 뒤 다시(요청 없음)
     store.put_json('processed/photos/cities.json', cstate)
     cdiag = city_diag(cities, cstate, ccache)
     cdiag['cooling'] = {f'{n}:{k}': {x: y for x, y in (v or {}).items() if x in ('cool_until', 'code', 'ra')} for n, hs in (('wd', st.get('hosts_wd')), ('c', st.get('hosts_c'))) for k, v in list((hs or {}).items())[:3]}
@@ -564,7 +578,7 @@ def run(store, bucket=None, tiles_dir=None, out=None, budget_min=50.0, http_wd=N
         made['photos-city-1.json.gz'] = len(crow)
     rep = {'p18_asked': p_asked, 'p18_left': len(need) - p_asked, 'p18_stop': p_stop, 'commons_asked': asked, 'commons_left': len(todo) - asked,
            'commons_stop': stop, 'rows': len(rows), 'cities': len(crow), 'unsplash': sum(1 for v in crow.values() if v.get('photo_src') == 'unsplash'),
-           'by_city': by_city, 'city_diag': cdiag, 'kto': {k: list(v) for k, v in kto_stat.items()}}
+           'by_city': by_city, 'city_diag': cdiag, 'kto': {k: list(v) for k, v in kto_stat.items()}, 'tile_cov': tile_cov(city_ids, rows)}
     st['last'] = dict(rep, at=datetime.datetime.now(datetime.timezone.utc).isoformat())
     store.put_json('processed/photos/state.json', st)
     if bucket and not dry_run:
@@ -585,6 +599,27 @@ def run(store, bucket=None, tiles_dir=None, out=None, budget_min=50.0, http_wd=N
     return rep, sorted(made)
 
 
+TOP_N = 50
+
+
+def city_tile_ids(tiles, bbox):
+    """(270기) 도시 상자 안 타일 행 id 전부(점수 높은 순, 중복 없음) — QID 가 없는 한국·해외 행도 센다(측정 분모)."""
+    rows = []
+    for d in tiles:
+        ids, la_, lo_ = d.get('id') or [], d.get('_lat') or [], d.get('_lon') or []
+        sc = d.get('s') if isinstance(d.get('s'), list) else None
+        for i in range(min(len(ids), len(la_), len(lo_))):
+            if isinstance(ids[i], str) and bbox[0] <= lo_[i] <= bbox[2] and bbox[1] <= la_[i] <= bbox[3]:
+                rows.append((-(sc[i] or 0) if sc else 0, ids[i]))
+    rows.sort()
+    return list(dict.fromkeys(r for _, r in rows))
+
+
+def tile_cov(city_ids, rows):
+    """{도시: [타일 행 수, 사진 있는 행, 상위 50 중 사진]} — 사진 층 행 열쇠(타일 행 id)와 같은 열쇠로 센다."""
+    return {k: [len(ids), sum(1 for r in ids if r in rows), sum(1 for r in ids[:TOP_N] if r in rows)] for k, ids in city_ids.items()}
+
+
 def report_lines(rep, cities):
     L = [f'## 사진 우선 층(photo-pri) {today()}',
          f"- P18 물음 {rep['p18_asked']:,}(남음 {rep['p18_left']:,})" + (f" · 멈춘 까닭 {rep['p18_stop']}" if rep['p18_stop'] else '')
@@ -592,10 +627,12 @@ def report_lines(rep, cities):
          f"- 장소 사진 행 {rep['rows']:,} · 도시 대표 사진 {rep['cities']}/{len(cities)}(Unsplash {rep['unsplash']})",
          f"- 도시 사진 단계: {rep.get('city_diag')}",
          f"- 한국 TourAPI 사진 붙임(도시: 상자 안 사진 카드 · 붙은 타일 행): {rep.get('kto')}",
-         '| 순위 | 도시 | 일정 후보(QID) | 사진 있음 | 비율 |', '|---|---|---|---|---|']
+         '| 순위 | 도시 | 일정 후보(QID) | QID 사진 | 타일 행(전체, QID 없는 행 포함) | 사진 있음 | 비율 | 상위 50 중 사진 |', '|---|---|---|---|---|---|---|---|']
+    tc = rep.get('tile_cov') or {}
     for c in cities:
         n, k = rep['by_city'].get(c['key'], (0, 0))
-        L.append(f"| {c['rank']} | {c['key']} | {n:,} | {k:,} | {(100.0 * k / n if n else 0):.1f}% |")
+        tn, th, t50 = tc.get(c['key'], (0, 0, 0))
+        L.append(f"| {c['rank']} | {c['key']} | {n:,} | {k:,} | {tn:,} | {th:,} | {(100.0 * th / tn if tn else 0):.1f}% | {t50}/{min(TOP_N, tn)} |")
     return L
 
 

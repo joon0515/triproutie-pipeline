@@ -31,6 +31,57 @@ CHUNK = 8 << 20      # 내려받기 읽기 단위
 DEC = 2 << 20        # 한 번에 푸는 압축 바이트(풀린 글 약 30MB)
 WANT = set()         # 씨앗 QID(정수) — fork 로 프로세스에 그대로 나눠 쓴다
 ID_RE = re.compile(rb'"id": ?"Q(\d+)"')
+# (11/20 270기) 도시 대표 사진: 우선 도시(sources/priority_cities.json)의 Wikidata 항목을 QLever 대신 덤프에서 고른다.
+#  영어 라벨·별칭이 아래 이름이고 P625 좌표가 그 도시 상자 안이며 P18 이 있는 항목 중 sitelinks 가 가장 많은 것. 결과 = 조각 파일의 '_city' → merge 가 processed/photos/city_items.json
+CITY_NAMES = {'jeju': ['Jeju City', 'Jeju Island', 'Jeju'], 'osaka': ['Osaka'], 'tokyo': ['Tokyo'], 'busan': ['Busan'], 'fukuoka': ['Fukuoka'], 'seoul': ['Seoul'],
+              'danang': ['Da Nang'], 'bangkok': ['Bangkok'], 'taipei': ['Taipei'], 'kyoto': ['Kyoto'], 'sapporo': ['Sapporo'], 'okinawa_naha': ['Naha'],
+              'gangneung': ['Gangneung'], 'gyeongju': ['Gyeongju'], 'hongkong': ['Hong Kong'], 'singapore': ['Singapore'], 'nhatrang': ['Nha Trang'],
+              'cebu': ['Cebu City'], 'hochiminh': ['Ho Chi Minh City'], 'hanoi': ['Hanoi'], 'guam': ['Guam'], 'bali_south': ['Denpasar', 'Kuta', 'Badung Regency'],
+              'shanghai': ['Shanghai'], 'yeosu': ['Yeosu'], 'jeonju': ['Jeonju'], 'sokcho': ['Sokcho'], 'paris': ['Paris'], 'rome': ['Rome'], 'barcelona': ['Barcelona'],
+              'london': ['London'], 'prague': ['Prague'], 'newyork': ['New York City'], 'losangeles': ['Los Angeles'], 'honolulu': ['Honolulu'], 'sydney': ['Sydney'],
+              'istanbul': ['Istanbul'], 'dubai': ['Dubai'], 'manila': ['Manila']}
+CITY_BOX = {}        # key → bbox (main 이 priority_cities.json 에서 채움)
+CITY_OF = {}         # 영어 이름 → [key…]
+CITY_RE = None
+
+
+def city_setup(cities):
+    """cities = [{key, bbox}] → 이름 정규식. 이름 표가 없는 도시는 key 를 단어로 푼 이름."""
+    global CITY_RE
+    CITY_BOX.clear(); CITY_OF.clear()
+    for c in cities:
+        CITY_BOX[c['key']] = c['bbox']
+        for n in CITY_NAMES.get(c['key']) or [' '.join(w.capitalize() for w in c['key'].split('_'))]:
+            CITY_OF.setdefault(n, []).append(c['key'])
+    alt = b'|'.join(re.escape(n.encode()) for n in sorted(CITY_OF, key=len, reverse=True))
+    CITY_RE = re.compile(rb'"language": ?"en", ?"value": ?"(' + alt + rb')"') if CITY_OF else None
+
+
+def city_hit(ent, names):
+    """덤프 항목 + 맞은 영어 이름들 → [(key, [sitelinks, QID, P18 주소])] (좌표가 상자 안 · P18 있음 · 동음이의 아님)."""
+    cl = ent.get('claims') or {}
+    if any(((c.get('mainsnak') or {}).get('datavalue') or {}).get('value', {}).get('id') == DISAMBIG for c in cl.get('P31') or []):
+        return []
+    pts = []
+    for c in cl.get('P625') or []:
+        v = ((c.get('mainsnak') or {}).get('datavalue') or {}).get('value')
+        if isinstance(v, dict) and isinstance(v.get('latitude'), (int, float)) and c.get('rank') != 'deprecated':
+            pts.append((v['latitude'], v['longitude']))
+    p18 = []
+    for c in cl.get('P18') or []:
+        v = ((c.get('mainsnak') or {}).get('datavalue') or {}).get('value')
+        if isinstance(v, str) and v and c.get('rank') != 'deprecated':
+            p18.append((0 if c.get('rank') == 'preferred' else 1, FILEPATH + urllib.parse.quote(v, safe='')))
+    if not pts or not p18:
+        return []
+    sl = len(ent.get('sitelinks') or {})
+    out = []
+    for n in names:
+        for k in CITY_OF.get(n, ()):
+            b = CITY_BOX[k]
+            if any(b[0] <= lo <= b[2] and b[1] <= la <= b[3] for la, lo in pts):
+                out.append((k, [sl, ent.get('id'), sorted(p18)[0][1]]))
+    return out
 
 
 def log(m):
@@ -241,6 +292,16 @@ class Lines:
 
     def line(self, ln):
         self.n += 1
+        if CITY_RE is not None:
+            cm = CITY_RE.findall(ln)
+            if cm:
+                try:
+                    for k, v in city_hit(json.loads(ln.rstrip(b',\r\n ')), {x.decode() for x in cm}):
+                        cur = self.out.setdefault('_city', {}).get(k)
+                        if cur is None or v[0] > cur[0]:
+                            self.out['_city'][k] = v
+                except ValueError:
+                    self.bad += 1
         m = ID_RE.search(ln, 0, 120)
         if not m or int(m.group(1)) not in self.want:
             return
@@ -330,6 +391,11 @@ def meta_of(url=DUMP, opener=None):
     return {'url': url, 'size': size, 'date': day, 'eos_bit': eos[-1]}
 
 
+def load_cities():
+    j = json.load(open(os.path.join(HERE, '..', 'sources', 'priority_cities.json'), encoding='utf-8'))
+    return [c for c in j['cities'] if isinstance(c.get('bbox'), list) and len(c['bbox']) == 4]
+
+
 def load_qids(store):
     j = store.get_json('processed/desc/qids.json.gz', None) or {}
     return set(int(q) for q in j.get('q') or [])
@@ -351,6 +417,8 @@ def main():
         qn = len(load_qids(store))
         m['qids'] = qn
         skip = (not a.force) and st.get('date') == m['date'] and st.get('qids', -1) >= qn and st.get('jobs') == a.jobs  # 조각이 빠졌으면 다시
+        if skip and (store.get_json('processed/photos/city_items.json', None) or {}).get('date') != m['date']:
+            skip = False  # (270기) 도시 대표 항목을 이 덤프로 아직 고르지 않음
         if qn == 0:
             skip = True
             log('씨앗 QID 목록 없음(place-desc 단계가 한 번 돌아야 생김)')
@@ -362,6 +430,7 @@ def main():
     m = json.loads(open(a.meta).read()) if os.path.exists(a.meta) else json.loads(a.meta)
     if a.cmd == 'scan':
         WANT.update(load_qids(store))
+        city_setup(load_cities())
         parts = a.jobs * a.procs
         mine = [a.job * a.procs + i for i in range(a.procs)]
         import multiprocessing as mp
@@ -369,21 +438,30 @@ def main():
             res = pool.map(scan_part, [(p, parts, m['size'], m['eos_bit'], m['date'], m['url']) for p in mine])
         out = {}
         for o, s in res:
+            for ck, v in (o.pop('_city', None) or {}).items():  # 프로세스마다 고른 도시 항목 — 큰 쪽(sitelinks)만
+                if ck not in out.setdefault('_city', {}) or v[0] > out['_city'][ck][0]:
+                    out['_city'][ck] = v
             out.update(o)
             log(f"조각 {s['part']}/{parts}: 줄 {s['lines']:,} · 맞은 QID {s['hit']:,} · {s.get('mb', 0)} MB · {s['sec']}초")
         store.put_json(f"processed/desc/dump/{m['date']}/job-{a.job:03d}.json.gz", out)
         return 0
     # merge
     keys = [k for k in store.list(f"processed/desc/dump/{m['date']}/") if k.endswith('.json.gz')]
-    allc = {}
+    allc, cities = {}, {}
     for k in keys:
-        allc.update(store.get_json(k, {}) or {})
+        part = store.get_json(k, {}) or {}
+        for ck, v in (part.pop('_city', None) or {}).items():
+            if ck not in cities or v[0] > cities[ck][0]:
+                cities[ck] = v
+        allc.update(part)
     store.put_json('processed/desc/wd_dump.json.gz', allc)
+    store.put_json('processed/photos/city_items.json', {'date': m['date'], 'cities': {k: {'sl': v[0], 'q': v[1], 'p': v[2]} for k, v in sorted(cities.items())}})
     n_desc = sum(1 for v in allc.values() if v[1])
     n_lab = sum(1 for v in allc.values() if (v[2] or {}).get('l'))
     store.put_json('processed/desc/dump/state.json', {'date': m['date'], 'qids': m.get('qids'), 'jobs': len(keys), 'found': len(allc),
                                                       'with_desc': n_desc, 'with_label': n_lab, 'at': datetime.datetime.now(datetime.timezone.utc).isoformat()})
-    msg = f"## Wikidata 덤프 조인 {m['date']}\n- 조각 파일 {len(keys)}개 · 씨앗 QID {m.get('qids', 0):,} 중 덤프에서 찾음 {len(allc):,} · 설명 있음 {n_desc:,} · 라벨 있음 {n_lab:,}\n"
+    msg = (f"## Wikidata 덤프 조인 {m['date']}\n- 조각 파일 {len(keys)}개 · 씨앗 QID {m.get('qids', 0):,} 중 덤프에서 찾음 {len(allc):,} · 설명 있음 {n_desc:,} · 라벨 있음 {n_lab:,}\n"
+           f"- 도시 대표 항목(P18 있음) {len(cities)}/{len(load_cities())}" + (f" · 못 찾음 {', '.join(sorted(set(c['key'] for c in load_cities()) - set(cities)))}" if len(cities) < len(load_cities()) else '') + "\n")
     p = os.environ.get('GITHUB_STEP_SUMMARY')
     if p:
         open(p, 'a', encoding='utf-8').write(msg)
