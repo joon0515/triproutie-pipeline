@@ -1,0 +1,86 @@
+# 트립루티 transit-packs (257기) — 앱이 오프라인·키 없이 쓰는 대중교통 요금표·시간표를 주 1회 만든다. 키·비밀값 없음.
+# 요금: MTR 공식 요금 CSV(DATA.GOV.HK) · LTA 성인 카드 요금(data.gov.sg) · 東京都交通局 IC 운임(ODPT 공개, CC BY 4.0) + 운영사 공식 안내 숫자(scripts/transit_packs.py STATIC_RULES, 출처·확인일 포함)
+# 시간표: collect 가 보관한 열린 라이선스 GTFS(gtfs/index) 의 도시별 피드 + 東京都交通局 역 시간표(ODPT 공개). calendar.txt 요일 기준.
+# 저장: places/v1/transit/fares.json.gz · places/v1/transit/tt/<city>.json.gz — storage.rules places/{ver}/** 그대로(규칙 변경 없음).
+# 실패하면 그 파일을 건드리지 않는다 → 앱은 마지막 파일과 기준일을 그대로 보여 준다.
+name: transit-packs
+on:
+  schedule:
+    - cron: "40 19 * * 1"     # 월 UTC 19:40 = 화 KST 04:40
+  workflow_dispatch: {}
+  pull_request:
+    paths: ["scripts/transit_packs.py", "tests/test_transit_packs.py", ".github/workflows/transit_packs.yml"]
+permissions:
+  contents: read
+  id-token: write
+concurrency:
+  group: transit-packs
+  cancel-in-progress: false
+env:
+  GCS_BUCKET: ${{ vars.GCS_BUCKET || 'trip-mate-0vum9k.firebasestorage.app' }}
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: test (no network, no key)
+        run: python3 -m unittest tests/test_transit_packs.py
+  publish:
+    needs: test
+    if: github.repository == 'joon0515/triproutie-pipeline' && github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+      - uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ vars.GCP_WIF_PROVIDER || 'projects/222914945328/locations/global/workloadIdentityPools/github-pool/providers/github-provider' }}
+          service_account: ${{ vars.GCP_SA_EMAIL || 'pipeline-uploader@trip-mate-0vum9k.iam.gserviceaccount.com' }}
+      - uses: google-github-actions/setup-gcloud@v2
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: fares
+        run: |
+          set -euo pipefail
+          W="$RUNNER_TEMP/tp"; mkdir -p "$W"
+          python3 scripts/transit_packs.py fares --out "$W/fares.json.gz"
+          gcloud storage cp -q --content-type=application/json --content-encoding=identity --cache-control="private, max-age=86400" "$W/fares.json.gz" "gs://$GCS_BUCKET/places/v1/transit/fares.json.gz"
+      - name: timetables
+        run: |
+          set -uo pipefail
+          W="$RUNNER_TEMP/tt"; mkdir -p "$W/idx" "$W/z"
+          gcloud storage cp -q "gs://$GCS_BUCKET/collect/v1/gtfs/index/*.json" "$W/idx/" || { echo "::warning::GTFS 목록 없음"; }
+          # 도시 → 'zip 위치=피드id=라이선스=표기' 줄들(피드마다 가장 최근 zip 하나)
+          python3 - "$W/idx" > "$W/plan.tsv" <<'PY'
+          import glob, json, sys
+          by = {}
+          for p in glob.glob(sys.argv[1] + '/*.json'):
+              for fid, x in json.load(open(p)).items():
+                  if x.get('city') and x.get('key') and x.get('bytes', 0) < 150_000_000 and x.get('lic_class') in ('cc0', 'cc-by', 'etalab'):  # ODbL·SA 는 파생 DB 공개 의무가 있어 앱 팩에 섞지 않음
+                      by.setdefault(x['city'], []).append((fid, x))
+          for city, feeds in sorted(by.items()):
+              for fid, x in feeds:
+                  print(f"{city}\t{x['key']}\t{fid}\t{x.get('license','')[:60]}\t{x.get('provider','')[:60]}")
+          PY
+          for city in $(cut -f1 "$W/plan.tsv" | sort -u) tokyo; do
+            ARGS=()
+            while IFS=$'\t' read -r c key fid lic prov; do
+              [ "$c" = "$city" ] || continue
+              f="$W/z/$(echo "$fid" | tr -c 'A-Za-z0-9_-' '_').zip"
+              gcloud storage cp -q "gs://$GCS_BUCKET/collect/v1/$key" "$f" >/dev/null 2>&1 && ARGS+=(--gtfs "$f=$fid=$lic=$prov")
+            done < "$W/plan.tsv"
+            [ "$city" = "tokyo" ] && ARGS+=(--odpt-toei)
+            [ ${#ARGS[@]} -eq 0 ] && continue
+            if python3 scripts/transit_packs.py timetable --city "$city" "${ARGS[@]}" --out "$W/$city.json.gz"; then
+              sz=$(stat -c %s "$W/$city.json.gz")
+              if [ "$sz" -gt 8000000 ]; then echo "::warning::$city 시간표 ${sz}B > 8MB — 올리지 않음"; continue; fi
+              gcloud storage cp -q --content-type=application/json --cache-control="private, max-age=86400" "$W/$city.json.gz" "gs://$GCS_BUCKET/places/v1/transit/tt/$city.json.gz"
+            else
+              echo "::warning::$city 시간표 실패 — 지난 파일 유지"
+            fi
+          done
