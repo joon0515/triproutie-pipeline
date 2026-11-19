@@ -357,6 +357,7 @@ class BadInput(unittest.TestCase):
         reg = {'sources': [dict(next(x for x in REG['sources'] if x['id'] == 'official_sites'))]}
         r = R.job(reg, store, 'official_sites', '1', opener=op, sleep=lambda x: None)
         self.assertIsNone(r['err'], r); self.assertTrue(r['counts'])
+        self.assertEqual(r['skips'], 1); self.assertNotIn('skipped_sites', r['counts'])
 
     def test_city_rank(self):
         self.assertEqual(K.city_rank(33.45, 126.55), 1)        # 제주

@@ -105,7 +105,7 @@ class Ctx:
         self.reg, self.src, self.shard, self.store, self.st, self.deadline = reg, src, shard, store, st, deadline
         self.nshards = len(shards(src))
         self.http = http or Http(src, st, hosts, deadline=deadline)
-        self.counts, self.notes, self.seq = {}, [], 0
+        self.counts, self.notes, self.seq, self.skips = {}, [], 0, 0  # skips: 건너뛴 사이트 수(관측)
         self.stamp = now().strftime('%H%M%S')
 
     def emit(self, dataset, rows):
@@ -155,7 +155,7 @@ def job(reg, store, source, shard, budget_min=50, opener=None, sleep=time.sleep)
         st['fail_streak'] = 0
         if stop in (None, 'LIMIT'):  # 끝까지 했거나 오늘 한도를 다 씀. TIME·BLOCKED 는 다음 회차에 이어서
             st['last_ok'] = today()
-    st['last'] = {'counts': ctx.counts, 'stop': stop, 'err': err, 'sec': round(time.time() - t0), 'notes': ctx.notes[-5:]}
+    st['last'] = {'counts': ctx.counts, 'stop': stop, 'err': err, 'sec': round(time.time() - t0), 'notes': ctx.notes[-5:], 'skips': ctx.skips}
     store.put_json(skey, st)
     res = {'source': source, 'shard': shard, **st['last'], 'req': st.get('req', 0), 'fail_streak': st['fail_streak']}
     summ = os.environ.get('GITHUB_STEP_SUMMARY')
