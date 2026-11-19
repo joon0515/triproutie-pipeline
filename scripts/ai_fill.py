@@ -424,6 +424,43 @@ def run(store, col_files, have_names, have_desc, router, max_places=20000, budge
     return rep
 
 
+# ---------------------------------------------------------------- 입력 모으기(Storage)
+def gather_store(store, work, cities, extra_dir='', max_files=60):
+    """Storage 의 수집 층 col_*(최신 run)을 우선 도시의 나라부터 받아 로컬 경로 목록을 돌려준다. 이름·소개 층은 extra_dir(워크플로가 layers_extra 에서 받아 둠)에서 읽는다."""
+    import coverage as CV
+    names, desc = {}, {}
+    if extra_dir and os.path.isdir(extra_dir):
+        ex = [os.path.join(extra_dir, f) for f in sorted(os.listdir(extra_dir)) if f.startswith(('names-', 'desc-')) and f.endswith('.json.gz')]
+        CV.side_ids(ex, names)
+        desc = {k: v for k, v in (CV.desc_ids(ex) or {}).items() if k in SLOTS}
+    latest = store.get_json('processed/latest.json', None)
+    if not latest:
+        return [], names, desc
+    paths = latest.get('paths') or {f: f"processed/out/{latest['run']}/{f}" for f in latest.get('files', [])}
+    keys = sorted(v for k, v in paths.items() if k.startswith('col_') and not k.startswith('col_info_'))
+    ccs = {}
+    for k in keys:
+        m = re.match(r'col_([A-Z0-9]{2})_', os.path.basename(k))
+        if m:
+            ccs.setdefault(m.group(1), []).append(k)
+    want = []
+    for c in cities:
+        for k in ccs.get(CITY_CC.get(c['key']), []):
+            if k not in want:
+                want.append(k)
+    want = want[:max_files]
+    got = store.pull(want, os.path.join(work, 'col'), strict=False)
+    return [got[k] for k in want if k in got], names, desc
+
+
+# 우선 도시 키 → 나라 코드(수집 층 파일 이름 col_<cc>_N). 목록에 없는 도시는 건너뛴다.
+CITY_CC = {'jeju': 'KR', 'seoul': 'KR', 'busan': 'KR', 'gangneung': 'KR', 'gyeongju': 'KR', 'yeosu': 'KR', 'jeonju': 'KR', 'sokcho': 'KR',
+           'osaka': 'JP', 'tokyo': 'JP', 'fukuoka': 'JP', 'kyoto': 'JP', 'sapporo': 'JP', 'okinawa_naha': 'JP', 'danang': 'VN', 'nhatrang': 'VN',
+           'hochiminh': 'VN', 'hanoi': 'VN', 'bangkok': 'TH', 'taipei': 'TW', 'hongkong': 'HK', 'singapore': 'SG', 'cebu': 'PH', 'manila': 'PH', 'guam': 'GU',
+           'bali_south': 'ID', 'shanghai': 'CN', 'paris': 'FR', 'rome': 'IT', 'barcelona': 'ES', 'london': 'GB', 'prague': 'CZ', 'newyork': 'US',
+           'losangeles': 'US', 'honolulu': 'US', 'sydney': 'AU', 'istanbul': 'TR', 'dubai': 'AE'}
+
+
 # ---------------------------------------------------------------- 앱 묶음(publish)에 싣는 층 만들기
 EXPORT_MAX = 6 * 1024 * 1024
 CREDIT = {'names': 'AI 번역·음역 (Gemini 등 공식 무료 API, 행마다 provider·model·date)', 'desc': 'AI 요약 (근거 칸만 사용, 행마다 provider·model·date)'}
