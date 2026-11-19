@@ -187,3 +187,18 @@ class Wiring(unittest.TestCase):
     def test_main_pieces_exist(self):   # 11/20 합치다 gather_store 가 빠졌던 일 방지
         for n in ('gather_store', 'CITY_CC', 'export_layers', 'run', 'main'):
             self.assertTrue(hasattr(A, n), n)
+
+
+class Retry(unittest.TestCase):
+    def test_503_retried_then_ok(self):
+        n = []
+
+        def post(u, h, b):
+            n.append(1)
+            if len(n) < 3:
+                raise A.ProviderError('http 503 UNAVAILABLE')
+            return {'candidates': [{'content': {'parts': [{'text': '{}'}]}}]}
+        p = A.Provider('gemini', A.SPEC['gemini'], {'GEMINI_API_KEY': 'k'}, sleep=lambda s: None)
+        r = A.Router([p], post=post, sleep=lambda s: None)
+        self.assertTrue(r.ask('s', 'u'))
+        self.assertEqual(len(n), 3)
