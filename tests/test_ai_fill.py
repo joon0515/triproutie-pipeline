@@ -110,14 +110,14 @@ class T(unittest.TestCase):
                 raise A.RateLimited(60)
             return {'choices': [{'message': {'content': '{"results":[]}'}}]}
         r = A.Router(ps, post=post, clock=lambda: t[0])
-        self.assertEqual(r.names(), ['gemini', 'groq'])
+        self.assertEqual(r.names(), ['gemini', 'gemini_b', 'groq'])
         a = r.ask('s', 'u')
         self.assertEqual(a[1], 'groq')
-        self.assertEqual(len(calls), 2)
+        self.assertEqual(len(calls), 3)   # gemini·gemini_b 429 → groq
         r.ask('s', 'u')
-        self.assertEqual(len(calls), 3)   # gemini 는 쉬는 중 — 다시 부르지 않음
+        self.assertEqual(len(calls), 4)   # 앞 둘은 쉬는 중 — 다시 부르지 않음
         # 분당 한도
-        ps[2].rpm = 2
+        ps[3].rpm = 2
         for _ in range(3):
             r.ask('s', 'u')
         self.assertTrue(slept)   # 분당 2회 → 30초 간격으로 예약

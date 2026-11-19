@@ -19,7 +19,7 @@
 - Gemini 무료 등급의 모델별 RPM·RPD 숫자는 **공식 문서에 없고 AI Studio 화면(Rate limit)에서만 보인다**(rate-limits·quota 문서 확인) → 미확인. 코드 기본값은 flash-lite 계열 gemini-3.1-flash-lite, RPM 30·RPD 1,500(환경 변수 `AI_GEMINI_RPM`·`AI_GEMINI_RPD`)이고, 429 가 연달아 6번 오거나 재시도 대기가 15분을 넘으면 그 실행에서는 끈다. 대표가 AI Studio 에서 실제 숫자를 보면 바로 맞춘다.
 - 이름 요청 = 50곳 묶음(출력이 짧음), 설명 요청 = 10곳 묶음(하루 `AI_DESC_MAX` 기본 500곳까지), 동시 요청 `AI_CONCURRENCY` 기본 4(호출 시각을 60/rpm 초 간격으로 예약해 분당 한도 안).
 - 하루 상한 `AI_MAX_PLACES` 기본 20,000곳(= 이름 요청 약 400회 + 설명 50회). 3시간마다 실행(8회/일, 1회 50분 예산, 동시 실행 1개)하고 state 가 하루 합산.
-- 공급자를 더 켜도 상한은 그대로.
+- 같은 키로 모델 두 개(gemini-3.1-flash-lite → 503·429 면 gemini-2.5-flash-lite)를 차례로 쓴다. 공급자를 더 켜도 상한은 그대로.
 
 ## 결과·출처
 - Storage `processed/ai_fill/out/aifill-<날짜>-NNNN.json.gz`(schema `aifill-1`), 행 = {ko,en,ja,zh_Hans,zh_Hant(빈 칸만), d:{언어: 설명}, src:'ai', provider, model, date, city}. 진행 위치 `processed/ai_fill/state.json`(1MB 미만)·처리한 장소 `done.json.gz`(같은 장소 두 번 처리 금지).
