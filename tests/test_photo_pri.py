@@ -56,6 +56,17 @@ class PhotoPri(unittest.TestCase):
         pr = PP.prio_order(cities, tf)
         self.assertEqual(pr, [('osaka', ['Q2', 'Q3', 'Q1'])])  # 점수 높은 순, 상자 밖 Q9·QID 아닌 행 빠짐
 
+    def test_prefixed_tile_ids_kowiki_Q(self):  # 263기: 실제 앱 타일 행 id 는 'kowiki:Q123' — 맨몸 Q 만 보면 일정 후보 0(사진 0% 의 둘째 원인)
+        d = pack(['kowiki:Q7', 'fsq:abc', 'Q8'], [(34.69, 135.50), (34.68, 135.50), (34.70, 135.51)], [90, 99, 10])
+        tmp = os.path.join(self.tmp, 't2'); os.makedirs(tmp)
+        with gzip.open(os.path.join(tmp, 'w-x_JP.json.gz'), 'wt') as f:
+            json.dump(d, f)
+        _, tf = PP.local_tiles_for(tmp)
+        keys = {}
+        pr = PP.prio_order([{'rank': 1, 'key': 'osaka', 'bbox': [135.35, 34.55, 135.65, 34.8]}], tf, keys)
+        self.assertEqual(pr, [('osaka', ['Q7', 'Q8'])])
+        self.assertEqual(keys, {'Q7': {'kowiki:Q7'}})  # 사진 행은 앱 타일 행 id 로도 싣는다
+
     def test_p18_from_dump_first_then_endpoint(self):
         self.store.put_json('processed/desc/wd_dump.json.gz', {'Q2': ['2026-11-11', {}, {'l': {}, 'p': FP + 'A.jpg'}]})
         h = FakeHttp(p18={'Q3': FP + 'B.jpg'}, lic={FP + 'A.jpg': ('Q18199165', 'Kim'), FP + 'B.jpg': ('Q6938433', 'Lee')})
