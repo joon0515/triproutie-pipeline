@@ -21,6 +21,7 @@ REG = os.path.join(HERE, '..', '..', 'sources', 'registry.yaml')
 MAX_JOBS, DISC_SHARE = int(os.environ.get('COLLECT_MAX_JOBS') or 18), 0.3  # 저장소 변수 COLLECT_MAX_JOBS 로 조절(가공 조각과 합쳐 동시 20 안쪽 — docs/THROUGHPUT.md)
 RETRY_FAST, RETRY_SLOW_H = 3, 6  # 연속 실패 3회 미만 = 다음 회차에 맨 먼저 다시. 3회 이상 = 6시간에 한 번만(다른 조각 자리를 막지 않게)
 REFRESH_DAYS = {'hourly': 0, 'daily': 1, 'weekly': 7, 'monthly': 1}  # monthly 는 날마다 새 릴리스만 확인(수집기가 같으면 곧 끝냄)
+OVT_FIRST = int(os.environ.get('COLLECT_OVT_FIRST') or 6)  # 매시 Overture 먼저 줄 자리(저장소 변수로 조절) — 229 ÷ 6 ≈ 38시간
 HEAVY_CAP = {'overture_places': 8, 'fsq_os_places': 6, 'wikivoyage': 2, 'commons_photos': 1}  # 덤프 2종: 러너 1대 = 조각 1개라 디스크·메모리는 서로 무관. 229개 나라 조각 ÷ 8 ≈ 29시간  # 사진: 위키미디어 '한 번에 한 요청' — 한 시간에 조각 1개  # 한 시간에 같은 큰 출처 조각 상한(러너 디스크·메모리)
 
 
@@ -87,7 +88,12 @@ def plan(reg, index, env=os.environ, max_jobs=MAX_JOBS, demand=None):
             pick.append({'source': sid, 'shard': sh}); n -= 1
 
     take(disc, nd)
-    take(col, max_jobs - len(pick))
+    # (11/18 252기) Overture 는 229조각 중 3조각(11/17) — 같은 날짜·같은 나라 순위면 이름순으로 fsq 가 앞서 Overture 는 남는 자리만 받았다.
+    #  아직 받지 못한 Overture 조각이 있으면 매시 OVT_FIRST 자리를 먼저 준다(러너 1대 = 조각 1개라 디스크는 조각끼리 무관, 동시 실행 수는 그대로).
+    ovt = [x for x in col if x[2] == 'overture_places' and x[0] in ('', ' ')]  # '' = 방금 실패해 다시 하는 조각
+    if ovt:
+        take(ovt, min(OVT_FIRST, max_jobs - len(pick)))
+    take([x for x in col if {'source': x[2], 'shard': x[4]} not in pick], max_jobs - len(pick))
     if len(pick) < max_jobs:  # 수집 몫이 남으면 발견에 더 준다(놀리지 않음)
         rest = [x for x in disc if {'source': x[2], 'shard': x[4]} not in pick]
         take(rest, max_jobs - len(pick))

@@ -54,6 +54,13 @@ _PAIRS = ('区區 们們 国國 馆館 园園 东東 门門 时時 长長 广廣
           '这這 还還 对對 观觀 寿壽 归歸 际際 饭飯 饮飲 宫宮 纪紀 线線 贸貿 览覽 旧舊 总總 处處 务務 艺藝 术術 剧劇 厅廳 宝寶')
 SIMP = {p[0] for p in _PAIRS.split() if p[0] != p[1]}
 TRAD = {p[1] for p in _PAIRS.split() if p[0] != p[1]}
+# (11/18 252기) 위 77짝만으로는 꼬리표 없는 zh 이름 대부분이 'neutral' 로 남아 zh_Hans 채움이 0 이었다(예: 서울 Overture zh 99개 전부 neutral).
+#  Unicode Unihan 변형 표에서 뽑은 간체 전용 2,353자·번체 전용 5,372자를 더한다(sources/zh_script_chars.json — 갈래만 보고 바꾸지 않음).
+try:
+    _ZS = json.load(open(os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'sources', 'zh_script_chars.json'), encoding='utf-8'))
+    SIMP |= set(_ZS.get('hans_only', '')); TRAD |= set(_ZS.get('hant_only', ''))
+except (OSError, ValueError):
+    pass
 KANA = re.compile(r'[぀-ヿ]')
 
 
