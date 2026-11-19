@@ -164,7 +164,8 @@ def http_post(url, headers, body, timeout=180):
 class Router:
     """켜진 공급자를 차례로 쓴다. 한도 초과·429 면 쉬게 하고 다음으로. 전부 쓸 수 없으면 None."""
 
-    def __init__(self, providers, post=http_post, clock=time.time):
+    def __init__(self, providers, post=http_post, clock=time.time, sleep=time.sleep):
+        self.sleep = sleep
         self.ps = [p for p in providers if p.enabled]
         self.post, self.clock = post, clock
         self.used = {p.name: 0 for p in self.ps}
@@ -182,7 +183,14 @@ class Router:
             p.wait_slot()
             url, hdr, body = p.request(system, user)
             try:
-                text = p.parse(self.post(url, hdr, body))
+                for attempt in range(4):   # 서버 쪽 일시 오류(5xx·네트워크)는 같은 공급자에 10·20·40초 간격으로 다시
+                    try:
+                        text = p.parse(self.post(url, hdr, body))
+                        break
+                    except ProviderError as e:
+                        if attempt == 3 or not (str(e).startswith('network') or re.match(r'http 5\d\d', str(e))):
+                            raise
+                        self.sleep(10 * 2 ** attempt)
             except RateLimited as e:
                 with p.lock:
                     p.cool_until = self.clock() + e.wait
