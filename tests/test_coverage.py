@@ -45,6 +45,20 @@ class Coverage(unittest.TestCase):
         self.assertEqual({c: b['n'] for c, b in r['by_city'].items()}, {'seoul': 2, 'busan': 2})
         self.assertEqual(r['by_cc_type']['KR']['lodging'], 1); self.assertEqual(r['by_source'], {'aa': 5, 'bb': 1})
 
+    def test_city_itinerary_table(self):  # 252기: 도시 × 일정 장소(속성·소개·추천 지수), 우선 도시 순
+        d = tempfile.mkdtemp()
+        write(d, 'col_KR_0.json.gz', P.to_layer('KR', ROWS))
+        cities = {'seoul': [126.76, 37.41, 127.19, 37.71], 'busan': [128.85, 35.03, 129.31, 35.33]}
+        r = V.measure_dir(d, cities)
+        ci = r['by_city_itin']
+        self.assertEqual({c: b['n'] for c, b in ci.items()}, {'seoul': 2, 'busan': 1})  # 버스 정류장은 일정 장소가 아님
+        self.assertEqual((ci['seoul']['ko'], ci['seoul']['h'], ci['seoul']['url'], ci['seoul']['tel']), (1, 1, 1, 1))
+        self.assertEqual(V.priority_cities()['jeju'], 1)
+        rep = V.build(status={'sources': {}}, layers=r, targets={'sources': []}, date='2026-11-18')
+        md = V.to_md(rep)
+        self.assertIn('### 5-2.', md)
+        self.assertLess(md.index('| 4 | busan |'), md.index('| 6 | seoul |'))  # 우선 순위 순
+
     def test_measure_store_matches_dir(self):
         d = tempfile.mkdtemp(); s = K.Store(os.path.join(d, 's'))
         s.put_json('processed/out/r1/col_KR_0.json.gz', P.to_layer('KR', ROWS[:3]))

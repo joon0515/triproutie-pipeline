@@ -59,6 +59,23 @@ def region_rank(cc, demand=None):
         if cc in demand and float(demand[cc] or 0) > 0:
             return ranked.index(cc) / (len(ranked) + 1) - 1  # 검색 수가 있는 나라는 모두 단계 0 보다 앞(-1 ~ 0)
     return base
+_CITY = []
+
+
+def city_rank(lat, lon):
+    """상위 도시 우선 순위(1부터, 작을수록 먼저) — sources/priority_cities.json 상자 안이면 그 순위, 밖이면 999. 좌표가 없으면 999."""
+    if not _CITY:
+        try:
+            _CITY.extend((c['rank'], c['bbox']) for c in json.load(open(os.path.join(_SRC_DIR, 'priority_cities.json'), encoding='utf-8')).get('cities', []))
+        except (OSError, ValueError, KeyError, TypeError):
+            _CITY.append((999, (0, 0, -1, -1)))
+    try:
+        x, y = float(lon), float(lat)
+    except (TypeError, ValueError):
+        return 999
+    return min((r for r, b in _CITY if b[0] <= x <= b[2] and b[1] <= y <= b[3]), default=999)
+
+
 OPEN_LICENSES = ('cc0', 'cc-zero', 'publicdomain', 'pddl', 'cc-by', 'cc_by', 'ccby', 'odc-by', 'odc-odbl', 'odbl', 'ogl', 'open-government',
                  'ca-ogl', 'uk-ogl', 'etalab', 'licence-ouverte', 'lo-2', 'cdla-permissive', 'apache-2', 'mit', 'dl-de-zero', 'dl-de-by',
                  'nlod', 'kogl-1', 'ogdl-taiwan', 'sg-odl')
@@ -305,6 +322,8 @@ class Http:
                 pass
             except (http.client.InvalidURL, ValueError):  # 요청할 수 없는 주소 — 다시 해도 같으니 이 주소만 건너뜀(조각 전체를 죽이지 않음)
                 raise IOError('bad url')
+            except http.client.HTTPException:  # (11/19 252기) IncompleteRead 등 본문 끊김 — 다시 해 보고 끝내 안 되면 IOError(그 쪽만 건너뜀). InvalidURL 도 이 종류라 위 절 뒤에 둔다
+                pass
             if t + 1 < self.retries:
                 self.sleep(min(60, 5 * 2 ** t))
         raise IOError('fetch failed')

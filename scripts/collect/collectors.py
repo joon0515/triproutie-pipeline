@@ -3,7 +3,7 @@
 import bz2, csv, datetime, gzip, hashlib, html.parser, io, json, os, re, shutil, subprocess, sys, tarfile, tempfile, time, urllib.parse, zipfile
 import xml.etree.ElementTree as ET
 
-from common import LANGS, Stop, Blocked, forbidden, host_of, license_open, place, refresh_days, region_rank, today, valid_coord
+from common import LANGS, Stop, Blocked, city_rank, forbidden, host_of, license_open, place, refresh_days, region_rank, today, valid_coord
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 TOOLS = os.path.join(HERE, '..', '..', 'tools')
@@ -607,8 +607,14 @@ def facts_of(kind, it):
     return f
 
 
-def crawl_site(ctx, qid, seed, max_pages=15):
-    """씨앗 사이트 하나: 같은 사이트 안 링크를 따라 최대 max_pages 쪽. 구조화 사실값만, 페이지 주소는 링크로."""
+# (11/18 252기) 수확률: 11/17 조각 1 은 한 시간에 요청 1,600여 번·0행(사이트마다 15쪽을 앞에서부터 다 읽음).
+#  영업시간·방문 안내가 있을 법한 쪽을 먼저 읽고(주소·낱말), 사이트당 8쪽까지만 — 같은 한도로 더 많은 사이트를 본다. robots·쉼은 Http 가 그대로 지킨다.
+HOURS_LINK = re.compile(r'hour|opening|open-?time|visit|plan|contact|about|info|access|admission|ticket|guide|horaire|oeffnung|öffnung|orari|horario|'
+                        r'%EC%9A%B4%EC%98%81|운영|이용|관람|안내|営業|開館|利用|ご案内|アクセス|开放|開放|营业|營業|参观|參觀|時間|时间', re.I)
+
+
+def crawl_site(ctx, qid, seed, max_pages=8):
+    """씨앗 사이트 하나: 같은 사이트 안 링크를 따라 최대 max_pages 쪽(영업시간·방문 안내 쪽 먼저). 구조화 사실값만, 페이지 주소는 링크로."""
     root = seed['url']
     h0 = host_of(root)
     queue, seen, best, events = [root], set(), None, []
@@ -635,15 +641,19 @@ def crawl_site(ctx, qid, seed, max_pages=15):
                 best = f
         for l in links:
             a = urllib.parse.urljoin(u, l).split('#', 1)[0]
-            if host_of(a) == h0 and a.startswith(('http://', 'https://')) and a not in seen and not re.search(r'\.(jpg|jpeg|png|gif|pdf|zip|mp4|webp|svg)$', a, re.I):
+            if host_of(a) == h0 and a.startswith(('http://', 'https://')) and a not in seen and a not in queue and not re.search(r'\.(jpg|jpeg|png|gif|pdf|zip|mp4|webp|svg)$', a, re.I):
                 queue.append(a)
+        queue.sort(key=lambda a: 0 if HOURS_LINK.search(urllib.parse.urlsplit(a).path) else 1)  # 안정 정렬 — 같은 무리 안에서는 찾은 순서
+        if best and best.get('hours'):
+            break  # 영업시간을 찾았으면 이 사이트는 끝(행사 목록은 첫 쪽들에서 이미 모음)
     return best, events[:50]
 
 
 def crawl(ctx):
     seeds = ctx.store.get_json(f'seeds/sites_{ctx.shard}.json.gz', {}) or {}
     done = ctx.st.setdefault('done', {})
-    order = sorted(seeds, key=lambda q: (done.get(q, ''), region_rank(seeds[q].get('cc'))))  # 오래된 것부터, 같으면 많이 찾는 나라 먼저
+    order = sorted(seeds, key=lambda q: (done.get(q, ''), city_rank(seeds[q].get('lat'), seeds[q].get('lon')), region_rank(seeds[q].get('cc'))))
+    # 오래된 것부터, 같으면 상위 도시(sources/priority_cities.json) 먼저, 그다음 많이 찾는 나라
     ttl = refresh_days('hours', 14)  # 영업시간은 자주 바뀐다 — 사이트마다 14일(sources/refresh_policy.json)
     rows = []
     for qid in order:

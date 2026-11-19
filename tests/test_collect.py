@@ -150,7 +150,7 @@ class Planner(unittest.TestCase):
         d = sum(1 for x in p if next(s for s in REG['sources'] if s['id'] == x['source'])['script'] in C.DISCOVERY)
         self.assertGreaterEqual(d, 5)  # 30% 몫
         self.assertFalse(any(x['source'] == 'fsq_os_places' for x in p))  # Secret 없으면 넣지 않음
-        self.assertLessEqual(sum(1 for x in p if x['source'] == 'overture_places'), 4)
+        self.assertLessEqual(sum(1 for x in p if x['source'] == 'overture_places'), R.HEAVY_CAP['overture_places'])  # 252기: OVT_FIRST 자리 먼저(상한은 그대로)
         self.assertFalse(any(next(s for s in REG['sources'] if s['id'] == x['source']).get('status') != 'active' for x in p))
         p2 = R.plan(REG, {}, env={'HAS_FSQ_TOKEN': 'true'})
         self.assertTrue(any(x['source'] == 'fsq_os_places' for x in p2))
@@ -285,6 +285,47 @@ class BadInput(unittest.TestCase):
         self.assertIn('https://s.example/RDCweb/N%20Toon.html', w.calls)
         self.assertIn('https://s.example/ok', w.calls)
         self.assertFalse(any(' ' in c for c in w.calls))
+
+    def test_crawl_site_hours_pages_first_and_stops(self):  # 252기: 영업시간 쪽 먼저, 찾으면 그 사이트 끝
+        import types
+        root = 'https://m.example/'
+        ld = b'<script type="application/ld+json">{"@type":"Museum","name":"M","openingHours":"Tu-Su 09:00-18:00"}</script>'
+        w = Web({root: b'<html><a href="/news/1">n</a><a href="/shop">s</a><a href="/visit/hours">h</a></html>',
+                 'https://m.example/visit/hours': b'<html>' + ld + b'</html>', 'https://m.example/news/1': b'<html></html>', 'https://m.example/shop': b'<html></html>'})
+        ctx = types.SimpleNamespace(http=K.Http(src(daily_limit=50), {}, {}, opener=w, sleep=lambda s: None))
+        best, _ = C.crawl_site(ctx, 'Q2', {'url': root})
+        self.assertEqual(best['hours'], 'Tu-Su 09:00-18:00')
+        pages = [c for c in w.calls if not c.endswith('/robots.txt')]
+        self.assertEqual(pages, [root, 'https://m.example/visit/hours'])
+
+    def test_incomplete_read_is_page_error_not_shard_error(self):  # 252기: official_sites/1 8회 연속 실패(IncompleteRead @common.py)
+        import http.client
+        n = []
+
+        def w(url, headers):
+            if url.endswith('/robots.txt'):
+                raise urllib.error.HTTPError(url, 404, 'x', {}, None)
+            n.append(url)
+            raise http.client.IncompleteRead(b'x' * 10, 20)
+        h = K.Http(src(daily_limit=50, retries=2), {}, {}, opener=w, sleep=lambda s: None)
+        with self.assertRaises(IOError):
+            h.get('https://a.example/x')
+        self.assertEqual(len(n), 2)  # 다시 해 봄
+
+    def test_city_rank(self):
+        self.assertEqual(K.city_rank(33.45, 126.55), 1)        # 제주
+        self.assertEqual(K.city_rank(34.69, 135.50), 2)        # 오사카
+        self.assertEqual(K.city_rank(0.0, 0.0), 999)
+        self.assertEqual(K.city_rank(None, 1), 999)
+
+    def test_plan_overture_first(self):  # 252기: 처음 받는 Overture 조각에 매시 OVT_FIRST 자리 먼저
+        p = R.plan(REG, {}, env={'HAS_FSQ_TOKEN': 'true'})
+        self.assertEqual(sum(1 for x in p if x['source'] == 'overture_places'), min(R.OVT_FIRST, R.HEAVY_CAP['overture_places']))
+        self.assertTrue(any(x['source'] == 'fsq_os_places' for x in p))
+        self.assertEqual(len(p), len({(x['source'], x['shard']) for x in p}))  # 겹침 없음
+        done = {f'overture_places/{sh}': {'last_ok': R.today()} for sh in R.shards(next(s for s in REG['sources'] if s['id'] == 'overture_places'))}
+        p3 = R.plan(REG, done, env={'HAS_FSQ_TOKEN': 'true'})
+        self.assertFalse(any(x['source'] == 'overture_places' for x in p3))  # 다 받았으면 자리를 잡지 않음
 
     def test_pick_ignores_unnamed_column(self):
         self.assertEqual(C._pick(['Name', None, 'lat'], C.COLS['nm']), 'Name')

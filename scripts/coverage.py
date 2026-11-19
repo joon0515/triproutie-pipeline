@@ -135,6 +135,7 @@ class Meter:
         self.rec = rec  # (11/18 245기) 추천 지수 층(rec-1) {'any': id set, 'two': 근거 2개 이상 id set, '_files': …} 또는 None
         self.r_itin, self.r_all = _rblank(), _rblank()
         self.adding = False  # col_ovtadd_* (rec_index 가 더한 Overture 일정 장소) 를 읽는 중
+        self.city_itin = {}  # (11/18 252기) 도시 × 일정 장소 기준: 속성 칸 + 소개(1개 언어+) desc + 추천 지수 rec·rec2
 
     def _desc(self, keys, groups):
         hit = [any(k in self.desc[s] for k in keys if k) for s in DESC_SLOTS]
@@ -167,11 +168,21 @@ class Meter:
             f = tuple(o or any(k in sset for k in keys) for o, sset in zip(own, nm_sets)) + (
                 bool(oh_ok(h[i])) or any(k in self.h_ids for k in keys), any(k in self.p_ids for k in keys), bool(tel[i]), bool(url[i]), (tr[i] or 1) >= 2)
             tg = [bcc, self.typ[t]] + ([self.itin] if it else [])
+            ci = []
             if boxes:
                 x, y = lo / 1e5, la / 1e5
                 for nm, b in boxes:
                     if b[0] <= x <= b[2] and b[1] <= y <= b[3]:
                         tg.append(self.city.setdefault(nm, _blank()))
+                        if it:
+                            ci.append(self.city_itin.setdefault(nm, {**_blank(), 'desc': 0, 'rec': 0, 'rec2': 0}))
+            if ci:
+                tg += ci  # 속성 칸·장소 수는 아래 tg 고리가 센다
+                dv = self.desc is not None and any(k in self.desc[sl] for sl in DESC_SLOTS for k in keys if k)
+                rv = self.rec is not None and any(k in self.rec['any'] for k in keys if k)
+                r2v = self.rec is not None and any(k in self.rec['two'] for k in keys if k)
+                for g in ci:
+                    g['desc'] += dv; g['rec'] += rv; g['rec2'] += r2v
             for g in tg:
                 g['n'] += 1
                 for a, v in zip(ATTRS, f):
@@ -197,7 +208,7 @@ class Meter:
         for b in self.cc.values():
             for k in tot:
                 tot[k] += b[k]
-        r = {'places': tot, 'itinerary': self.itin, 'by_type': self.typ, 'by_cc': self.cc, 'by_cc_type': self.cc_typ, 'by_city': self.city, 'by_source': self.src, 'layer_files': self.files,
+        r = {'places': tot, 'itinerary': self.itin, 'by_type': self.typ, 'by_cc': self.cc, 'by_cc_type': self.cc_typ, 'by_city': self.city, 'by_city_itin': self.city_itin, 'by_source': self.src, 'layer_files': self.files,
              'side_files': {k: dict(v) for k, v in SIDE_FILES.items()}}
         if self.rec is not None:
             r['rec'] = {'itinerary': self.r_itin, 'all': self.r_all, 'files': self.rec.get('_files', {})}
@@ -344,6 +355,20 @@ def gaps(targets, collected, places):
             'google_ref': g.get('count'), 'published_vs_google_ref_pct': pct(places, g.get('count')) if places is not None else None}
 
 
+_PRI = {}
+
+
+def priority_cities():
+    """우선 도시 {도시 키: 순위(1부터)} — sources/priority_cities.json(한국인 해외·국내 상위 도시). 없으면 빈 dict."""
+    if not _PRI:
+        try:
+            j = json.load(open(os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'sources', 'priority_cities.json'), encoding='utf-8'))
+            _PRI.update({c['key']: c['rank'] for c in j.get('cities', [])})
+        except (OSError, ValueError, KeyError, TypeError):
+            pass
+    return _PRI
+
+
 def _pct(a, n):
     return f'{100 * a / n:.1f}%' if n else '-'
 
@@ -383,6 +408,15 @@ def to_md(rep, prev=None, top=25):
         L += [f'### 4. 나라별(위 {top}개 / 전체 {len(lay["by_cc"])}개 나라)', '| 나라 ' + hdr, '|---' * (len(ATTRS) + 2) + '|']
         L += [row(cc, b) for cc, b in sorted(lay['by_cc'].items(), key=lambda kv: -kv[1]['n'])[:top]]
         L += ['### 5. 도시별', '| 도시 ' + hdr, '|---' * (len(ATTRS) + 2) + '|'] + [row(c, b) for c, b in sorted(lay['by_city'].items(), key=lambda kv: -kv[1]['n'])]
+        ci = lay.get('by_city_itin') or {}
+        if ci:
+            pri = priority_cities()
+            ck = NAME_SLOTS + ('h', 'photo', 'url', 'tel', 'desc', 'rec', 'rec2')
+            ko = {**ATTR_KO, 'desc': '소개', 'rec': '추천 지수', 'rec2': '지수 근거 2+'}
+            order = sorted(ci, key=lambda c: (pri.get(c, 999), -ci[c]['n']))
+            L += ['### 5-2. 도시별 — 일정 장소 기준(명소·식당·카페·숙소·교통 거점, 우선 도시 순 — sources/priority_cities.json)',
+                  '| 순위 | 도시 | 일정 장소 | ' + ' | '.join(ko[a] for a in ck) + ' |', '|---' * (len(ck) + 3) + '|']
+            L += [f"| {pri.get(c, '-')} | {c} | {ci[c]['n']:,} | " + ' | '.join(_pct(ci[c].get(a, 0), ci[c]['n']) for a in ck) + ' |' for c in order]
         L += ['### 6. 출처별 게시 행', ', '.join(f'{k} {v:,}' for k, v in sorted(lay['by_source'].items(), key=lambda kv: -kv[1])[:15])]
         dsc = lay.get('desc')
         if dsc:

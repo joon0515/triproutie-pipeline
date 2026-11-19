@@ -34,6 +34,7 @@ def point(rep):
             else:
                 q[k] = (pl.get(k, 0) / n) if n else None
         p[base] = q
+    p['cities'] = lay.get('by_city_itin') or {}  # (11/18 252기) 도시 × 일정 장소 — 8-4 표
     return p
 
 
@@ -100,6 +101,19 @@ def table(pts, days=14, now=None):
         q = cur[base]
         if any(q.get('desc_' + sl) is not None for sl in DESC_LANGS):
             L.append(f"- 소개 언어별(오늘, {title.split('(')[0]}): " + ' · '.join(f"{sl} {pct(q.get('desc_' + sl))}" for sl in DESC_LANGS))
+    if cur.get('cities'):
+        try:
+            pri = {c['key']: c['rank'] for c in json.load(open(os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'sources', 'priority_cities.json'), encoding='utf-8'))['cities']}
+        except (OSError, ValueError, KeyError, TypeError):
+            pri = {}
+        ck = (('ko', '이름 ko'), ('en', '이름 en'), ('ja', '이름 ja'), ('zh_Hans', '이름 zh-Hans'), ('zh_Hant', '이름 zh-Hant'), ('h', '영업시간'), ('photo', '사진'),
+              ('url', '웹'), ('tel', '전화'), ('desc', '소개'), ('rec', '추천 지수'), ('rec2', '지수 근거 2+'))
+        cs = sorted((c for c in cur['cities'] if c in pri), key=lambda c: pri[c])
+        L += ['', f"### 8-4. 우선 도시 — 일정 장소 기준 채움 (오늘 {cur['date']}, sources/priority_cities.json 순)",
+              '| 순위 | 도시 | 일정 장소 | ' + ' | '.join(n for _, n in ck) + ' |', '|---' * (len(ck) + 3) + '|']
+        for c in cs:
+            b = cur['cities'][c]; n = b.get('n') or 0
+            L.append(f"| {pri[c]} | {c} | {n:,} | " + ' | '.join(pct(b.get(k, 0) / n if n else None) for k, _ in ck) + ' |')
     return '\n'.join(L + ['', END]) + '\n'
 
 
