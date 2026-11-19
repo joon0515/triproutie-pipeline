@@ -131,6 +131,18 @@ sources:
     daily_limit: 300
     interval_s: 1
     status: external
+  - id: mofa_visa
+    name: 외교부 국가·지역별 입국허가요건(data.go.kr 15075345) — 한국 일반여권 기준 무비자·전자허가·비자 안내 팩 (11/20 267기, scripts/visa_mofa.py)
+    kind: api
+    url: https://apis.data.go.kr/1262000/EntranceVisaService2
+    license: "이용허락범위 제한 없음(data.go.kr 표기)"
+    attribution: "외교부 국가·지역별 입국허가요건(공공데이터포털) — 수집 기준일 표시, 출발 전 외교부 해외안전여행에서 재확인"
+    license_url: https://www.data.go.kr/data/15075345/openapi.do
+    robots: "공식 오픈 API(키) — 화면 긁기 0. 주 1회, 한 번에 페이지 몇 번(1초 간격)"
+    secret: DATA_GO_KR_KEY
+    daily_limit: 30
+    interval_s: 1
+    status: external
   - id: official_sites
     name: 공식 사이트 구조화 데이터(schema.org JSON-LD·microdata) — Wikidata P856 씨앗
     kind: crawl
