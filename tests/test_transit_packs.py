@@ -58,6 +58,24 @@ class T(unittest.TestCase):
         row = d['odpt.Station:Toei.Oedo.Tochomae'][0]
         self.assertEqual(row[:3], ['Toei.Oedo', 'Roppongi', 0b0011111])
         self.assertEqual(row[3], [307, 1455])  # 00:15 = 전날 밤 24:15
+        self.assertEqual(len(row), 4)  # 종별 없으면 전과 같은 4칸
+
+    def test_train_kind_264(self):
+        for raw, k in [('odpt.TrainType:Toei.AirportRapidLimitedExpress', 'ltd'), ('odpt.TrainType:Keikyu.LimitedExpress', 'ltd'), ('快特', 'ltd'),
+                       ('odpt.TrainType:Odakyu.SemiExpress', 'semi'), ('急行', 'exp'), ('odpt.TrainType:JR-East.Rapid', 'rapid'),
+                       ('odpt.TrainType:Toei.Local', 'local'), ('普通', 'local'), ('Unknown', ''), (None, '')]:
+            self.assertEqual(tp.train_kind(raw), k, raw)
+        st = tp.odpt_stations(ST)
+        items = [{'odpt:station': 'odpt.Station:Toei.Oedo.Tochomae', 'odpt:railway': 'odpt.Railway:Toei.Asakusa', 'odpt:calendar': 'odpt.Calendar:Weekday',
+                  'odpt:stationTimetableObject': [
+                      {'odpt:departureTime': '06:00', 'odpt:trainType': 'odpt.TrainType:Toei.Local', 'odpt:destinationStation': ['odpt.Station:Toei.Oedo.Roppongi']},
+                      {'odpt:departureTime': '05:30', 'odpt:trainType': 'odpt.TrainType:Toei.AirportRapidLimitedExpress', 'odpt:destinationStation': ['odpt.Station:Toei.Oedo.Roppongi']},
+                      {'odpt:departureTime': '07:00', 'odpt:destinationStation': ['odpt.Station:Toei.Oedo.Roppongi']}]}]
+        row = tp.odpt_station_timetables(items, st)['odpt.Station:Toei.Oedo.Tochomae'][0]
+        self.assertEqual(row[3], [330, 360, 420])
+        self.assertEqual(row[4], [tp.TRAIN_KINDS.index('ltd'), tp.TRAIN_KINDS.index('local'), -1])
+        doc = tp.build_timetable('tokyo')
+        self.assertEqual(doc['types'], tp.TRAIN_KINDS)
 
     def test_gtfs(self):
         stops, deps = tp.gtfs_departures(gtfs_zip(), 'mdb-3175')

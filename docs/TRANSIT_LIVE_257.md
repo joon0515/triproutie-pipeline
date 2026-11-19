@@ -31,3 +31,8 @@
 - `fares.json.gz`: 서울(거리비례 10km·5km마다 100원, 기후동행카드 단기권) · 뉴욕 · 시애틀 · 파리 · 런던(버스·상한) · 홍콩(MTR 역 쌍) · 싱가포르(거리표) · 도쿄 도영(역 쌍 IC) · 부산(링크만). 도시마다 `src[{url, checked}]`.
 - `tt/<city>.json.gz`: GTFS 정적(열린 라이선스 cc0·cc-by·etalab 만 — ODbL·SA 는 파생 DB 공개 의무 때문에 섞지 않음) + 도영 역 시간표. calendar.txt 요일 기준(예외일 미반영 → 앱은 '시간표 기준').
 - 시험 `tests/test_transit_packs.py` 7/0.
+
+## 264기 더함(11/20)
+- 열차 종별: `transit_packs.py` 의 ODPT 역 시간표 행에 5번째 칸(분마다 종별 번호, `TRAIN_KINDS` = local·rapid·semi·exp·ltd, 모르면 -1)과 팩 `types`. 종별이 없는 행은 전과 같은 4칸이라 257기 앱은 그대로 읽는다.
+- 공식 운행 공지: 도영은 ODPT 공개 API(odpt:TrainInformation, 키 없음)를 앱이 직접. 도쿄메트로·JR 동일본 등은 ODPT 회원 API 라 서버 `transitNotices`(functions/notice_fn.js, Secret `ODPT_CONSUMER_KEY`, 로그인 사용자만, 운영사마다 60초 공유 캐시, 공지 칸만 그대로). 앱은 FF 변수 `transitLiveOn` 에 `odpt` 가 있을 때만 부른다.
+- 출처: 公共交通オープンデータセンター 이용 규약(공지·시간표 표시 시 출처 표기). 비공식 출처(검색·지도 앱 화면)는 쓰지 않는다.

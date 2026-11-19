@@ -234,8 +234,29 @@ def gtfs_departures(zbytes, feed_id, max_stops=20000):
     return out_stops, out_deps
 
 
+TRAIN_KINDS = ['local', 'rapid', 'semi', 'exp', 'ltd']  # 264기: 앱 tlTr264Kind 와 같은 이름·순서(팩 'types')
+
+
+def train_kind(raw):
+    """264기 열차 종별: ODPT odpt:trainType id·일본어 표기 → ltd|semi|exp|rapid|local|''. 앱 tl_tr264.dart tlTr264Kind 와 같은 규칙."""
+    s = (raw or '').split(':')[-1].split('.')[-1]
+    low = s.lower()
+    if 'limitedexpress' in low or '特急' in s or '快特' in s or 'liner' in low or 'ライナー' in s:
+        return 'ltd'
+    if 'semiexpress' in low or '準急' in s or '区間急行' in s:
+        return 'semi'
+    if 'express' in low or '急行' in s:
+        return 'exp'
+    if 'rapid' in low or '快速' in s:
+        return 'rapid'
+    if 'local' in low or '各停' in s or '各駅' in s or '普通' in s:
+        return 'local'
+    return ''
+
+
 def odpt_station_timetables(items, stations):
-    """ODPT odpt:StationTimetable → deps{station: [[railway, 행선, daymask, [분...]]]}. Weekday=월~금, SaturdayHoliday=토·일."""
+    """ODPT odpt:StationTimetable → deps{station: [[railway, 행선, daymask, [분...], [종별 번호...]?]]}. Weekday=월~금, SaturdayHoliday=토·일.
+    264기: odpt:trainType 이 있으면 5번째 칸에 분마다 종별 번호(TRAIN_KINDS 순서, 모르면 -1). 없으면 전과 같은 4칸."""
     cal = {'odpt.Calendar:Weekday': 0b0011111, 'odpt.Calendar:SaturdayHoliday': 0b1100000, 'odpt.Calendar:Saturday': 0b0100000, 'odpt.Calendar:Holiday': 0b1000000}
     names = {s[0]: (s[2] or s[1]) for s in stations}
     deps = {}
@@ -254,9 +275,14 @@ def odpt_station_timetables(items, stations):
             if t < 180:
                 t += 1440  # 0~3시 = 전날 밤 운행
             dest = (o.get('odpt:destinationStation') or [''])[0]
-            by.setdefault(names.get(dest, dest.split('.')[-1]) if dest else rdir, []).append(t)
+            k = train_kind(o.get('odpt:trainType') or '')
+            by.setdefault(names.get(dest, dest.split('.')[-1]) if dest else rdir, {}).setdefault(t, k)
         for dest, v in by.items():
-            deps.setdefault(sid, []).append([line, dest, m, sorted(set(v))])
+            ts = sorted(v)
+            row = [line, dest, m, ts]
+            if any(v[t] for t in ts):
+                row.append([TRAIN_KINDS.index(v[t]) if v[t] else -1 for t in ts])
+            deps.setdefault(sid, []).append(row)
     return deps
 
 
@@ -279,7 +305,7 @@ def build_timetable(city, gtfs=(), odpt_toei=False, fetch=get, meta=None):
                 stops.append([s[0], s[2] or s[1], s[3], s[4]])
                 deps.update(d)
         src.append({'id': 'odpt-toei', 'provider': '東京都交通局', 'license': 'CC BY 4.0', 'attr': '© 東京都交通局 (CC BY 4.0) / 公共交通オープンデータセンター'})
-    return {'v': 1, 'city': city, 'asof': (meta or {}).get('asof', CHECKED), 'basis': 'weekday_calendar', 'src': src, 'stops': stops, 'deps': deps}
+    return {'v': 1, 'city': city, 'asof': (meta or {}).get('asof', CHECKED), 'basis': 'weekday_calendar', 'src': src, 'stops': stops, 'deps': deps, 'types': TRAIN_KINDS}
 
 
 def main(argv=None):
