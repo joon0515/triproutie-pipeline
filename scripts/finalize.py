@@ -10,7 +10,7 @@ if r.returncode:
     sys.exit('parts download failed: ' + r.stderr.strip()[-300:])
 # 2단 구조: 지역 manifest(타일별 sha256·크기)는 지역마다 파일로 올리고, 루트 manifest(64 KiB 미만)에는 지역 manifest 의
 # 경로·sha256·크기만 넣어 KMS 로 서명. 앱 검증 순서: 루트 서명 → 지역 manifest sha256 → 타일 sha256.
-EXP = (datetime.datetime.utcnow() + datetime.timedelta(days=90)).strftime('%Y-%m-%dT%H:%M:%SZ')
+EXP = (datetime.datetime.now(datetime.UTC) + datetime.timedelta(days=90)).strftime('%Y-%m-%dT%H:%M:%SZ')
 regions = []; ntiles = 0
 os.makedirs(f'{D}/regions', exist_ok=True)
 # 11/14: 같은 파일 이름이 두 지역에 있으면 한쪽이 덮어써진 것이다 → 서명하지 않고 멈춘다.
@@ -30,7 +30,7 @@ for f in sorted(glob.glob(f'{D}/parts/*.json')):
         sys.exit('region upload failed: ' + r.stderr.strip()[-300:])
     regions.append({'region': R, 'path': f'places/v1/{TAG}/regions/{R}.json', 'sha256': hashlib.sha256(rm).hexdigest(), 'size': len(rm), 'n': len(pj['tiles'])})
     ntiles += len(pj['tiles'])
-man = canon_value({'schema': 'places-world-2', 'version': TAG, 'created_at': datetime.datetime.utcnow().strftime('%Y-%m-%dT%H:%M:%SZ'),
+man = canon_value({'schema': 'places-world-2', 'version': TAG, 'created_at': datetime.datetime.now(datetime.UTC).strftime('%Y-%m-%dT%H:%M:%SZ'),
                    'path': f'places/v1/{TAG}/tiles/', 'regions': regions, 'disabled': False, 'revoked': [], 'expires': EXP,
                    'attribution': {'ko': '장소 정보: © Overture Maps Foundation (CDLA-Permissive-2.0) · Foursquare OS Places (Apache-2.0) · AllThePlaces (CC0)'}})
 open(f'{D}/body.json', 'w', encoding='utf-8').write(canonical(man))
