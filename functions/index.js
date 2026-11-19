@@ -10,4 +10,5 @@ Object.assign(exports, require('./live_fn').makeLiveFunctions()); // 252기 장�
 Object.assign(exports, require('./transit_fn').makeTransitFunctions()); // 257기 대중교통 실시간(transitLiveMta·Tfl·Lta·Oba·Idfm) — 대표가 Cloud Shell 에서 이름 지정 배포, 키 Secret 이 있는 것만
 Object.assign(exports, require('./notice_fn').makeNoticeFunctions()); // 264기 공식 운행 공지(transitNotices, ODPT 회원 키) — 대표가 이름 지정 배포
 Object.assign(exports, require('./link_fn').makeLinkFunctions()); // 264기 공유 글 → 장소 후보(linkPlaces264, Gemini 무료 키) — 원 페이지 안 가져옴, 대표가 이름 지정 배포
-for (const k of ['flightLookup', 'geoLookup', 'liveBudget', 'placeDetailsLive', 'transitLiveMta', 'transitLiveTfl', 'transitLiveLta', 'transitLiveOba', 'transitLiveIdfm', 'transitNotices', 'linkPlaces264']) if (!exports[k]) throw new Error('index: ' + k + ' 없음');
+Object.assign(exports, require('./vote_fn').makeVoteFunctions()); // 262기 가입·설치 없는 링크 투표(votePage·voteCast) — 대표가 이름 지정 배포
+for (const k of ['flightLookup', 'geoLookup', 'liveBudget', 'placeDetailsLive', 'transitLiveMta', 'transitLiveTfl', 'transitLiveLta', 'transitLiveOba', 'transitLiveIdfm', 'transitNotices', 'linkPlaces264', 'votePage', 'voteCast']) if (!exports[k]) throw new Error('index: ' + k + ' 없음');
