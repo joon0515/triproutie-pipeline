@@ -37,6 +37,7 @@ UNSPLASH_API = 'https://api.unsplash.com'
 UNSPLASH_LIC = ('Unsplash License', 'https://unsplash.com/license')
 CITY_REFRESH = 90
 QID = re.compile(r'^Q\d+$')
+QID_IN_ID = re.compile(r'(?:^|[:/])(Q[1-9]\d{0,9})$')  # (263기) 앱 타일 행 id 는 'kowiki:Q123' 처럼 앞 이름이 붙는다(place_desc.QID 와 같은 모양) — 맨몸 Q123 만 보면 일정 후보 0
 # priority_cities 의 key → 영문 이름(검색·Wikidata 라벨). 없으면 key 를 단어로 푼다.
 CITY_EN = {'okinawa_naha': 'Naha', 'hongkong': 'Hong Kong', 'danang': 'Da Nang', 'ho_chi_minh': 'Ho Chi Minh City', 'kualalumpur': 'Kuala Lumpur'}
 
@@ -64,25 +65,28 @@ def rows_in_city(d, bbox, pad=0.02):
     out = []
     for i in range(d.get('n') or len(d.get('id') or [])):
         rid = d['id'][i]
-        if not isinstance(rid, str) or not QID.match(rid):
+        m = QID_IN_ID.search(rid) if isinstance(rid, str) else None
+        if not m:
             continue
         la, lo = d['_lat'][i], d['_lon'][i]
         if bbox[0] - pad <= lo <= bbox[2] + pad and bbox[1] - pad <= la <= bbox[3] + pad:
             s = d['s'][i] if isinstance(d.get('s'), list) else 0
-            out.append((s or 0, rid))
+            out.append((s or 0, m.group(1), rid))
     return out
 
 
-def prio_order(cities, tiles_for):
+def prio_order(cities, tiles_for, keys_of=None):
     """cities 순위대로 [(도시 key, [QID…])]. tiles_for(bbox) → 그 상자와 겹치는 타일(load_pack 꼴) 목록."""
     seen, out = set(), []
     for c in cities:
         rows = []
         for d in tiles_for(c['bbox']):
             rows += rows_in_city(d, c['bbox'])
-        rows.sort(key=lambda x: (-x[0], int(x[1][1:])))
+        rows.sort(key=lambda x: (-x[0], int(x[1][1:]), x[2]))
         qs = []
-        for _, q in rows:
+        for _, q, rid in rows:
+            if keys_of is not None and rid != q:
+                keys_of.setdefault(q, set()).add(rid)  # 앱 타일 행 id(kowiki:Q123 …) — 사진 행 열쇠로 같이 싣는다
             if q not in seen:
                 seen.add(q); qs.append(q)
             if len(qs) >= CITY_MAX:
@@ -376,9 +380,15 @@ def run(store, bucket=None, tiles_dir=None, out=None, budget_min=50.0, http_wd=N
         pkey = f'processed/photos/prio_{ver}.json.gz'
         cached = store.get_json(pkey, None) if ver != 'local' and not keys_of else None
         if not keys_of:
-            prio = [tuple(x) for x in cached] if cached else prio_order(cities, tiles_for)
-        if not keys_of and not cached and ver and ver != 'local' and any(qs for _, qs in prio):  # 빈 순서는 남기지 않는다(다음 실행에서 다시)
-            store.put_json(pkey, prio)
+            if isinstance(cached, dict):  # 263기 모양: {prio, keys}. 옛 모양(목록)은 행 id 가 없어 다시 계산
+                prio = [tuple(x) for x in cached['prio']]
+                keys_of = {q: set(v) for q, v in (cached.get('keys') or {}).items()}
+            else:
+                tk = {}
+                prio = prio_order(cities, tiles_for, tk)
+                keys_of = tk
+                if ver and ver != 'local' and any(qs for _, qs in prio):  # 빈 순서는 남기지 않는다(다음 실행에서 다시)
+                    store.put_json(pkey, {'prio': prio, 'keys': {q: sorted(v) for q, v in tk.items()}})
         log(f"순서: 도시 {sum(1 for _, qs in prio if qs)}/{len(prio)} · 일정 후보 QID {sum(len(qs) for _, qs in prio):,}")
     finally:
         shutil.rmtree(wd, ignore_errors=True)
