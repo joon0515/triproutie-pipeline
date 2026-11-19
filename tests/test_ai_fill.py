@@ -15,9 +15,10 @@ def layer(names):
             'dla': [3550000] + [0] * (n - 1), 'dlo': [13950000] + [0] * (n - 1)}
 
 
-def good(items):
-    return json.dumps({'results': [{'id': i['id'], 'names': {'ko': '맛집', 'en': 'Shop', 'ja': '店', 'zh_Hans': '国家', 'zh_Hant': '國家'},
-                                    'desc': {'ko': '도쿄의 식당', 'en': 'A restaurant in Tokyo'}} for i in items]}, ensure_ascii=False)
+def good(items, mode='names'):
+    if mode == 'desc':
+        return json.dumps({'results': [{'i': i['i'], 'ko': '도쿄의 식당', 'en': 'A restaurant in Tokyo'} for i in items]}, ensure_ascii=False)
+    return json.dumps({'results': [{'i': i['i'], 'ko': '맛집', 'en': 'Shop', 'ja': '店', 'zh_Hans': '国家', 'zh_Hant': '國家'} for i in items]}, ensure_ascii=False)
 
 
 class FakeRouter:
@@ -28,9 +29,13 @@ class FakeRouter:
         return ['gemini']
 
     def ask(self, system, user):
-        items = [{'id': x['id']} for x in json.loads(user)]
+        items = json.loads(user)
+        mode = 'names' if 'have' in items[0] else 'desc'
         self.used['gemini'] += 1
-        return self.fn(items), 'gemini', 'm1'
+        try:
+            return self.fn(items, mode), 'gemini', 'm1'
+        except TypeError:
+            return self.fn(items), 'gemini', 'm1'
 
 
 class T(unittest.TestCase):
@@ -42,8 +47,9 @@ class T(unittest.TestCase):
         self.store = Store(os.path.join(self.d, 'store'))
 
     def test_run_fills_and_never_repeats(self):
-        r = A.run(self.store, [self.f], {}, {}, FakeRouter(), 100, 5, CITIES)
+        r = A.run(self.store, [self.f], {}, {}, FakeRouter(), 100, 5, CITIES, desc_max=40)
         self.assertEqual(r['places'], 40); self.assertEqual(r['rows'], 40)
+        self.assertEqual(r['requests'], 1 + 4)   # 이름 50곳 묶음 1회 + 설명 10곳 묶음 4회
         out = [k for k in self.store.list('processed/ai_fill/out/')]
         row = next(iter(self.store.get_json(out[0])['rows'].values()))
         self.assertEqual((row['src'], row['provider'], row['model']), ('ai', 'gemini', 'm1'))
@@ -52,19 +58,19 @@ class T(unittest.TestCase):
         self.assertEqual(r2['places'], 0)
 
     def test_daily_cap(self):
-        r = A.run(self.store, [self.f], {}, {}, FakeRouter(), 20, 5, CITIES)
+        r = A.run(self.store, [self.f], {}, {}, FakeRouter(), 20, 5, CITIES, desc_max=0)
         self.assertEqual(r['places'], 20)
-        r = A.run(self.store, [self.f], {}, {}, FakeRouter(), 20, 5, CITIES)
+        r = A.run(self.store, [self.f], {}, {}, FakeRouter(), 20, 5, CITIES, desc_max=0)
         self.assertEqual((r['places'], r['stopped']), (0, 'daily-cap'))
 
     def test_existing_names_kept_and_only_missing_asked(self):
         seen = []
 
-        def fn(items):
+        def fn(items, mode='names'):
             seen.append(items)
-            return json.dumps({'results': [{'id': i['id'], 'names': {'ko': '새이름', 'en': 'New'}, 'desc': None} for i in items]}, ensure_ascii=False)
+            return json.dumps({'results': [{'i': i['i'], 'ko': '새이름', 'en': 'New'} for i in items]}, ensure_ascii=False) if mode == 'names' else '{"results":[]}'
         have = {'ko': {f'p{i}' for i in range(40)}}
-        A.run(self.store, [self.f], have, {}, FakeRouter(fn), 100, 5, CITIES)
+        A.run(self.store, [self.f], have, {}, FakeRouter(fn), 100, 5, CITIES, desc_max=0)
         rows = self.store.get_json(self.store.list('processed/ai_fill/out/')[0])['rows']
         self.assertTrue(all('ko' not in v for v in rows.values()))   # 이미 있는 칸은 덮지 않음
         self.assertTrue(all(v['en'] == 'New' for v in rows.values()))
@@ -79,12 +85,13 @@ class T(unittest.TestCase):
 
     def test_validation_drops_bad(self):
         items = [{'id': 'a', 'nm': 'X', 'have': []}]
-        res = [{'id': 'a', 'names': {'ko': 'abc', 'en': '한글', 'zh_Hans': '國', 'ja': '店', 'zh_Hant': '國家'}, 'desc': {'ko': '대략 맛있는 곳', 'en': 'A cafe', 'ja': 'http://x'}},
-               {'id': 'zzz', 'names': {'en': 'Q'}}]
-        v = A.validate(res, items)
+        res = [{'i': 0, 'ko': 'abc', 'en': '한글', 'zh_Hans': '國', 'ja': '店', 'zh_Hant': '國家'}, {'i': 9, 'en': 'Q'}]
+        v = A.validate(res, items, 'names')
         self.assertEqual(list(v), ['a'])
         self.assertEqual(v['a']['names'], {'ja': '店', 'zh_Hant': '國家'})
-        self.assertEqual(v['a']['desc'], {'en': 'A cafe'})
+        d = A.validate([{'i': 0, 'ko': '대략 맛있는 곳', 'en': 'A cafe', 'ja': 'http://x'}], items, 'desc')
+        self.assertEqual(d['a']['desc'], {'en': 'A cafe'})
+        self.assertEqual(A.validate([{'i': 0, 'en': 'A cafe'}], [{'id': 'a', 'nm': 'X', 'have': [], 'hd': True}], 'desc'), {})
 
     def test_banned_word_estimate(self):
         self.assertIsNone(A.ok_desc('추정 인기 식당'))
@@ -113,7 +120,16 @@ class T(unittest.TestCase):
         ps[2].rpm = 2
         for _ in range(3):
             r.ask('s', 'u')
-        self.assertTrue(slept)
+        self.assertTrue(slept)   # 분당 2회 → 30초 간격으로 예약
+
+    def test_threads_respect_rpm(self):
+        import concurrent.futures
+        p = A.Provider('gemini', A.SPEC['gemini'], {'GEMINI_API_KEY': 'k', 'AI_GEMINI_RPM': '600', 'AI_GEMINI_RPD': '1000'}, sleep=lambda s: None)
+        r = A.Router([p], post=lambda u, h, b: {'candidates': [{'content': {'parts': [{'text': '{}'}]}}]})
+        with concurrent.futures.ThreadPoolExecutor(8) as ex:
+            list(ex.map(lambda _: r.ask('s', 'u'), range(50)))
+        self.assertEqual(r.used['gemini'], 50)
+        self.assertEqual(p.day_count, 50)
 
     def test_daily_limit_per_provider(self):
         env = {'GEMINI_API_KEY': 'k', 'AI_GEMINI_RPD': '2'}

@@ -15,9 +15,11 @@
 - 모델 이름 기본값(Gemini gemini-3.1-flash-lite · Cerebras gpt-oss-120b 는 공식 문서에서 확인, 나머지 Groq·Cloudflare·NVIDIA 는 미확인 — 계정에서 쓸 수 있는 모델로 `AI_<이름>_MODEL` 지정).
 - 라우터: 켜진 공급자만(secret 이 모두 있어야 켜짐) → 앞에서부터 순서대로(gemini → cerebras → groq → cloudflare → nvidia). 분당·일당 한도를 코드가 먼저 지키고, 429 는 Retry-After 만큼(15분 넘으면 오늘은 끔) 쉬게 한 뒤 다음 공급자로. 401·403 이면 그 공급자는 오늘 끔. 오류 본문은 기록하지 않는다.
 
-## 하루 처리량
-- 한 요청 = 장소 15곳. Gemini 기본 RPD 250 → 이론상 하루 3,750곳이지만, 하루 상한 기본 **1,500곳**(`AI_MAX_PLACES`·`--max-places`) · 실행 50분 예산.
-- 공급자를 더 켜도 상한 1,500곳은 그대로(대표가 올리기 전). 우선 도시(sources/priority_cities.json 순서)의 일정 장소부터, 이름·설명이 이미 있는 장소는 건너뜀.
+## 하루 처리량 (11/20 처리량 올림)
+- Gemini 무료 등급의 모델별 RPM·RPD 숫자는 **공식 문서에 없고 AI Studio 화면(Rate limit)에서만 보인다**(rate-limits·quota 문서 확인) → 미확인. 코드 기본값은 flash-lite 계열 gemini-3.1-flash-lite, RPM 30·RPD 1,500(환경 변수 `AI_GEMINI_RPM`·`AI_GEMINI_RPD`)이고, 429 가 연달아 6번 오거나 재시도 대기가 15분을 넘으면 그 실행에서는 끈다. 대표가 AI Studio 에서 실제 숫자를 보면 바로 맞춘다.
+- 이름 요청 = 50곳 묶음(출력이 짧음), 설명 요청 = 10곳 묶음(하루 `AI_DESC_MAX` 기본 500곳까지), 동시 요청 `AI_CONCURRENCY` 기본 4(호출 시각을 60/rpm 초 간격으로 예약해 분당 한도 안).
+- 하루 상한 `AI_MAX_PLACES` 기본 20,000곳(= 이름 요청 약 400회 + 설명 50회). 3시간마다 실행(8회/일, 1회 50분 예산, 동시 실행 1개)하고 state 가 하루 합산.
+- 공급자를 더 켜도 상한은 그대로.
 
 ## 결과·출처
 - Storage `processed/ai_fill/out/aifill-<날짜>-NNNN.json.gz`(schema `aifill-1`), 행 = {ko,en,ja,zh_Hans,zh_Hant(빈 칸만), d:{언어: 설명}, src:'ai', provider, model, date, city}. 진행 위치 `processed/ai_fill/state.json`(1MB 미만)·처리한 장소 `done.json.gz`(같은 장소 두 번 처리 금지).
