@@ -1,0 +1,41 @@
+# 비자 팩(visa-1) — 267기(prep264). scripts/visa_mofa.py 머리말. 주 1회(월 04:23 KST 전날 UTC 19:23) + 수동.
+# 키 = DATA_GO_KR_KEY(공용 키, '외교부_국가·지역별 입국허가요건' 활용신청 필요 — CEO_FINAL 264-4). 결과 = Storage places/v1/visa/kr.json 만(저장소에 커밋하지 않음).
+# 끄기: 변수 VISA_MOFA_OFF=1. 키가 아직 승인 전이면 수집이 실패로 끝나고 옛 팩이 그대로 남는다(앱은 '외교부 해외안전여행에서 확인' 안내).
+name: visa-mofa
+on:
+  schedule:
+    - cron: "23 19 * * 0"
+  workflow_dispatch:
+permissions:
+  contents: read
+  id-token: write
+concurrency:
+  group: visa-mofa
+  cancel-in-progress: false
+env:
+  GCS_BUCKET: ${{ vars.GCS_BUCKET || 'trip-mate-0vum9k.firebasestorage.app' }}
+jobs:
+  visa:
+    if: github.repository == 'joon0515/triproutie-pipeline' && github.ref == 'refs/heads/main' && vars.VISA_MOFA_OFF != '1'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ vars.GCP_WIF_PROVIDER || 'projects/222914945328/locations/global/workloadIdentityPools/github-pool/providers/github-provider' }}
+          service_account: ${{ vars.GCP_SA_EMAIL || 'pipeline-uploader@trip-mate-0vum9k.iam.gserviceaccount.com' }}
+      - uses: google-github-actions/setup-gcloud@v2
+      - uses: actions/setup-python@v5
+        with: {python-version: "3.12"}
+      - name: test (mock, no network)
+        run: set -o pipefail; python3 -W ignore -m unittest tests/test_visa_mofa.py 2>&1 | tail -3
+      - name: build + upload
+        env:
+          DATA_GO_KR_KEY: ${{ secrets.DATA_GO_KR_KEY }}
+        run: |
+          set -o pipefail
+          [ -n "$DATA_GO_KR_KEY" ] || { echo "키 없음: DATA_GO_KR_KEY"; exit 1; }
+          mkdir -p "$RUNNER_TEMP/visa"
+          python3 scripts/visa_mofa.py --out "$RUNNER_TEMP/visa"
+          gcloud storage cp -q --content-type=application/json --cache-control="private, max-age=86400" "$RUNNER_TEMP/visa/kr.json" "gs://$GCS_BUCKET/places/v1/visa/kr.json"
