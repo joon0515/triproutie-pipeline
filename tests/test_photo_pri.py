@@ -67,6 +67,19 @@ class PhotoPri(unittest.TestCase):
         self.assertEqual(pr, [('osaka', ['Q7', 'Q8'])])
         self.assertEqual(keys, {'Q7': {'kowiki:Q7'}})  # 사진 행은 앱 타일 행 id 로도 싣는다
 
+    def test_kto_match_name_and_50m(self):  # 263기: 한국 타일 행(fsq:·해시 id)에 TourAPI 공식 사진을 이름+좌표로
+        card = lambda n, la, lo, lic='KOGL-1', url='http://tong.visitkorea.or.kr/a.jpg': {'n': n, 'lat': la, 'lon': lo, 'photo': {'url': url, 'license': lic, 'credit': '한국관광공사'}}
+        d = pack(['fsq:1', 'abc', 'fsq:3', 'fsq:4'], [(33.4500, 126.5000), (33.4500, 126.5004), (33.4600, 126.5100), (33.4500, 126.5000)], [1, 2, 3, 4])
+        d['_lat'], d['_lon'] = [33.4500, 33.4500, 33.4600, 33.4500], [126.5000, 126.5004, 126.5100, 126.5000]  # load_pack 이 만드는 칸
+        d['ko'] = ['성산 일출봉', '성산일출봉 매표소', '다른 곳', '아무개']
+        cards = [card('성산일출봉', 33.45002, 126.50001, 'KOGL-3'), card('성산일출봉', 33.5, 126.9), card('쓸모없음', 33.4500, 126.5000, 'KOGL-2'), card('아무개', 33.4503, 126.5000, 'KOGL-1', 'ftp://x')]
+        out, inbox, n = PP.kto_match(cards, [d], [126.0, 33.0, 127.0, 34.0])
+        self.assertEqual(sorted(out), ['abc', 'fsq:1'])  # 이름 같음 + 50m 안(abc 는 포함 관계·약 37m). 먼 곳·다른 이름·2유형·ftp 는 안 붙음
+        r = out['fsq:1']
+        self.assertEqual((r['photo_license'], r['photo_src'], r['photo_author'], r['no_modify']), ('KOGL-3', 'tourapi', '한국관광공사', True))
+        self.assertTrue(r['photo_url'].startswith('https://') and r['photo_license_url'].endswith('licenseType3.do'))
+        self.assertEqual((inbox, n), (2, 2))  # 상자 안 사진 카드 2(2유형·ftp 는 사진 아님)
+
     def test_p18_from_dump_first_then_endpoint(self):
         self.store.put_json('processed/desc/wd_dump.json.gz', {'Q2': ['2026-11-11', {}, {'l': {}, 'p': FP + 'A.jpg'}]})
         h = FakeHttp(p18={'Q3': FP + 'B.jpg'}, lic={FP + 'A.jpg': ('Q18199165', 'Kim'), FP + 'B.jpg': ('Q6938433', 'Lee')})

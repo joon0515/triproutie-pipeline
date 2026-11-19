@@ -25,7 +25,7 @@ import argparse, datetime, glob, gzip, json, os, re, shutil, sys, tempfile, time
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.join(HERE, '..')
 sys.path.insert(0, HERE); sys.path.insert(0, os.path.join(HERE, 'collect')); sys.path.insert(0, os.path.join(ROOT, 'tools'))
-from common import Blocked, Http, Stop, Store, forbidden, today  # noqa: E402
+from common import Blocked, Http, Stop, Store, forbidden, norm_name, today  # noqa: E402
 import place_names as PN  # noqa: E402
 
 WD_EP = 'https://qlever.dev/api/wikidata'
@@ -374,6 +374,95 @@ def pri_rows(prio, cache, pcache, ccache, keys_of=None):
     return rows, by_city
 
 
+# ---------- 2b. 한국: TourAPI 공식 사진을 타일 행에 이름+좌표로 붙인다(263기) ----------
+# 한국 타일 행 id 는 fsq:·해시뿐이라 Q-id(P18) 길이 없다. TourAPI 장소(kto_*.json.gz, 공공누리 제1·3유형 사진만 이미 걸러져 있음)를
+# 같은 이름 · 50m 이내인 타일 행에 붙인다. 제3유형은 no_modify(자르기·보정 금지) 그대로. 사진 주소는 http 면 https 로(TourAPI 이미지 서버는 https 도 응답).
+KTO_MAX_M = 50.0
+KOGL_URL = {'KOGL-1': 'https://www.kogl.or.kr/info/licenseType1.do', 'KOGL-3': 'https://www.kogl.or.kr/info/licenseType3.do'}
+
+
+def _https(u):
+    return 'https://' + u[7:] if isinstance(u, str) and u.startswith('http://') else u
+
+
+def kto_photo_row(ph):
+    """카드의 photo {url, license(KOGL-1|3), credit, thumb?, no_modify?} → photos-1 행. 라이선스가 1·3 이 아니거나 주소가 https 가 아니면 None."""
+    if not isinstance(ph, dict) or ph.get('license') not in KOGL_URL:
+        return None
+    url = _https(ph.get('url'))
+    if not isinstance(url, str) or not url.startswith('https://'):
+        return None
+    thumb = _https(ph.get('thumb')) if isinstance(ph.get('thumb'), str) else url
+    lic = ph['license']
+    r = {'photo_url': url, 'photo_thumb': thumb, 'photo_credit': f"사진: 한국관광공사 · {'공공누리 제1유형' if lic == 'KOGL-1' else '공공누리 제3유형(변경 금지)'}",
+         'photo_license': lic, 'photo_license_url': KOGL_URL[lic], 'photo_author': '한국관광공사', 'photo_src': 'tourapi'}
+    if lic == 'KOGL-3' or ph.get('no_modify'):
+        r['no_modify'] = True
+    return r
+
+
+def _dist_m(la1, lo1, la2, lo2):
+    import math
+    return math.hypot((la1 - la2) * 111320.0, (lo1 - lo2) * 111320.0 * math.cos(math.radians((la1 + la2) / 2)))
+
+
+def _name_ok(a, b):
+    """정규화한 이름이 같거나, 한쪽이 다른 쪽을 품는다(3글자 이상 — '공원'처럼 흔한 말이 아무데나 붙지 않게)."""
+    if not a or not b:
+        return False
+    return a == b or (min(len(a), len(b)) >= 3 and (a in b or b in a))
+
+
+def kto_match(cards, tiles, bbox, max_m=KTO_MAX_M):
+    """cards = [{n, lat, lon, photo}], tiles = load_pack 꼴 목록 → ({타일 행 id: 사진 행}, 상자 안 카드 수, 사진 있는 카드 수)."""
+    grid, inbox = {}, 0
+    for c in cards:
+        la, lo = c.get('lat'), c.get('lon')
+        if not isinstance(la, (int, float)) or not isinstance(lo, (int, float)) or not (bbox[0] <= lo <= bbox[2] and bbox[1] <= la <= bbox[3]):
+            continue
+        row = kto_photo_row(c.get('photo'))
+        if not row:
+            continue
+        inbox += 1
+        grid.setdefault((int(la * 500), int(lo * 500)), []).append((la, lo, norm_name(c.get('n') or ''), row))  # 0.002도 칸(약 200m) — 이웃 9칸만 본다
+    out = {}
+    if not grid:
+        return out, 0, 0
+    for d in tiles:
+        ids, la_, lo_ = d.get('id') or [], d.get('_lat') or [], d.get('_lon') or []
+        for i in range(min(len(ids), len(la_), len(lo_))):
+            la, lo = la_[i], lo_[i]
+            gi, gj = int(la * 500), int(lo * 500)
+            best = None
+            for di in (-1, 0, 1):
+                for dj in (-1, 0, 1):
+                    for cla, clo, cn, row in grid.get((gi + di, gj + dj), ()):
+                        dm = _dist_m(la, lo, cla, clo)
+                        if dm > max_m or (best and dm >= best[0]):
+                            continue
+                        names = [norm_name(str(d[k][i])) for k in ('ko', 'nm', 'en') if isinstance(d.get(k), list) and i < len(d[k]) and d[k][i]]
+                        if any(_name_ok(cn, nm) for nm in names):
+                            best = (dm, row)
+            if best and isinstance(ids[i], str):
+                out[ids[i]] = dict(best[1])
+    return out, inbox, len(out)
+
+
+def load_kto_cards(bucket, wd):
+    """gs 판: places/v1/layers_extra/kto_*.json.gz(TourAPI 장소 층) 의 사진 있는 카드. 한 번에 모두 읽는다(시도 17개 안팎, 수 MB)."""
+    import place_desc as PD
+    base = f'gs://{bucket}/places/v1/layers_extra/'
+    r = PD.gs('ls', base + 'kto_*.json.gz')
+    urls = [u for u in (r.stdout.decode().split() if r.stdout else []) if u.rsplit('/', 1)[-1].startswith('kto_') and u.endswith('.json.gz')]
+    cards = []
+    for _, j in PD.pull_urls(urls, wd):
+        for k, e in ((j or {}).get('rows') or {}).items():
+            if isinstance(e, dict) and e.get('photo') and 'lat' in e:
+                cards.append({'n': e.get('n'), 'lat': e['lat'], 'lon': e['lon'], 'photo': e['photo'], 'cid': k})
+    log(f'TourAPI 사진 카드 {len(cards):,}')
+    return cards
+
+
 def pri_doc(rows, part):
     return {'schema': 'photos-1', 'region': 'priority', 'part': part, 'license': 'mixed — 행마다 photo_license(CC0·CC BY·CC BY-SA)',
             'attribution': '사진: 위키미디어 공용(사진마다 저작자·라이선스) · 사진 고르기: Wikidata P18 (CC0)', 'built': today(), 'rows': rows}
@@ -384,7 +473,7 @@ def city_doc(rows):
             'attribution': '도시 사진: Unsplash(작가·Unsplash 표기, 핫링크) 또는 위키미디어 공용(저작자·라이선스)', 'built': today(), 'rows': rows}
 
 
-def run(store, bucket=None, tiles_dir=None, out=None, budget_min=50.0, http_wd=None, http_c=None, key=None, opener=None, clock=time.time, dry_run=False, src=None):
+def run(store, bucket=None, tiles_dir=None, out=None, budget_min=50.0, http_wd=None, http_c=None, key=None, opener=None, clock=time.time, dry_run=False, src=None, kto_cards=None):
     t_end = clock() + budget_min * 60
     src = src or {}
     cities = load_cities()
@@ -414,6 +503,16 @@ def run(store, bucket=None, tiles_dir=None, out=None, budget_min=50.0, http_wd=N
                 if ver and ver != 'local' and any(qs for _, qs in prio):  # 빈 순서는 남기지 않는다(다음 실행에서 다시)
                     store.put_json(pkey, {'prio': prio, 'keys': {q: sorted(v) for q, v in tk.items()}})
         log(f"순서: 도시 {sum(1 for _, qs in prio if qs)}/{len(prio)} · 일정 후보 QID {sum(len(qs) for _, qs in prio):,}")
+        kto_rows, kto_stat = {}, {}
+        try:
+            cards = kto_cards if kto_cards is not None else (load_kto_cards(bucket, wd) if bucket and not tiles_dir else [])
+            for c in cities:
+                if any(isinstance(x.get('lat'), (int, float)) and c['bbox'][1] <= x['lat'] <= c['bbox'][3] and c['bbox'][0] <= x['lon'] <= c['bbox'][2] for x in cards):
+                    got, nc, nm = kto_match(cards, tiles_for(c['bbox']), c['bbox'])
+                    kto_rows.update(got)
+                    kto_stat[c['key']] = (nc, nm)
+        except Exception as e:  # noqa: BLE001 — TourAPI 붙이기가 실패해도 P18 길은 계속(이름만 기록)
+            log(f'TourAPI 붙이기 실패 {type(e).__name__}')
     finally:
         shutil.rmtree(wd, ignore_errors=True)
     cache = store.get_json('processed/desc/wd.json.gz', {}) or {}
@@ -449,6 +548,8 @@ def run(store, bucket=None, tiles_dir=None, out=None, budget_min=50.0, http_wd=N
     cdiag = city_diag(cities, cstate, ccache)
     cdiag['cooling'] = {f'{n}:{k}': {x: y for x, y in (v or {}).items() if x in ('cool_until', 'code', 'ra')} for n, hs in (('wd', st.get('hosts_wd')), ('c', st.get('hosts_c'))) for k, v in list((hs or {}).items())[:3]}
     rows, by_city = pri_rows(prio, cache, pcache, ccache, keys_of)
+    for rk, v in kto_rows.items():
+        rows.setdefault(rk, v)  # P18(Commons)가 이미 있는 행이 먼저
     out = out or tempfile.mkdtemp(prefix='ppri_', dir=os.environ.get('RUNNER_TEMP') or None)
     os.makedirs(out, exist_ok=True)
     for f in glob.glob(os.path.join(out, 'photos-pri-*.json.gz')) + glob.glob(os.path.join(out, 'photos-city-*.json.gz')):
@@ -463,7 +564,7 @@ def run(store, bucket=None, tiles_dir=None, out=None, budget_min=50.0, http_wd=N
         made['photos-city-1.json.gz'] = len(crow)
     rep = {'p18_asked': p_asked, 'p18_left': len(need) - p_asked, 'p18_stop': p_stop, 'commons_asked': asked, 'commons_left': len(todo) - asked,
            'commons_stop': stop, 'rows': len(rows), 'cities': len(crow), 'unsplash': sum(1 for v in crow.values() if v.get('photo_src') == 'unsplash'),
-           'by_city': by_city, 'city_diag': cdiag}
+           'by_city': by_city, 'city_diag': cdiag, 'kto': {k: list(v) for k, v in kto_stat.items()}}
     st['last'] = dict(rep, at=datetime.datetime.now(datetime.timezone.utc).isoformat())
     store.put_json('processed/photos/state.json', st)
     if bucket and not dry_run:
@@ -490,6 +591,7 @@ def report_lines(rep, cities):
          + f" · Commons 판정 물음 {rep['commons_asked']:,}(남음 {rep['commons_left']:,})" + (f" · 멈춘 까닭 {rep['commons_stop']}" if rep['commons_stop'] else ''),
          f"- 장소 사진 행 {rep['rows']:,} · 도시 대표 사진 {rep['cities']}/{len(cities)}(Unsplash {rep['unsplash']})",
          f"- 도시 사진 단계: {rep.get('city_diag')}",
+         f"- 한국 TourAPI 사진 붙임(도시: 상자 안 사진 카드 · 붙은 타일 행): {rep.get('kto')}",
          '| 순위 | 도시 | 일정 후보(QID) | 사진 있음 | 비율 |', '|---|---|---|---|---|']
     for c in cities:
         n, k = rep['by_city'].get(c['key'], (0, 0))
