@@ -91,6 +91,21 @@ def prio_order(cities, tiles_for):
     return out
 
 
+# 지역 목록의 타일 항목에는 bbox 가 없고 center(위도, 경도)·res(H3 해상도)만 있는 판이 있다(tools/world_region.py) — 그때는 중심 ± 해상도별 여유로 상자를 만든다.
+H3_PAD = {3: 1.2, 4: 0.5, 5: 0.2}
+
+
+def tile_box(t):
+    bb = t.get('bbox')
+    if isinstance(bb, list) and len(bb) == 4 and all(isinstance(x, (int, float)) for x in bb):
+        return bb
+    c = t.get('center')
+    if isinstance(c, list) and len(c) == 2 and all(isinstance(x, (int, float)) for x in c):
+        p = H3_PAD.get(t.get('res'), 1.2)
+        return [c[1] - p, c[0] - p, c[1] + p, c[0] + p]
+    return None
+
+
 def gcs_tiles_for(bucket, wd):
     """gs 판: 지금 게시 판의 지역 목록에서 상자와 겹치는 타일만 받는다(판마다 한 번)."""
     import place_desc as PD
@@ -101,8 +116,13 @@ def gcs_tiles_for(bucket, wd):
     tiles = []
     for r in regs if ver else []:
         man = PD.gs_json(f'{base}/{ver}/regions/{r}.json') or PD.gs_json(f'{base}/{ver}/parts/{r}.json') or {}
-        tiles += [t for t in man.get('tiles') or [] if isinstance(t.get('file'), str) and t['file'].startswith('w-') and '/' not in t['file']
-                  and isinstance(t.get('bbox'), list) and len(t['bbox']) == 4]
+        for t in man.get('tiles') or []:
+            if not (isinstance(t.get('file'), str) and t['file'].startswith('w-') and '/' not in t['file']):
+                continue
+            bb = tile_box(t)
+            if bb:
+                tiles.append(dict(t, bbox=bb))
+    log(f'판 {ver} · 상자를 아는 세계 타일 {len(tiles):,}')
     got = {}
 
     def tiles_for(bbox):
@@ -270,8 +290,9 @@ def city_rows(cities, cstate, ccache, http_wd, budget_end, key=None, opener=None
             url = WD_EP + '?' + urllib.parse.urlencode({'query': city_sparql(city_en(k))})
             try:
                 hit = pick_city_item(json.loads(http_wd.get(url, accept='application/sparql-results+json')), c['bbox'])
-            except (Blocked, Stop, IOError, ValueError):
+            except (Blocked, Stop, IOError, ValueError) as e:
                 hit = None
+                st['wd_err'] = type(e).__name__ + (f' {e}' if isinstance(e, (Blocked, Stop)) else '')
             if hit:
                 st.update(q=hit[0], p=hit[1], at=today(), src='commons')
         cstate[k] = st
@@ -333,8 +354,9 @@ def run(store, bucket=None, tiles_dir=None, out=None, budget_min=50.0, http_wd=N
         pkey = f'processed/photos/prio_{ver}.json.gz'
         cached = store.get_json(pkey, None) if ver != 'local' else None
         prio = [tuple(x) for x in cached] if cached else prio_order(cities, tiles_for)
-        if not cached and ver and ver != 'local':
+        if not cached and ver and ver != 'local' and any(qs for _, qs in prio):  # 빈 순서는 남기지 않는다(다음 실행에서 다시)
             store.put_json(pkey, prio)
+        log(f"순서: 도시 {sum(1 for _, qs in prio if qs)}/{len(prio)} · 일정 후보 QID {sum(len(qs) for _, qs in prio):,}")
     finally:
         shutil.rmtree(wd, ignore_errors=True)
     cache = store.get_json('processed/desc/wd.json.gz', {}) or {}
