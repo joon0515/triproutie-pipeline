@@ -666,6 +666,7 @@ def crawl(ctx):
             break
         except Exception as e:  # (263기) 사이트 하나의 뜻밖의 오류가 조각 전체를 죽이고 같은 사이트가 매번 맨 앞에서 또 죽는 고리(official_sites/1, 8회 연속)를 끊는다.
             ctx.notes.append(f'skip {qid}: {type(e).__name__}')  # 주소·값은 싣지 않음
+            ctx.skips = getattr(ctx, 'skips', 0) + 1  # 관측: 건너뛴 사이트 수가 결과(counts)·상태에 남는다(조용히 늘어나면 눈에 띄게)
             done[qid] = today()
             continue
         done[qid] = today()
