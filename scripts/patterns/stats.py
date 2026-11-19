@@ -38,6 +38,7 @@ class Bucket:
         self.docs = 0
         self.v = {k: [] for k in ('day_start', 'day_end', 'stops_per_day', 'gap_min', 'stay_min', 'lunch', 'dinner', 'breakfast', 'first_day_stops', 'last_day_stops')}
         self.cats, self.days = {}, 0
+        self.brands = {}  # (256기) 브랜드 QID → 언급 수(숫자만)
 
     def add_doc(self, days):
         self.docs += 1
@@ -60,6 +61,8 @@ class Bucket:
                         self.v[k].append(d[k])
             for c, n in d['cats'].items():
                 self.cats[c] = self.cats.get(c, 0) + n
+            for q, n in (d.get('brands') or {}).items():
+                self.brands[q] = self.brands.get(q, 0) + n
 
     def out(self):
         o = {'n_docs': self.docs, 'n_days': self.days}
@@ -70,6 +73,8 @@ class Bucket:
         tot = sum(self.cats.values())
         if tot:
             o['cat_share'] = {c: round(n / tot, 3) for c, n in sorted(self.cats.items())}
+        if self.brands:
+            o['brand_n'] = dict(sorted(self.brands.items()))
         return o
 
 

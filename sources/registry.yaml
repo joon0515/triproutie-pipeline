@@ -149,6 +149,19 @@ sources:
     interval_s: 5
     script: taiwan
     status: active
+  - id: taiwan_events
+    name: 대만 교통부 관광서 활동(活動 - 觀光資訊資料庫, data.gov.tw 7778) — 행사·축제(256기)
+    kind: dump
+    url: https://media.taiwan.net.tw/XMLReleaseAll_public/v2.0/Zh_tw/Event-json.zip
+    license: "OGDL-Taiwan-1.0 으로 보임(같은 기관·같은 배포 폴더의 7777 과 같음) — 7778 쪽 授權方式 를 사람이 읽기 전까지 candidate"
+    attribution: "交通部觀光署 觀光資訊資料庫 (政府資料開放授權條款-第1版)"
+    license_url: https://data.gov.tw/dataset/7778
+    robots: "media.taiwan.net.tw robots.txt 없음(허용) 2026-11-20. data.gov.tw/dataset/7778 쪽은 이 환경 열기 도구가 robots 로 막혀 못 읽음(건너뜀, docs/SHOP_EVENTS.md 5절)"
+    refresh: daily
+    daily_limit: 1
+    interval_s: 5
+    script: events_layer.py taiwan
+    status: candidate
   - id: advisories_ca
     name: 캐나다 정부 국가별 여행 권고(Country Travel Advice and Advisories)
     kind: feed

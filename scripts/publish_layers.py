@@ -31,7 +31,7 @@
 """
 import argparse, base64, datetime, glob, gzip, hashlib, json, os, subprocess, sys
 
-OK_SCHEMA = {'popularity-1': 'popularity', 'amenities-1': 'amenities', 'lockers-1': 'lockers', 'names-1': 'names', 'tourapi-1': 'tourapi', 'collect-1': 'collect', 'hours-1': 'hours', 'photos-1': 'photos', 'desc-1': 'desc', 'names-2': 'names5', 'rec-1': 'rec'}  # hours·photos: 11/15 · desc: 11/17 장소 소개(place_desc.py·desc_osm.py) · names5: 11/18 이름 5개 언어(place_names.py·names5_osm.py)
+OK_SCHEMA = {'popularity-1': 'popularity', 'amenities-1': 'amenities', 'lockers-1': 'lockers', 'names-1': 'names', 'tourapi-1': 'tourapi', 'collect-1': 'collect', 'hours-1': 'hours', 'photos-1': 'photos', 'desc-1': 'desc', 'names-2': 'names5', 'rec-1': 'rec', 'shop-1': 'shop', 'events-1': 'events'}  # hours·photos: 11/15 · desc: 11/17 장소 소개(place_desc.py·desc_osm.py) · names5: 11/18 이름 5개 언어(place_names.py·names5_osm.py)
 MAX_BYTES = 8 * 1024 * 1024  # 앱의 파일 크기 상한(타일과 같음)
 SIGN_MAX = 64 * 1024         # KMS asymmetric-sign 이 한 번에 받는 본문 크기(Ed25519 는 본문 그대로 서명)
 ROOT_MAX = 62 * 1024         # 뿌리 목록 파일(서명 포함) 상한 — 앱 kTlPlMaxRootBytes(64 KiB)·SIGN_MAX 보다 작게
@@ -117,6 +117,14 @@ def describe(fn):
             e['region'] = j['region']
     if kind == 'rec':  # (11/18 245기) 트립루티 추천 지수 — rows 는 {장소 id: [점수, 신호…]}, 계산식 docs/RECOMMEND_INDEX.md
         e['src'], e['version'], e['cc'] = j.get('src'), j.get('version'), j.get('cc')
+    if kind in ('shop', 'events'):  # (11/20 256기) 쇼핑 층(shop_index.py) · 행사 층(events_layer.py·tourapi_daily.py) — 앱은 나라·상자로 고른다
+        e['src'], e['version'] = j.get('src'), j.get('version')
+        if j.get('cc'):
+            e['cc'] = j['cc']
+        pts = [(r[1], r[2]) for r in rows.values() if isinstance(r, list) and len(r) > 2] if kind == 'shop' else \
+              [(r['la'], r['lo']) for r in rows.values() if isinstance(r, dict) and 'la' in r]
+        if pts:
+            e['bbox'] = [round(min(p[1] for p in pts), 4), round(min(p[0] for p in pts), 4), round(max(p[1] for p in pts), 4), round(max(p[0] for p in pts), 4)]
     if kind == 'popularity':
         e['packs'] = sorted((j.get('report') or {}).keys()) or None
         e['photos'] = sum(1 for r in rows.values() if isinstance(r, dict) and 'photo' in r)

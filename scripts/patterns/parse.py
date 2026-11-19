@@ -236,6 +236,9 @@ def _clock_day(ents, gaz):
     gaps = [b[0] - a[0] for a, b in zip(stops, stops[1:]) if 5 <= b[0] - a[0] <= 300]
     stays = [e - t for t, e, k in stops if e and 5 <= e - t <= 480]
     out = {'clock': True, 'full': full, 'start': start, 'end': last, 'stops': len(stops), 'gaps': gaps, 'stays': stays, 'cats': _cats(stops)}
+    bq = _brands([lb for _, _, _, lb in ents], gaz)
+    if bq:
+        out['brands'] = bq
     for t, _, k in stops:
         meal = k if k in MEALS else None
         if k == 'food':
@@ -258,11 +261,27 @@ def _cats(stops):
     return c
 
 
+def _brands(labels, gaz):
+    """(256기) 하루 글 줄들 → {브랜드 QID: 언급 수}. 이름은 버리고 QID 개수만 남긴다."""
+    if gaz is None or not getattr(gaz, 'b', None):
+        return {}
+    out = {}
+    for lb in labels:
+        q = gaz.lookup_brand(lb or '')
+        if q:
+            out[q] = out.get(q, 0) + 1
+    return out
+
+
 def _chapter_day(ents, gaz):
     stops = [(None, None, k) for k in (kind_of(lb, gaz) for _, _, _, lb in ents) if k not in NOT_STOP]
     if len(stops) < 2 or len(stops) > 20:
         return None
-    return {'clock': False, 'stops': len(stops), 'cats': _cats(stops)}
+    out = {'clock': False, 'stops': len(stops), 'cats': _cats(stops)}
+    bq = _brands([lb for _, _, _, lb in ents], gaz)
+    if bq:
+        out['brands'] = bq
+    return out
 
 
 def parse_text(text, gaz=None):

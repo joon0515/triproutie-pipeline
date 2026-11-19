@@ -15,8 +15,33 @@ class Gazetteer:
 
     def __init__(self):
         self.m = {}
+        self.b = {}  # (11/20 256기) {정규화 브랜드 이름: 브랜드 Wikidata QID} — 언급 수 세기에만(이름은 결과에 남지 않고 QID 개수만)
+
+    def add_brand(self, name, qid):
+        n = norm_name(name or '')
+        if len(n) >= 2 and re.fullmatch(r'Q[1-9]\d*', qid or ''):
+            self.b.setdefault(n, qid)
+
+    def lookup_brand(self, label):
+        if not self.b:
+            return None
+        n = norm_name(label)
+        if n in self.b:
+            return self.b[n]
+        for part in _SPLIT.split(unicodedata.normalize('NFKC', label)):
+            p = norm_name(part)
+            if len(p) >= 2 and p in self.b:
+                return self.b[p]
+        for k, q in self.b.items():  # 지점 이름(‘돈키호테 신주쿠점’)은 앞부분이 브랜드
+            if len(k) >= 3 and n.startswith(k):
+                return q
+        return None
 
     def add(self, row):
+        if row.get('brand'):
+            self.add_brand(row.get('nm') or row.get('en'), row['brand'])
+            for k in ('ko', 'en', 'ja', 'zh'):
+                self.add_brand(row.get(k), row['brand'])
         c = _CAT.get(row.get('c') or '', None)
         if not c:
             return
