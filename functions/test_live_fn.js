@@ -78,6 +78,14 @@ const PL = { regularOpeningHours: { weekdayDescriptions: ['Mon: 9-18', 'Tue: 9-1
   r = await c.details(req({ id: 'ChIJabcdefghij', fields: ['rating'] }));
   ok(r.body.reason === 'rate', '사용자 하루 상한');
 
+  // 268기: 사진도 사용자 하루 상한(사진만 요청해 공용 무료 몫을 다 쓰는 것 차단)
+  db = fakeDb({ '_quota/lu_u1': { d: day, n: 0, p: L.USER_PHOTOS_PER_DAY } }); c = core(db, { places: PL });
+  r = await c.details(req({ id: 'ChIJabcdefghij', fields: ['photos'] }));
+  ok(r.body.ok && !r.body.place.photos && !(db.store[`_quota/google_${day}`] || {}).livePhotos, '268 사진 사용자 상한 → 사진 빠짐·공용 몫 안 씀');
+  db = fakeDb(); c = core(db, { places: PL });
+  await c.details(req({ id: 'ChIJabcdefghij', fields: ['photos'] }));
+  ok(db.store['_quota/lu_u1'].p === 1 && db.store['_quota/lu_u1'].n === 0, '268 사진 횟수 사용자별 기록');
+
   // liveBudget
   db = fakeDb({ [`_quota/live_m_${month}`]: { details_enterprise: 5, details_photos: 2 }, [`_quota/google_${day}`]: { detailsRich: 3 } }); c = core(db);
   r = await c.budget(req({}));

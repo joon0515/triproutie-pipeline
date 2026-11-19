@@ -32,6 +32,8 @@ const BOX = Object.freeze({
   oba: [47.0, -122.6, 48.1, -121.9],
   idfm: [48.1, 1.4, 49.25, 3.6],
 });
+// 268기: 사용자별 바깥 호출 상한(캐시에 없는 요청만 셈) — 좌표를 조금씩 바꿔 캐시를 피하면 한 사람이 출처 하루 한도(IDFM 1,000 등)를 다 쓸 수 있었음.
+const USER_MISS_PER_10M = 30;
 const TTL = Object.freeze({ mta: 30e3, tfl: 30e3, lta: 30e3, oba: 30e3, idfm: 60e3 });
 const ATTR = Object.freeze({
   mta: 'Data: MTA (not endorsed by MTA)',
@@ -123,6 +125,7 @@ const MTA_STATIC = 'https://rrgtfsfeeds.s3.amazonaws.com/gtfs_subway.zip';
 
 function makeTransitCore(deps) {
   const cache = new Map(); // `${src}:${stop}` → {at, body}
+  const misses = new Map(); // uid → [시각…] (인스턴스 메모리)
   const big = new Map(); // 정류장 목록·피드 원본 → {at, v}
   const now = () => deps.now();
   const cget = (m, k, ttl) => { const e = m.get(k); return e && now() - e.at < ttl ? e.v : undefined; };
@@ -252,12 +255,19 @@ function makeTransitCore(deps) {
 
   async function handle(src, req) {
     if (req.method !== 'POST') return { status: 405, body: { ok: false, reason: 'method' } };
-    try { await deps.verify(req); } catch (e) { return { status: 401, body: { ok: false, reason: (e && e.reason) || 'auth' } }; }
+    let user;
+    try { user = await deps.verify(req); } catch (e) { return { status: 401, body: { ok: false, reason: (e && e.reason) || 'auth' } }; }
+    const uid = (user && user.uid) || '';
+    if (!uid) return { status: 401, body: { ok: false, reason: 'auth' } };
     const { v, bad } = vBody(src, req.body);
     if (bad) return { status: 400, body: { ok: false, reason: bad } };
     const ck = `${src}:${v.lat},${v.lon}:${v.mode}`;
     let body = cget(cache, ck, TTL[src]);
     if (!body) {
+      const h = (misses.get(uid) || []).filter((t) => now() - t < 600e3);
+      if (h.length >= USER_MISS_PER_10M) return { status: 429, body: { ok: false, src, reason: 'rate' } };
+      h.push(now()); misses.set(uid, h);
+      if (misses.size > 5000) misses.delete(misses.keys().next().value);
       try {
         const r = await S[src](v);
         body = { ok: !!r.stop, src, ...(r.stop ? { stop: r.stop } : { reason: 'no_stop' }), arrivals: r.arrivals, attr: ATTR[src], asof: new Date(now()).toISOString() };
@@ -297,4 +307,4 @@ function makeTransitFunctions({ region = REGION } = {}) {
   return out;
 }
 
-module.exports = { makeTransitFunctions, makeTransitCore, vBody, gtfsRtTrips, pbFields, unzipOne, csvRows, distM, BOX, TTL, ATTR, SECRETS, NAMES };
+module.exports = { USER_MISS_PER_10M, makeTransitFunctions, makeTransitCore, vBody, gtfsRtTrips, pbFields, unzipOne, csvRows, distM, BOX, TTL, ATTR, SECRETS, NAMES };
