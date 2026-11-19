@@ -47,6 +47,8 @@ def today():
 SPEC = {
     'gemini':   {'keys': ('GEMINI_API_KEY',), 'model': 'gemini-3.1-flash-lite', 'rpm': 30, 'rpd': 1500, 'kind': 'gemini',
                  'url': 'https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent'},
+    'gemini_b': {'keys': ('GEMINI_API_KEY',), 'model': 'gemini-2.5-flash-lite', 'rpm': 30, 'rpd': 1000, 'kind': 'gemini',   # 같은 키·다른 모델(모델별 한도 따로) — 앞 모델이 503/429 일 때 이어받음
+                 'url': 'https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent'},
     'cerebras': {'keys': ('CEREBRAS_API_KEY',), 'model': 'gpt-oss-120b', 'rpm': 5, 'rpd': 200, 'kind': 'openai',   # 공식 표: RPM 5(Free Trial)
                  'url': 'https://api.cerebras.ai/v1/chat/completions'},
     'groq':     {'keys': ('GROQ_API_KEY',), 'model': 'llama-3.1-8b-instant', 'rpm': 10, 'rpd': 200, 'kind': 'openai',
@@ -56,7 +58,7 @@ SPEC = {
     'nvidia':   {'keys': ('NVIDIA_API_KEY',), 'model': 'meta/llama-3.1-8b-instruct', 'rpm': 5, 'rpd': 100, 'kind': 'openai',
                  'url': 'https://integrate.api.nvidia.com/v1/chat/completions'},
 }
-ORDER = ('gemini', 'cerebras', 'groq', 'cloudflare', 'nvidia')
+ORDER = ('gemini', 'gemini_b', 'cerebras', 'groq', 'cloudflare', 'nvidia')
 
 
 class RateLimited(Exception):
@@ -81,7 +83,7 @@ class Provider:
     def __init__(self, name, spec, env=None, clock=time.time, sleep=time.sleep):
         self.name, self.spec, self.env = name, spec, env if env is not None else os.environ
         self.clock, self.sleep = clock, sleep
-        up = name.upper()
+        up = name.upper()  # gemini_b → AI_GEMINI_B_MODEL
         self.model = self.env.get(f'AI_{up}_MODEL') or spec['model']
         self.rpm = int(self.env.get(f'AI_{up}_RPM') or spec['rpm'])
         self.rpd = int(self.env.get(f'AI_{up}_RPD') or spec['rpd'])
