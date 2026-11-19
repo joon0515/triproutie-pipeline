@@ -28,19 +28,25 @@
    뿌리에는 장마다 {file, kind, n, rows, size, sha256, cc?, bbox?} 만 싣는다. 뿌리 크기 ≈ 장 수 × 250 bytes(층 파일 수만 개까지 상한 아래).
    하위 호환: 지금 앱이 뿌리 layers 에서 읽는 종류(LEGACY_KINDS)는 앱이 쓰는 칸(file·kind·size·sha256·bbox·packs)만 뿌리 layers 에도 남긴다.
    남은 자리 안에서 작은 종류부터 통째로 싣고, 못 실은 종류는 legacy_omitted 에 적는다(실패 아님 — 그 종류는 parts 를 읽는 앱만 받음).
+
+뿌리 크기 고정(11/20 263기): 층이 얼마나 늘어도 뿌리는 ROOT_TARGET(44 KiB) 안, 어떤 경우에도 ROOT_GUARD(48 KiB) 이하 — 넘으면 서명 전에 실패한다.
+   뿌리 = 머리 + 2단 목록(장 또는 색인)의 {file, sha256, size, …} + (자리가 남을 때만) 옛 항목. 옛 항목은 고정 예산 안에서 작은 종류부터 싣고 못 실은 종류는 legacy_omitted.
+   옛 항목을 없애는 단계: docs/MANIFEST_ROOT_263.md.
 """
 import argparse, base64, datetime, glob, gzip, hashlib, json, os, subprocess, sys
 
 OK_SCHEMA = {'popularity-1': 'popularity', 'amenities-1': 'amenities', 'lockers-1': 'lockers', 'names-1': 'names', 'tourapi-1': 'tourapi', 'collect-1': 'collect', 'hours-1': 'hours', 'photos-1': 'photos', 'desc-1': 'desc', 'names-2': 'names5', 'rec-1': 'rec', 'shop-1': 'shop', 'events-1': 'events'}  # hours·photos: 11/15 · desc: 11/17 장소 소개(place_desc.py·desc_osm.py) · names5: 11/18 이름 5개 언어(place_names.py·names5_osm.py)
 MAX_BYTES = 8 * 1024 * 1024  # 앱의 파일 크기 상한(타일과 같음)
 SIGN_MAX = 64 * 1024         # KMS asymmetric-sign 이 한 번에 받는 본문 크기(Ed25519 는 본문 그대로 서명)
-ROOT_MAX = 62 * 1024         # 뿌리 목록 파일(서명 포함) 상한 — 앱 kTlPlMaxRootBytes(64 KiB)·SIGN_MAX 보다 작게
+ROOT_MAX = 62 * 1024         # 뿌리 목록 파일(서명 포함) 절대 상한 — 앱 kTlPlMaxRootBytes(64 KiB)·SIGN_MAX 보다 작게
+ROOT_GUARD = 48 * 1024       # (263기) 뿌리 크기 가드 — 넘으면 서명 전에 실패(게시 안 함). CI 가드(scripts/guards/root_size.py)도 같은 값
+ROOT_TARGET = 44 * 1024      # (263기) 뿌리를 만들 때 맞추는 목표 — 장 목록(2단·3단)과 옛 항목 합이 여기 안에 든다. 층이 늘어도 이 값을 넘지 않게 옛 항목을 줄인다
 SIG_ROOM = 200               # sig 칸(Ed25519 64바이트 → base64 88자 + 키 이름·따옴표) 여유
 PART_MAX = 60 * 1024         # 2단 목록 한 장(서명 포함) 상한 — 2단 목록도 따로 KMS 서명하므로 SIGN_MAX 보다 작게. 넘으면 그 종류 안에서 다시 조각
 # (11/19 253기) 뿌리 목록에 남기는 옛 항목: 지금 앱이 뿌리 layers 에서 바로 읽는 종류(tl_place_layers tlPlPick · tl_world_extra hours/photos).
 #  모든 종류는 2단 목록(parts)에 다 싣고, 이 종류만 뿌리 layers 에도 앱이 쓰는 칸만 남긴다(하위 호환). 뿌리 상한 안에 다 못 들면 작은 종류부터 넣고
 #  못 넣은 종류는 legacy_omitted 에 적는다(그 종류는 parts 를 읽는 앱만 받는다). 그래서 뿌리 크기는 층이 늘어도 상한에 닿지 않는다.
-INDEX_AT = 16 * 1024         # 뿌리에 이만큼은 옛 항목(하위 호환) 자리로 남기고, 넘으면 장 목록을 색인(3단)으로
+INDEX_AT = 16 * 1024         # 뿌리 목표(ROOT_TARGET) 중 이만큼은 옛 항목(하위 호환) 자리로 남기고, 장 목록이 나머지를 넘으면 색인(3단)으로
 LEGACY_KINDS = ('popularity', 'amenities', 'names', 'lockers', 'labels', 'hours', 'photos')
 LEGACY_FIELDS = ('file', 'kind', 'size', 'sha256', 'bbox', 'packs')
 
@@ -201,7 +207,7 @@ def split_manifest(man, canonical, sign=None):
     #  <kind>-index-NNN.json(schema places-layers-index-1, 장마다 서명, PART_MAX 이하)으로 빼고 뿌리에는 색인 장의 sha256·크기만 둔다.
     #  색인 한 장 ≈ 장 280개 ≈ 층 항목 6만 개 — 뿌리 크기는 (종류 수 × 색인 장 수)에만 비례해 상한에 닿지 않는다.
     indexed = set()
-    while len(canonical(root).encode('utf-8')) + SIG_ROOM > ROOT_MAX - INDEX_AT:
+    while len(canonical(root).encode('utf-8')) + SIG_ROOM > ROOT_TARGET - INDEX_AT:
         cnt = {}
         for p in root['parts']:
             if p['kind'] not in indexed:
@@ -228,10 +234,10 @@ def split_manifest(man, canonical, sign=None):
     # 옛 항목: 남은 자리 안에서 작은 종류부터 통째로(한 종류의 일부만 싣지 않는다 — 앱이 '이 종류는 다 있음'으로 믿으므로)
     legacy = {}
     for e in man['layers']:
-        if e['kind'] in LEGACY_KINDS:
+        if e['kind'] in LEGACY_KINDS and os.environ.get('LEGACY_ROOT', 'on') != 'off':  # off = 옛 항목 단계적 제거 2단계(docs/MANIFEST_ROOT_263.md)
             legacy.setdefault(e['kind'], []).append({k: e[k] for k in LEGACY_FIELDS if k in e})
     cost = {k: sum(len(canonical(x).encode('utf-8')) + 1 for x in v) for k, v in legacy.items()}
-    left = ROOT_MAX - SIG_ROOM - len(canonical({**root, 'legacy_omitted': sorted(legacy)}).encode('utf-8'))
+    left = ROOT_TARGET - SIG_ROOM - len(canonical({**root, 'legacy_omitted': sorted(legacy)}).encode('utf-8'))
     keep, omit = [], []
     for k in sorted(legacy, key=lambda k: (cost[k], k)):
         if cost[k] <= left:
@@ -302,12 +308,12 @@ def main():
         print(f'  {e["kind"]:<11} {e["file"]:<44} n={e["n"]:<7} {e["size"]:>9,} bytes')
 
     def too_big(m, b):  # 서명·올리기 전에 멈춘다. 2단 구조라 여기 닿으면 2단 목록 장 수가 수백 장(층 수만 개)이라는 뜻
-        if len(b.encode()) + SIG_ROOM <= ROOT_MAX:
+        if len(b.encode()) + SIG_ROOM <= ROOT_GUARD:
             return
         by = {}
         for e in m['layers'] + m.get('parts', []):
             by[e['kind']] = by.get(e['kind'], 0) + len(canonical(e).encode()) + 1
-        sys.exit(f'뿌리 목록 본문 {len(b.encode()):,} bytes > 상한 {ROOT_MAX - SIG_ROOM:,} (KMS 서명·앱 읽기 한도 64 KiB). 종류별 bytes: {by}')
+        sys.exit(f'뿌리 목록 본문 {len(b.encode()):,} bytes > 가드 {ROOT_GUARD - SIG_ROOM:,} (48 KiB 가드 · KMS 서명·앱 읽기 한도 64 KiB). 종류별 bytes: {by}')
     too_big(man, body)
     cmds = [['gcloud', 'storage', 'cp', '-q', *files, f'{dest}/layers/']] if files else []
     if a.dry_run:
@@ -343,7 +349,7 @@ def main():
         too_big(man, body)
     man['sig'] = kms_sign(body.encode('utf-8'), '뿌리 목록')
     json.dump(man, open(f'{tmp}/layers_manifest.json', 'w', encoding='utf-8'), ensure_ascii=False, separators=(',', ':'))  # 빈칸 없이(파일 크기 = 본문 + sig)
-    if os.path.getsize(f'{tmp}/layers_manifest.json') > ROOT_MAX:
+    if os.path.getsize(f'{tmp}/layers_manifest.json') > ROOT_GUARD:
         sys.exit('뿌리 목록 파일이 상한을 넘음: ' + str(os.path.getsize(f'{tmp}/layers_manifest.json')) + ' bytes')
     if cmds:
         subprocess.run(cmds[0], check=True, capture_output=True)  # 파일 먼저, manifest 는 나중(앱이 없는 파일을 가리키는 manifest 를 보지 않게)

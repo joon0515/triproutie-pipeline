@@ -207,7 +207,7 @@ class RootSizeCeiling(unittest.TestCase):
         flat = _man(scale)
         root, blobs = P.split_manifest(flat, canonical)
         body = canonical(canon_value(root)).encode()
-        self.assertLessEqual(len(body) + P.SIG_ROOM, P.ROOT_MAX, f'x{scale}')
+        self.assertLessEqual(len(body) + P.SIG_ROOM, P.ROOT_TARGET, f'x{scale}')  # 263기: 목표 44 KiB, 가드 48 KiB
         self.assertTrue(all(len(b) + P.SIG_ROOM <= P.PART_MAX for b in blobs.values()), f'x{scale}')
         # 뿌리 → (색인) → 장 → 항목을 따라가 처음 목록과 같은지
         got = []
@@ -238,20 +238,27 @@ class RootSizeCeiling(unittest.TestCase):
         self.assertFalse([e for e in root['layers'] if e['kind'] not in P.LEGACY_KINDS])
         return root, len(body)
 
-    def test_1119_sizes_fit_without_omitting(self):
+    def test_1119_sizes_root_under_guard(self):
+        """(263기) 11/19 실제 크기(뿌리 55.6 KB)가 가드 48 KiB 아래로: 옛 항목은 고정 예산 안에서 작은 종류부터, 못 실은 amenities 는 legacy_omitted(2단 목록에는 있음)."""
         flat = _man(1)
         by = {}
         for e in flat['layers']:
             by[e['kind']] = by.get(e['kind'], 0) + len(canonical(e).encode()) + 1
         real = {'amenities': 42441, 'hours': 7259, 'tourapi': 3627, 'names': 1721, 'photos': 301}  # 11/19 실패 메시지(뿌리에 있던 종류별 bytes)
         self.assertTrue(all(by[k] >= v for k, v in real.items()), by)  # 시험 항목이 실제보다 크거나 같다(보수적)
-        self.assertGreater(sum(by[k] for k in real) + len(canonical({**flat, 'layers': []}).encode()), P.ROOT_MAX - 4096)  # 고치기 전 모양은 한도 가까이(+parts 로 넘음)
         root, n = self.check(1)
-        self.assertNotIn('legacy_omitted', root)  # 지금 앱이 읽는 층은 오늘 크기에서 다 뿌리에 남는다(앱 변경 없이 동작)
-        self.assertLess(n, P.ROOT_MAX - 8192)
+        self.assertLess(n + P.SIG_ROOM, P.ROOT_GUARD)
+        self.assertEqual(root['legacy_omitted'], ['amenities'])
+        self.assertEqual({e['kind'] for e in root['layers']}, {'hours', 'names', 'photos'})  # 작은 종류는 그대로(앱 변경 없이 동작)
+
+    def test_root_size_is_flat_in_layer_count(self):
+        """층이 1배에서 200배로 늘어도 뿌리 크기는 가드(48 KiB) 아래에서 거의 일정(목표 44 KiB)."""
+        sizes = [self.check(s)[1] for s in (1, 3, 10, 40, 100, 200)]
+        self.assertLess(max(sizes) + P.SIG_ROOM, P.ROOT_GUARD)
+        self.assertLess(max(sizes) - min(sizes), 24 * 1024, sizes)
 
     def test_growth_stays_under_ceiling(self):
-        for s in (1.3, 3, 10, 40):
+        for s in (1.3, 3, 10, 40, 200):
             root, n = self.check(s)
         self.assertIn('amenities', root['legacy_omitted'])
 
