@@ -313,8 +313,13 @@ class Http:
             except urllib.error.HTTPError as e:
                 if e.code in (403, 429):
                     ra = (e.headers or {}).get('Retry-After') if e.headers else None
-                    days = BLOCK_COOL_DAYS if e.code == 403 else max(1, int(ra) // 86400 if ra and str(ra).isdigit() else 1)
-                    self.hosts[h] = {'cool_until': (now() + datetime.timedelta(days=days)).isoformat(), 'code': e.code}
+                    if e.code == 403:
+                        cool = datetime.timedelta(days=BLOCK_COOL_DAYS)
+                    elif ra and str(ra).strip().isdigit():  # (263기) 429 + Retry-After(초): 서버가 알려 준 만큼만 쉰다(최소 60초, 최대 1일). 예전에는 짧은 값도 하루로 올렸다
+                        cool = datetime.timedelta(seconds=min(max(60, int(str(ra).strip())), 86400))
+                    else:
+                        cool = datetime.timedelta(days=1)  # 429 인데 알려 주는 값이 없으면 하루
+                    self.hosts[h] = {'cool_until': (now() + cool).isoformat(), 'code': e.code, **({'ra': str(ra)[:12]} if ra else {})}
                     raise Blocked(str(e.code))
                 if e.code in (404, 410):
                     raise
