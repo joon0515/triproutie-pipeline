@@ -809,7 +809,13 @@ def publish(store, bucket, kms_key, dry_run=False, tools='tools', current_dir=No
         cur = subprocess.run(['gcloud', 'storage', 'cat', f'gs://{bucket}/places/v1/layers.json'], capture_output=True)
         if cur.returncode == 0:
             m = json.loads(cur.stdout)
-            names = [e['file'] for e in m.get('layers', []) if not e['file'].startswith('col_')]
+
+            def cat(path):
+                r = subprocess.run(['gcloud', 'storage', 'cat', f'gs://{bucket}/{path}'], capture_output=True)
+                return r.stdout if r.returncode == 0 else None
+            # (11/19 253기) 뿌리 layers 에는 이제 앱이 읽는 종류의 옛 항목만 있다 → 2단 목록까지 따라가 모은다.
+            #  예전과 같은 종류만 이어 싣는다(예전에도 2단이던 collect·desc·names5·rec 은 layers_extra·수집 층에서 다시 온다)
+            names = [e['file'] for e in PL.entries_of(m, cat) if not e['file'].startswith('col_') and e.get('kind') not in ('collect', 'desc', 'names5', 'rec')]
             if names:
                 subprocess.run(['gcloud', 'storage', 'cp', '-q', *[f"gs://{bucket}/{m['path']}{n}" for n in names], d], check=True, capture_output=True)
         subprocess.run(['gcloud', 'storage', 'cp', '-q', f'gs://{bucket}/places/v1/layers_extra/*.json.gz', d], capture_output=True)

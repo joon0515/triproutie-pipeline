@@ -12,7 +12,7 @@
 올라가는 곳
     gs://<bucket>/places/v1/<tag>/layers/<파일>            층 파일(gzip JSON)
     gs://<bucket>/places/v1/<tag>/layers.json              서명된 manifest(뿌리 목록, 64 KiB 미만)
-    gs://<bucket>/places/v1/<tag>/layer_parts/<kind>-NNN.json   2단 목록(수집 층 col_* 항목) — 뿌리 목록의 parts 에 sha256·크기가 적힌다
+    gs://<bucket>/places/v1/<tag>/layer_parts/<kind>-NNN.json   2단 목록(종류마다, 장마다 따로 서명, 60 KiB 이하) — 뿌리 목록의 parts 에 sha256·크기가 적힌다
     gs://<bucket>/places/v1/layers.json                    최신 판을 가리키는 사본(되돌리기 = 이전 판 manifest 로 덮어쓰기)
 받는 층: schema 가 'popularity-1'(pop_build.py·food_score.py) · 'amenities-1'(osm_amenities.py) · 'lockers-1' · 'names-1'(names_osm.py — 이름 보충) · 'tourapi-1'(tourapi_daily.py — 한국관광공사) · 'collect-1'(scripts/collect/process.py — 세계 수집) · 'desc-1'(scripts/place_desc.py·tools/desc_osm.py — 장소 소개, 2단 목록) 인 gzip JSON. 그 밖의 파일은 거부한다.
 키·토큰·장소 내용은 출력하지 않는다(파일 이름·크기·개수만).
@@ -22,6 +22,12 @@
 → 수집 층 항목은 layer_parts/collect-NNN.json(나라 단위로 200개씩)으로 빼고, 뿌리 목록에는 그 파일의 sha256·크기만 싣는다(세계 타일 목록 finalize.py 와 같은 구조).
    검증 순서: 뿌리 서명 → 2단 목록 sha256 → 층 파일 sha256. 뿌리 목록의 schema·layers 모양은 그대로라 지금 앱은 고치지 않아도 된다(모르는 키 parts 는 무시).
    지금 앱은 수집 층(kind collect)을 읽지 않는다. 읽게 할 때 parts 를 따라가면 된다.
+
+모든 종류 2단(11/19 253기): 앱이 뿌리에서 읽는 층(amenities·hours·names·photos …)만으로 뿌리가 67,705 bytes 가 되어 다시 서명 실패(process 10회).
+→ 모든 종류를 layer_parts/<kind>-NNN.json 으로 빼고(종류마다, 한 장 60 KiB 이하로 다시 조각, 장마다 KMS 서명 — 본문 = sig 를 뺀 정규 JSON, 뿌리와 같은 방식),
+   뿌리에는 장마다 {file, kind, n, rows, size, sha256, cc?, bbox?} 만 싣는다. 뿌리 크기 ≈ 장 수 × 250 bytes(층 파일 수만 개까지 상한 아래).
+   하위 호환: 지금 앱이 뿌리 layers 에서 읽는 종류(LEGACY_KINDS)는 앱이 쓰는 칸(file·kind·size·sha256·bbox·packs)만 뿌리 layers 에도 남긴다.
+   남은 자리 안에서 작은 종류부터 통째로 싣고, 못 실은 종류는 legacy_omitted 에 적는다(실패 아님 — 그 종류는 parts 를 읽는 앱만 받음).
 """
 import argparse, base64, datetime, glob, gzip, hashlib, json, os, subprocess, sys
 
@@ -29,8 +35,14 @@ OK_SCHEMA = {'popularity-1': 'popularity', 'amenities-1': 'amenities', 'lockers-
 MAX_BYTES = 8 * 1024 * 1024  # 앱의 파일 크기 상한(타일과 같음)
 SIGN_MAX = 64 * 1024         # KMS asymmetric-sign 이 한 번에 받는 본문 크기(Ed25519 는 본문 그대로 서명)
 ROOT_MAX = 62 * 1024         # 뿌리 목록 파일(서명 포함) 상한 — 앱 kTlPlMaxRootBytes(64 KiB)·SIGN_MAX 보다 작게
-PART_KINDS = ('collect', 'desc', 'names5', 'rec')  # 2단 목록으로 빼는 종류(지금 앱이 뿌리 목록에서 읽지 않는 것만 — desc 11/17 · names5 11/18 새 층, 앱 연결 전)
-PART_ENTRIES = 200           # 2단 목록 하나에 싣는 층 항목 수(나라가 갈리지 않게 나라 단위로 채운다)
+SIG_ROOM = 200               # sig 칸(Ed25519 64바이트 → base64 88자 + 키 이름·따옴표) 여유
+PART_MAX = 60 * 1024         # 2단 목록 한 장(서명 포함) 상한 — 2단 목록도 따로 KMS 서명하므로 SIGN_MAX 보다 작게. 넘으면 그 종류 안에서 다시 조각
+# (11/19 253기) 뿌리 목록에 남기는 옛 항목: 지금 앱이 뿌리 layers 에서 바로 읽는 종류(tl_place_layers tlPlPick · tl_world_extra hours/photos).
+#  모든 종류는 2단 목록(parts)에 다 싣고, 이 종류만 뿌리 layers 에도 앱이 쓰는 칸만 남긴다(하위 호환). 뿌리 상한 안에 다 못 들면 작은 종류부터 넣고
+#  못 넣은 종류는 legacy_omitted 에 적는다(그 종류는 parts 를 읽는 앱만 받는다). 그래서 뿌리 크기는 층이 늘어도 상한에 닿지 않는다.
+INDEX_AT = 16 * 1024         # 뿌리에 이만큼은 옛 항목(하위 호환) 자리로 남기고, 넘으면 장 목록을 색인(3단)으로
+LEGACY_KINDS = ('popularity', 'amenities', 'names', 'lockers', 'labels', 'hours', 'photos')
+LEGACY_FIELDS = ('file', 'kind', 'size', 'sha256', 'bbox', 'packs')
 
 
 def describe(fn):
@@ -112,35 +124,57 @@ def describe(fn):
 
 
 def build_manifest(tag, files, now=None, extra=()):
-    now = now or datetime.datetime.utcnow()
+    now = now or datetime.datetime.now(datetime.UTC)
     return {'schema': 'places-layers-1', 'version': tag, 'created_at': now.strftime('%Y-%m-%dT%H:%M:%SZ'), 'path': f'places/v1/{tag}/layers/',
             'layers': sorted([describe(f) for f in files] + list(extra), key=lambda e: e['file']), 'disabled': False, 'revoked': [],
             'expires': (now + datetime.timedelta(days=90)).strftime('%Y-%m-%dT%H:%M:%SZ'),
             'attribution': {'ko': '인기 점수: 위키백과 조회수·Wikidata (CC0) · 사진: 위키미디어 공용(사진마다 저작자·라이선스 표기) · 편의시설·이름 보충: © OpenStreetMap contributors (ODbL 1.0) · 한국 관광지 정보·사진: 한국관광공사 TourAPI 4.0 (공공누리 제1·3유형, 출처표시) · 장소 이름(5개 언어): Wikidata (CC0) · © OpenStreetMap contributors (ODbL 1.0) · 장소 소개: Wikidata (CC0) · 한국관광공사 TourAPI 4.0 (공공누리 제1유형) · 交通部觀光署 觀光資訊資料庫 (政府資料開放授權條款-第1版) · © OpenStreetMap contributors (ODbL 1.0) — 파일마다 license·credit · 세계 수집 층(col_*): Overture Maps Foundation(CDLA-Permissive-2.0 등 레코드별) · Foursquare Labs(Apache-2.0) · Wikivoyage(CC BY-SA 4.0) · Wikidata(CC0) · 각국 공공데이터(출처별 라이선스, 행마다 lic)'}}
 
 
-def split_manifest(man, canonical):
-    """한 장짜리 목록 → (뿌리 목록, {2단 목록 파일 이름: 바이트}). PART_KINDS 항목만 뺀다. 뺄 것이 없으면 목록은 예전 모양 그대로."""
-    keep = [e for e in man['layers'] if e['kind'] not in PART_KINDS]
-    root = {**man, 'layers': keep}
+def _part_chunks(ents, canonical, budget):
+    """한 종류의 항목 → 장 목록. 장마다 정규 JSON 이 budget 바이트 이하. 나라(cc)가 갈리지 않게 나라 단위로 채우고, 한 나라가 넘치면 그 나라만 여러 장."""
+    def cc_of(e):
+        return e['cc'] if isinstance(e.get('cc'), str) else ''  # 색인(3단)에서 넘기는 장 항목은 cc 가 목록 — 나누지 않고 차례대로
+    by_cc = {}
+    for e in sorted(ents, key=lambda e: (cc_of(e), e['file'])):
+        by_cc.setdefault(cc_of(e), []).append(e)
+    chunks, cur, used = [], [], 0
+    for cc in sorted(by_cc):
+        g = [(e, len(canonical(e).encode('utf-8')) + 1) for e in by_cc[cc]]
+        gb = sum(n for _, n in g)
+        if cur and used + gb > budget:
+            chunks.append(cur); cur, used = [], 0
+        for e, n in g:
+            if n > budget:
+                raise ValueError(f"{e['file']}: 항목 하나가 {n} bytes — 2단 목록 한 장에 못 실음")
+            if cur and used + n > budget:
+                chunks.append(cur); cur, used = [], 0
+            cur.append(e); used += n
+    if cur:
+        chunks.append(cur)
+    return chunks
+
+
+def split_manifest(man, canonical, sign=None):
+    """한 장짜리 목록 → (뿌리 목록, {2단 목록 파일 이름: 바이트}).
+    모든 종류를 layer_parts/<kind>-NNN.json 으로 빼고(장마다 PART_MAX 이하, sign 이 있으면 장마다 따로 서명), 뿌리에는 장의 sha256·크기만 싣는다.
+    뿌리 layers 에는 지금 앱이 읽는 종류(LEGACY_KINDS)의 앱용 칸만 남긴다(하위 호환, 상한 안에서). 층이 없으면 목록은 예전 모양 그대로.
+    sign(body: bytes) → base64 서명 문자열. 없으면(dry-run·시험) 서명 칸 없이 본문만."""
+    if not man['layers']:
+        return dict(man), {}
+    head = {k: v for k, v in man.items() if k != 'layers'}
     parts, blobs = [], {}
-    for kind in PART_KINDS:
-        by_cc = {}
-        for e in sorted((e for e in man['layers'] if e['kind'] == kind), key=lambda e: (e.get('cc') or '', e['file'])):
-            by_cc.setdefault(e.get('cc') or '', []).append(e)
-        chunks, cur = [], []
-        for cc in sorted(by_cc):
-            g = by_cc[cc]
-            if cur and len(cur) + len(g) > PART_ENTRIES:
-                chunks.append(cur); cur = []
-            while len(g) > PART_ENTRIES:  # 한 나라가 200개를 넘으면 그 나라만 여러 장으로
-                chunks.append(g[:PART_ENTRIES]); g = g[PART_ENTRIES:]
-            cur = cur + g
-        if cur:
-            chunks.append(cur)
-        for i, ch in enumerate(chunks):
+    for kind in sorted({e['kind'] for e in man['layers']}):
+        ents = [e for e in man['layers'] if e['kind'] == kind]
+        shell = {'schema': 'places-layers-part-1', 'version': man['version'], 'kind': kind, 'path': man['path'], 'layers': []}
+        budget = PART_MAX - SIG_ROOM - len(canonical(shell).encode('utf-8'))
+        for i, ch in enumerate(_part_chunks(ents, canonical, budget)):
             name = f'{kind}-{i:03d}.json'
-            b = canonical({'schema': 'places-layers-part-1', 'version': man['version'], 'kind': kind, 'path': man['path'], 'layers': ch}).encode('utf-8')
+            body = {**shell, 'layers': ch}
+            bb = canonical(body).encode('utf-8')
+            b = canonical({**body, 'sig': sign(bb)}).encode('utf-8') if sign else bb
+            if len(b) > PART_MAX:
+                raise ValueError(f'{name}: {len(b)} bytes > {PART_MAX}')
             blobs[name] = b
             p = {'file': name, 'kind': kind, 'n': len(ch), 'rows': sum(e['n'] for e in ch), 'size': len(b), 'sha256': hashlib.sha256(b).hexdigest()}
             ccs = sorted({e['cc'] for e in ch if e.get('cc')})
@@ -148,12 +182,78 @@ def split_manifest(man, canonical):
                 p['cc'] = ccs
             bbs = [e['bbox'] for e in ch if isinstance(e.get('bbox'), list) and len(e['bbox']) == 4]
             if bbs:
-                p['bbox'] = [min(b[0] for b in bbs), min(b[1] for b in bbs), max(b[2] for b in bbs), max(b[3] for b in bbs)]
+                p['bbox'] = [min(x[0] for x in bbs), min(x[1] for x in bbs), max(x[2] for x in bbs), max(x[3] for x in bbs)]
             parts.append(p)
-    if parts:
-        root['parts_path'] = f"places/v1/{man['version']}/layer_parts/"
-        root['parts'] = parts
+    root = {**head, 'layers': [], 'parts_path': f"places/v1/{man['version']}/layer_parts/", 'parts': parts}
+    # 3단(색인): 장이 수백 장이 되어 뿌리의 parts 만으로 상한에 가까우면, 장이 가장 많은 종류부터 그 종류의 장 목록을
+    #  <kind>-index-NNN.json(schema places-layers-index-1, 장마다 서명, PART_MAX 이하)으로 빼고 뿌리에는 색인 장의 sha256·크기만 둔다.
+    #  색인 한 장 ≈ 장 280개 ≈ 층 항목 6만 개 — 뿌리 크기는 (종류 수 × 색인 장 수)에만 비례해 상한에 닿지 않는다.
+    indexed = set()
+    while len(canonical(root).encode('utf-8')) + SIG_ROOM > ROOT_MAX - INDEX_AT:
+        cnt = {}
+        for p in root['parts']:
+            if p['kind'] not in indexed:
+                cnt[p['kind']] = cnt.get(p['kind'], 0) + 1
+        if not cnt:
+            break  # 더 줄일 수 없음 → main 이 서명 전에 멈춘다
+        kind = max(sorted(cnt), key=lambda k: cnt[k]); indexed.add(kind)
+        mine = [p for p in root['parts'] if p['kind'] == kind]
+        shell = {'schema': 'places-layers-index-1', 'version': man['version'], 'kind': kind, 'path': root['parts_path'], 'parts': []}
+        budget = PART_MAX - SIG_ROOM - len(canonical(shell).encode('utf-8'))
+        idx = []
+        for i, ch in enumerate(_part_chunks(mine, canonical, budget)):
+            name = f'{kind}-index-{i:03d}.json'
+            body = {**shell, 'parts': ch}
+            bb = canonical(body).encode('utf-8')
+            b = canonical({**body, 'sig': sign(bb)}).encode('utf-8') if sign else bb
+            blobs[name] = b
+            x = {'file': name, 'kind': kind, 'index': True, 'n': len(ch), 'rows': sum(p['rows'] for p in ch), 'size': len(b), 'sha256': hashlib.sha256(b).hexdigest()}
+            bbs = [p['bbox'] for p in ch if 'bbox' in p]
+            if bbs:
+                x['bbox'] = [min(q[0] for q in bbs), min(q[1] for q in bbs), max(q[2] for q in bbs), max(q[3] for q in bbs)]
+            idx.append(x)
+        root['parts'] = [p for p in root['parts'] if p['kind'] != kind] + idx
+    # 옛 항목: 남은 자리 안에서 작은 종류부터 통째로(한 종류의 일부만 싣지 않는다 — 앱이 '이 종류는 다 있음'으로 믿으므로)
+    legacy = {}
+    for e in man['layers']:
+        if e['kind'] in LEGACY_KINDS:
+            legacy.setdefault(e['kind'], []).append({k: e[k] for k in LEGACY_FIELDS if k in e})
+    cost = {k: sum(len(canonical(x).encode('utf-8')) + 1 for x in v) for k, v in legacy.items()}
+    left = ROOT_MAX - SIG_ROOM - len(canonical({**root, 'legacy_omitted': sorted(legacy)}).encode('utf-8'))
+    keep, omit = [], []
+    for k in sorted(legacy, key=lambda k: (cost[k], k)):
+        if cost[k] <= left:
+            keep.append(k); left -= cost[k]
+        else:
+            omit.append(k)
+    root['layers'] = sorted((x for k in keep for x in legacy[k]), key=lambda e: e['file'])
+    if omit:
+        root['legacy_omitted'] = sorted(omit)
     return root, blobs
+
+def entries_of(root, read):
+    """게시된 뿌리 목록 → 층 항목 전부(뿌리 layers 옛 항목 + 2단 목록 + 3단 색인). read(Storage 경로) → bytes|None.
+    장마다 크기·sha256 을 뿌리(또는 색인)와 맞춰 보고, 틀리거나 못 읽으면 ValueError(빠진 채로 다음 판을 만들지 않게). 같은 파일은 한 번만."""
+    out, seen = [], set()
+
+    def take(e):
+        if e.get('file') and e['file'] not in seen:
+            seen.add(e['file']); out.append(e)
+
+    def walk(p):
+        b = read(root['parts_path'] + p['file'])
+        if b is None or len(b) != p['size'] or hashlib.sha256(b).hexdigest() != p['sha256']:
+            raise ValueError(f"2단 목록 {p['file']}: 못 읽음 또는 sha256 틀림")
+        j = json.loads(b)
+        for q in j.get('parts', []) if p.get('index') else []:
+            walk(q)
+        for e in j.get('layers', []) if not p.get('index') else []:
+            take(e)
+    for e in root.get('layers', []):
+        take(e)
+    for p in root.get('parts', []):
+        walk(p)
+    return out
 
 
 def main():
@@ -178,26 +278,32 @@ def main():
     if not files and not ex['entries']:
         sys.exit('층 파일이 없음')
     flat = canon_value(build_manifest(a.tag, files, extra=ex['entries']))
-    man, blobs = split_manifest(flat, canonical)
+    man, blobs = split_manifest(flat, canonical)  # 서명 전 모양으로 크기·내용 확인(dry-run 도 이것)
     man = canon_value(man)
     body = canonical(man)
     dest = f'gs://{a.bucket}/places/v1/{a.tag}'
-    print(f'층 {len(files) + len(ex["entries"])}개(Storage 안 복사 {len(ex["entries"])}개), 합계 {sum(e["size"] for e in flat["layers"]):,} bytes, manifest 본문 {len(body.encode()):,} bytes'
-          + (f' (2단 목록 {len(blobs)}개에 {sum(p["n"] for p in man["parts"])}개 항목, 한 장이면 {len(canonical(flat).encode()):,} bytes)' if blobs else ''))
+    print(f'층 {len(files) + len(ex["entries"])}개(Storage 안 복사 {len(ex["entries"])}개), 합계 {sum(e["size"] for e in flat["layers"]):,} bytes, 뿌리 목록 본문 {len(body.encode()):,} bytes'
+          + (f' (2단 목록 {len(blobs)}장에 {sum(p["n"] for p in man["parts"])}개 항목, 가장 큰 장 {max(len(b) for b in blobs.values()):,} bytes, 한 장이면 {len(canonical(flat).encode()):,} bytes)' if blobs else ''))
+    if man.get('legacy_omitted'):  # 실패는 아님 — 그 종류는 parts 를 읽는 앱만 받는다
+        print(f'경고: 뿌리 layers(지금 앱용 옛 항목)에 못 실은 종류 legacy_omitted={man["legacy_omitted"]} — 2단 목록에는 있음. 앱이 parts 를 읽게 바꿔야 그 종류가 보인다', file=sys.stderr)
     for e in flat['layers'][:300]:  # 수천 개면 앞 300개만
         print(f'  {e["kind"]:<11} {e["file"]:<44} n={e["n"]:<7} {e["size"]:>9,} bytes')
-    if len(body.encode()) + 200 > ROOT_MAX:  # 서명·올리기 전에 멈춘다(+200 = sig 칸). 앱이 읽는 종류가 이만큼 늘면 그 종류도 2단으로 빼야 한다(앱 변경 필요)
+
+    def too_big(m, b):  # 서명·올리기 전에 멈춘다. 2단 구조라 여기 닿으면 2단 목록 장 수가 수백 장(층 수만 개)이라는 뜻
+        if len(b.encode()) + SIG_ROOM <= ROOT_MAX:
+            return
         by = {}
-        for e in man['layers']:
+        for e in m['layers'] + m.get('parts', []):
             by[e['kind']] = by.get(e['kind'], 0) + len(canonical(e).encode()) + 1
-        sys.exit(f'뿌리 목록 본문 {len(body.encode()):,} bytes > 상한 {ROOT_MAX - 200:,} (KMS 서명·앱 읽기 한도 64 KiB). 종류별 bytes: {by}')
+        sys.exit(f'뿌리 목록 본문 {len(b.encode()):,} bytes > 상한 {ROOT_MAX - SIG_ROOM:,} (KMS 서명·앱 읽기 한도 64 KiB). 종류별 bytes: {by}')
+    too_big(man, body)
     cmds = [['gcloud', 'storage', 'cp', '-q', *files, f'{dest}/layers/']] if files else []
     if a.dry_run:
         print('[dry-run] 서명·업로드 안 함. 실행할 명령:')
         print(f'  gcloud storage cp -q <{len(files)} files> {dest}/layers/')
         if ex['sources']:
             print(f'  gcloud storage cp -q -I {dest}/layers/   <Storage 안 복사 {len(ex["sources"])}개>')
-        print(f'  gcloud kms asymmetric-sign … --input-file=body.json --signature-file=sig.bin   (키: {"지정됨" if a.kms_key else "미지정"})')
+        print(f'  gcloud kms asymmetric-sign … × {len(blobs)} (2단 목록 장마다) + 1 (뿌리)   (키: {"지정됨" if a.kms_key else "미지정"})')
         if blobs:
             print(f'  gcloud storage cp -q <{len(blobs)} part lists> {dest}/layer_parts/')
         print(f'  gcloud storage cp -q manifest.json {dest}/layers.json')
@@ -206,13 +312,24 @@ def main():
     if not a.kms_key:
         sys.exit('--kms-key 필요(서명 없이 올리지 않는다)')
     tmp = os.environ.get('TMPDIR', '/tmp')
-    open(f'{tmp}/layers_body.json', 'w', encoding='utf-8').write(body)
     q = a.kms_key.split('/')
-    r = subprocess.run(['gcloud', 'kms', 'asymmetric-sign', f'--project={q[1]}', f'--location={q[3]}', f'--keyring={q[5]}', f'--key={q[7]}', f'--version={q[9]}',
-                    f'--input-file={tmp}/layers_body.json', f'--signature-file={tmp}/layers_sig.bin'], capture_output=True, text=True)
-    if r.returncode:
-        sys.exit('kms sign failed: body ' + str(len(body.encode())) + ' bytes; ' + r.stderr.strip()[-400:])
-    man['sig'] = base64.b64encode(open(f'{tmp}/layers_sig.bin', 'rb').read()).decode()
+
+    def kms_sign(b, what):
+        if len(b) > SIGN_MAX:
+            sys.exit(f'{what}: 서명 본문 {len(b):,} bytes > {SIGN_MAX:,}')
+        open(f'{tmp}/layers_body.json', 'wb').write(b)
+        r = subprocess.run(['gcloud', 'kms', 'asymmetric-sign', f'--project={q[1]}', f'--location={q[3]}', f'--keyring={q[5]}', f'--key={q[7]}', f'--version={q[9]}',
+                            f'--input-file={tmp}/layers_body.json', f'--signature-file={tmp}/layers_sig.bin'], capture_output=True, text=True)
+        if r.returncode:
+            sys.exit(f'kms sign failed ({what}): body {len(b)} bytes; ' + r.stderr.strip()[-400:])
+        return base64.b64encode(open(f'{tmp}/layers_sig.bin', 'rb').read()).decode()
+
+    if blobs:  # 2단 목록을 장마다 서명 → 그 바이트의 sha256·크기로 뿌리 목록을 다시 만든다
+        man, blobs = split_manifest(flat, canonical, sign=lambda b: kms_sign(b, '2단 목록'))
+        man = canon_value(man)
+        body = canonical(man)
+        too_big(man, body)
+    man['sig'] = kms_sign(body.encode('utf-8'), '뿌리 목록')
     json.dump(man, open(f'{tmp}/layers_manifest.json', 'w', encoding='utf-8'), ensure_ascii=False, separators=(',', ':'))  # 빈칸 없이(파일 크기 = 본문 + sig)
     if os.path.getsize(f'{tmp}/layers_manifest.json') > ROOT_MAX:
         sys.exit('뿌리 목록 파일이 상한을 넘음: ' + str(os.path.getsize(f'{tmp}/layers_manifest.json')) + ' bytes')
