@@ -137,3 +137,31 @@ class T(unittest.TestCase):
 
 if __name__ == '__main__':
     unittest.main()
+
+
+class Export(unittest.TestCase):
+    def test_export_priority_and_provenance(self):
+        d = tempfile.mkdtemp(); st = Store(os.path.join(d, 's'))
+        st.put_json('processed/ai_fill/out/aifill-x-0000.json.gz', {'schema': 'aifill-1', 'rows': {
+            'a': {'ko': '가', 'en': 'A', 'd': {'ko': '도쿄의 식당'}, 'provider': 'gemini', 'model': 'm', 'date': '2026-11-20'},
+            'b': {'en': 'B', 'd': {}, 'provider': 'gemini', 'model': 'm', 'date': '2026-11-20'}}})
+        out = os.path.join(d, 'o')
+        r = A.export_layers(st, out, {'en': {'a'}}, {})   # a 의 en 은 기존 출처에 이미 있음 → 싣지 않는다
+        self.assertEqual(sorted(r), sorted(f for f in os.listdir(out)))
+        rows = {}
+        for f in os.listdir(out):
+            j = json.load(gzip.open(os.path.join(out, f), 'rt', encoding='utf-8'))
+            self.assertEqual((j['src'], j['license']), ('ai', 'AI-generated'))
+            self.assertIn(j['schema'], ('names-2', 'desc-1'))
+            rows.setdefault(j['schema'], {}).update(j['rows'])
+        self.assertIsNone(rows['names-2']['a']['en']); self.assertEqual(rows['names-2']['a']['ko'], '가')
+        self.assertEqual(rows['names-2']['b']['ai'], 'gemini|m|2026-11-20')
+        self.assertEqual(rows['desc-1']['a']['ko'], '도쿄의 식당')
+
+    def test_publish_entry_marks_ai(self):
+        import publish_layers as P
+        d = tempfile.mkdtemp(); st = Store(os.path.join(d, 's'))
+        st.put_json('processed/ai_fill/out/o.json.gz', {'schema': 'aifill-1', 'rows': {'a': {'ko': '가', 'provider': 'g', 'model': 'm', 'date': 'd'}}})
+        A.export_layers(st, os.path.join(d, 'o'))
+        e = P.describe(os.path.join(d, 'o', 'names-ai-%03d.json.gz' % [int(f[9:12]) for f in os.listdir(os.path.join(d, 'o'))][0]))
+        self.assertEqual((e['kind'], e['prio'], e['license']), ('names5', 9, 'AI-generated'))
