@@ -312,6 +312,52 @@ class BadInput(unittest.TestCase):
             h.get('https://a.example/x')
         self.assertEqual(len(n), 2)  # 다시 해 봄
 
+    def test_truncated_body_real_socket_shard_survives(self):  # 263기: 실제 소켓(Content-Length 보다 적게 보내고 끊음)으로 official_sites/1 실패를 끝에서 끝까지 재현
+        import http.server, threading
+        GOOD = b'<script type="application/ld+json">{"@type":"Museum","name":"Ok","openingHours":"Mo-Su 09:00-18:00"}</script>'
+
+        class H(http.server.BaseHTTPRequestHandler):
+            def log_message(self, *a):
+                pass
+
+            def do_GET(self):
+                if self.path == '/robots.txt':
+                    self.send_response(404); self.send_header('Content-Length', '0'); self.end_headers(); return
+                body = b'x' * 54835 if self.path.startswith('/bad') else GOOD
+                self.send_response(200); self.send_header('Content-Length', str(143062 if self.path.startswith('/bad') else len(body))); self.end_headers()
+                self.wfile.write(body); self.wfile.flush(); self.close_connection = True
+        srv = http.server.ThreadingHTTPServer(('127.0.0.1', 0), H)
+        threading.Thread(target=srv.serve_forever, daemon=True).start()
+        try:
+            base = f'http://127.0.0.1:{srv.server_address[1]}'
+            d = tempfile.mkdtemp(); store = K.Store(os.path.join(d, 'store'))
+            store.put_json('seeds/sites_1.json.gz', {'Q1': {'url': base + '/bad', 'nm': 'Bad', 'lat': 1.0, 'lon': 2.0, 'c': 'museum', 'cc': 'TW'},
+                                                  'Q2': {'url': base + '/good', 'nm': 'Good', 'lat': 1.0, 'lon': 2.0, 'c': 'museum', 'cc': 'TW'}})
+            reg = {'sources': [dict(next(x for x in REG['sources'] if x['id'] == 'official_sites'), interval_s=1)]}
+            r = R.job(reg, store, 'official_sites', '1', sleep=lambda x: None)
+            self.assertIsNone(r['err'], r)  # 고치기 전: IncompleteRead 로 조각 전체가 실패
+            self.assertEqual(r['fail_streak'], 0)
+            st = store.get_json('state/official_sites/1.json')
+            self.assertEqual(sorted(st['done']), ['Q1', 'Q2'])  # 끊긴 사이트도 '다 봄' 으로 넘어가 다음 회차에 맨 앞에서 또 죽지 않음
+            self.assertTrue(r['counts'])  # 좋은 사이트는 수확
+        finally:
+            srv.shutdown()
+
+    def test_unexpected_error_on_one_site_skips_only_that_site(self):  # 263기: 알 수 없는 예외도 사이트 하나만 건너뜀
+        d = tempfile.mkdtemp(); store = K.Store(os.path.join(d, 'store'))
+        store.put_json('seeds/sites_1.json.gz', {'Q1': {'url': 'https://boom.example/', 'nm': 'B', 'lat': 1.0, 'lon': 2.0, 'c': 'museum', 'cc': 'TW'},
+                                              'Q2': {'url': 'https://ok.example/', 'nm': 'O', 'lat': 1.0, 'lon': 2.0, 'c': 'museum', 'cc': 'TW'}})
+        site = b'<script type="application/ld+json">{"@type":"Museum","name":"Ok","openingHours":"Mo-Su 09:00-18:00"}</script>'
+        web = Web({'https://ok.example/': site})
+
+        def op(url, headers):
+            if 'boom.example' in url and not url.endswith('/robots.txt'):
+                raise RuntimeError('weird')
+            return web(url, headers)
+        reg = {'sources': [dict(next(x for x in REG['sources'] if x['id'] == 'official_sites'))]}
+        r = R.job(reg, store, 'official_sites', '1', opener=op, sleep=lambda x: None)
+        self.assertIsNone(r['err'], r); self.assertTrue(r['counts'])
+
     def test_city_rank(self):
         self.assertEqual(K.city_rank(33.45, 126.55), 1)        # 제주
         self.assertEqual(K.city_rank(34.69, 135.50), 2)        # 오사카

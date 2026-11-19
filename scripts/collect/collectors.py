@@ -662,8 +662,12 @@ def crawl(ctx):
         seed = seeds[qid]
         try:
             best, events = crawl_site(ctx, qid, seed)
-        except Stop:
+        except (Stop, Blocked):
             break
+        except Exception as e:  # (263기) 사이트 하나의 뜻밖의 오류가 조각 전체를 죽이고 같은 사이트가 매번 맨 앞에서 또 죽는 고리(official_sites/1, 8회 연속)를 끊는다.
+            ctx.notes.append(f'skip {qid}: {type(e).__name__}')  # 주소·값은 싣지 않음
+            done[qid] = today()
+            continue
         done[qid] = today()
         if best is None and not events:
             continue
