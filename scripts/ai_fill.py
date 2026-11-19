@@ -13,7 +13,7 @@
   - 결과 파일은 Storage processed/ai_fill/ 에만(저장소에 커밋하지 않음). 진행 위치(state.json)와 처리한 장소 목록(done.json.gz)도 Storage.
   - 모든 행에 출처 표시 {src:'ai', provider, model, date}. 앱이 'AI 번역·AI 요약' 으로 표시한다.
 """
-import argparse, datetime, gzip, hashlib, json, os, re, sys, tempfile, time, unicodedata, urllib.error, urllib.request
+import argparse, concurrent.futures, datetime, gzip, hashlib, json, os, re, sys, tempfile, threading, time, unicodedata, urllib.error, urllib.request
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE); sys.path.insert(0, os.path.join(HERE, 'collect'))
@@ -26,7 +26,9 @@ SLOTS = PD.SLOTS
 SCHEMA = 'aifill-1'
 NAME_MAX = 120
 DESC_MAX = 120
-BATCH = 10                      # 한 요청에 담는 장소 수
+NAME_BATCH = 50                 # 이름 요청 하나에 담는 장소 수(출력이 짧다)
+DESC_BATCH = 10                 # 설명 요청 하나에 담는 장소 수(출력이 길다 — 따로 작게)
+BATCH = NAME_BATCH
 UA = 'TripRoutie-aifill/1.0 (+https://github.com/joon0515/triproutie-pipeline)'
 BANNED = re.compile(PD.BANNED_WORDS.pattern + r'|추측|아마|maybe|perhaps|probably', re.I)
 
@@ -43,7 +45,7 @@ def today():
 # 한도는 공식 문서로 확인한 값만 기본값으로 둔다(docs/PROVIDERS.md). 문서에 숫자가 없는 것은 보수적인 값 + 환경 변수로 바꿀 수 있게 한다.
 # AI_<이름>_RPM / AI_<이름>_RPD / AI_<이름>_MODEL 로 덮어쓴다.
 SPEC = {
-    'gemini':   {'keys': ('GEMINI_API_KEY',), 'model': 'gemini-3.1-flash-lite', 'rpm': 10, 'rpd': 250, 'kind': 'gemini',
+    'gemini':   {'keys': ('GEMINI_API_KEY',), 'model': 'gemini-3.1-flash-lite', 'rpm': 30, 'rpd': 1500, 'kind': 'gemini',
                  'url': 'https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent'},
     'cerebras': {'keys': ('CEREBRAS_API_KEY',), 'model': 'gpt-oss-120b', 'rpm': 5, 'rpd': 200, 'kind': 'openai',   # 공식 표: RPM 5(Free Trial)
                  'url': 'https://api.cerebras.ai/v1/chat/completions'},
@@ -83,7 +85,8 @@ class Provider:
         self.model = self.env.get(f'AI_{up}_MODEL') or spec['model']
         self.rpm = int(self.env.get(f'AI_{up}_RPM') or spec['rpm'])
         self.rpd = int(self.env.get(f'AI_{up}_RPD') or spec['rpd'])
-        self.stamps, self.day_count, self.day, self.cool_until, self.dead = [], 0, today(), 0.0, False
+        self.next_at, self.day_count, self.day, self.cool_until, self.dead, self.streak = 0.0, 0, today(), 0.0, False, 0
+        self.lock = threading.Lock()
 
     @property
     def enabled(self):
@@ -99,14 +102,14 @@ class Provider:
         return self.enabled and not self.dead and self.day_count < self.rpd and self.clock() >= self.cool_until
 
     def wait_slot(self):
-        """분당 한도 — 60초 안의 호출이 rpm 개면 기다린다."""
-        now = self.clock()
-        self.stamps = [t for t in self.stamps if now - t < 60]
-        if len(self.stamps) >= self.rpm:
-            self.sleep(max(0.0, 60 - (now - self.stamps[0])) + 0.5)
-            self.stamps = [t for t in self.stamps if self.clock() - t < 60]
-        self.stamps.append(self.clock())
-        self.day_count += 1
+        """분당 한도 — 호출 시각을 60/rpm 초 간격으로 예약한다(여러 스레드가 같이 불러도 분당 rpm 개를 넘지 않음). 기다림은 잠금 밖에서."""
+        with self.lock:
+            now = self.clock()
+            at = max(now, self.next_at)
+            self.next_at = at + 60.0 / max(1, self.rpm)
+            self.day_count += 1
+        if at > now:
+            self.sleep(at - now)
 
     def request(self, system, user):
         """(주소, 머리말, 본문 dict) — 키는 머리말에만 넣는다(주소에 넣지 않음)."""
@@ -170,27 +173,34 @@ class Router:
         return [p.name for p in self.ps]
 
     def ask(self, system, user):
-        """돌려줌 = (글, 공급자 이름, 모델) 또는 None(오늘 쓸 곳이 없음)."""
+        """돌려줌 = (글, 공급자 이름, 모델) 또는 None(오늘 쓸 곳이 없음). 여러 스레드에서 불러도 된다."""
         for p in self.ps:
-            if not p.available():
+            with p.lock:
+                ok = p.available()
+            if not ok:
                 continue
             p.wait_slot()
             url, hdr, body = p.request(system, user)
             try:
                 text = p.parse(self.post(url, hdr, body))
             except RateLimited as e:
-                p.cool_until = self.clock() + e.wait
-                if e.daily:
-                    p.dead = True
+                with p.lock:
+                    p.cool_until = self.clock() + e.wait
+                    p.streak += 1
+                    if e.daily or p.streak >= 6:   # 연달아 429 — 오늘 한도를 다 쓴 것으로 보고 끈다
+                        p.dead = True
                 log(f'{p.name}: 429 — 다음 공급자로')
                 continue
             except ProviderError as e:
                 log(f'{p.name}: 실패({e}) — 다음 공급자로')
-                p.cool_until = self.clock() + (30 if str(e).startswith('network') else 300)
-                if str(e).startswith('auth'):
-                    p.dead = True
+                with p.lock:
+                    p.cool_until = self.clock() + (30 if str(e).startswith('network') else 300)
+                    if str(e).startswith('auth') or str(e).startswith('http 402'):
+                        p.dead = True
                 continue
-            self.used[p.name] += 1
+            with p.lock:
+                p.streak = 0
+                self.used[p.name] += 1
             return text, p.name, p.model
         return None
 
@@ -200,21 +210,25 @@ def build_providers(env=None):
 
 
 # ---------------------------------------------------------------- 프롬프트·검증
-SYSTEM = ('You fill missing multilingual fields for public place records of a travel app. Output JSON only.\n'
-          'Input: a JSON list of places with id, name (local name), cat (category), city, cc (country code), have (languages already named), src.\n'
-          'For each place return {"id":..., "names":{"ko":..,"en":..,"ja":..,"zh_Hans":..,"zh_Hant":..}, "desc":{"ko":..,"en":..,"ja":..,"zh_Hans":..,"zh_Hant":..}}.\n'
-          'Rules:\n'
-          '1. names: only for languages missing in "have". Translate or transliterate the given name into that language; if the name is a proper noun, transliterate. '
-          'Never invent a different place name. Use null when unsure. zh_Hans uses simplified characters, zh_Hant traditional.\n'
-          '2. desc: one short sentence (max 100 characters) saying what kind of place it is, using ONLY the given name, cat, city and cc. '
-          'Never add facts such as opening hours, prices, history, ratings, address or dishes. Use null for every language when the given fields are not enough.\n'
-          '3. Do not use words of guessing or approximation (like estimate, approximately, maybe, probably).\n'
-          '4. Return {"results":[...]} with one entry per input id.')
+SYS_HEAD = ('You fill missing multilingual fields for public place records of a travel app. Output JSON only. '
+            'Input: a JSON list of places with i (index), name (local name), cat (category), city, cc (country code), have (languages already named).\n')
+SYS_NAMES = SYS_HEAD + ('Return {"results":[{"i":0,"ko":..,"en":..,"ja":..,"zh_Hans":..,"zh_Hant":..}, ...]} with one entry per input i, only the languages missing in "have".\n'
+                       'Translate or transliterate the given name into that language (proper nouns: transliterate). Never invent a different place name. '
+                       'Use null when unsure. zh_Hans uses simplified characters, zh_Hant traditional. No words of guessing or approximation.')
+SYS_DESC = SYS_HEAD + ('Return {"results":[{"i":0,"ko":..,"en":..,"ja":..,"zh_Hans":..,"zh_Hant":..}, ...]} where each language value is ONE short sentence (max 100 characters) '
+                      'saying what kind of place it is, using ONLY the given name, cat, city and cc. Never add facts such as opening hours, prices, history, ratings, address or dishes. '
+                      'Use null for every language when the given fields are not enough. No words of guessing or approximation (estimate, approximately, maybe).')
+SYSTEM = SYS_NAMES   # 옛 이름
 
 
-def make_prompt(items):
-    return json.dumps([{'id': i['id'], 'name': i['nm'], 'cat': i['cat'], 'city': i['city'], 'cc': i['cc'], 'have': i['have'], 'src': i['src']} for i in items],
-                      ensure_ascii=False, separators=(',', ':'))
+def make_prompt(items, mode='names'):
+    out = []
+    for k, i in enumerate(items):
+        o = {'i': k, 'name': i['nm'], 'cat': i['cat'], 'city': i['city'], 'cc': i['cc']}
+        if mode == 'names':
+            o['have'] = i['have']
+        out.append(o)
+    return json.dumps(out, ensure_ascii=False, separators=(',', ':'))
 
 
 def parse_json(text):
@@ -256,29 +270,22 @@ def ok_desc(v):
     return s
 
 
-def validate(results, items):
-    """모델 답 → {id: {names, desc}} — 요청하지 않은 id·이미 있는 이름 칸·모양이 틀린 글은 버린다."""
-    by = {i['id']: i for i in items}
+def validate(results, items, mode='names'):
+    """모델 답 → {id: {names, desc}} — 요청하지 않은 번호·이미 있는 이름 칸·모양이 틀린 글은 버린다."""
     out = {}
     for r in results or []:
-        if not isinstance(r, dict) or r.get('id') not in by:
+        k = r.get('i') if isinstance(r, dict) else None
+        if not isinstance(k, int) or not (0 <= k < len(items)):
             continue
-        it = by[r['id']]
-        names, desc = {}, {}
-        nm = r.get('names') if isinstance(r.get('names'), dict) else {}
-        for s in SLOTS:
-            if s in it['have']:
-                continue
-            v = ok_name(s, nm.get(s))
-            if v:
-                names[s] = v
-        d = r.get('desc') if isinstance(r.get('desc'), dict) and not it.get('hd') else {}   # 공개 설명(Wikidata 등)이 있는 장소는 AI 설명을 받지 않는다
-        for s in SLOTS:
-            v = ok_desc(d.get(s))
-            if v and v.casefold() != it['nm'].casefold():
-                desc[s] = v
-        if names or desc:
-            out[it['id']] = {'names': names, 'desc': desc}
+        it = items[k]
+        if mode == 'names':
+            names = {s: v for s in SLOTS if s not in it['have'] and (v := ok_name(s, r.get(s)))}
+            if names:
+                out.setdefault(it['id'], {'names': {}, 'desc': {}})['names'] = names
+        elif not it.get('hd'):   # 공개 설명(Wikidata 등)이 있는 장소는 AI 설명을 받지 않는다
+            desc = {s: v for s in SLOTS if (v := ok_desc(r.get(s))) and v.casefold() != it['nm'].casefold()}
+            if desc:
+                out.setdefault(it['id'], {'names': {}, 'desc': {}})['desc'] = desc
     return out
 
 
@@ -331,10 +338,10 @@ class State:
     def __init__(self, store, prefix='processed/ai_fill/'):
         self.store, self.pre = store, prefix
         s = store.get_json(prefix + 'state.json', {}) or {}
-        self.s = {'day': s.get('day', ''), 'count': s.get('count', 0), 'files_done': s.get('files_done', 0), 'shard': s.get('shard', 0), 'total': s.get('total', 0), 'by_provider': s.get('by_provider', {})}
+        self.s = {'day': s.get('day', ''), 'count': s.get('count', 0), 'files_done': s.get('files_done', 0), 'shard': s.get('shard', 0), 'total': s.get('total', 0), 'by_provider': s.get('by_provider', {}), 'desc_count': s.get('desc_count', 0)}
         self.done = set(store.get_json(prefix + 'done.json.gz', []) or [])
         if self.s['day'] != today():
-            self.s['day'], self.s['count'], self.s['by_provider'] = today(), 0, {}
+            self.s['day'], self.s['count'], self.s['by_provider'], self.s['desc_count'] = today(), 0, {}, 0
 
     def save(self):
         self.store.put_json(self.pre + 'state.json', self.s)
@@ -345,8 +352,8 @@ def doc(rows, provider_models):
     return {'schema': SCHEMA, 'dataset': 'aifill', 'src': 'ai', 'built': today(), 'license': 'AI-generated', 'models': provider_models, 'rows': rows}
 
 
-def run(store, col_files, have_names, have_desc, router, max_places=1500, budget_min=55.0, cities=None, clock=time.time, dry_run=False, cap_per_city=None):
-    """col_files = 후보를 읽을 층 파일 경로 목록(호출쪽이 순서를 정함). 돌려줌 = 요약 dict."""
+def run(store, col_files, have_names, have_desc, router, max_places=20000, budget_min=55.0, cities=None, clock=time.time, dry_run=False, workers=4, desc_max=None):
+    """col_files = 후보를 읽을 층 파일 경로 목록. 이름 요청(50곳씩)과 설명 요청(10곳씩, 하루 desc_max 곳까지)을 workers 개 스레드로 보낸다. 돌려줌 = 요약 dict."""
     cities = cities or load_priority()
     end = clock() + budget_min * 60
     st = State(store)
@@ -364,74 +371,57 @@ def run(store, col_files, have_names, have_desc, router, max_places=1500, budget
         pool += candidates_from_layer(_gz(f), cities, have_names, have_desc, st.done, room)
     pool.sort(key=lambda c: (c['rank'], c['id']))
     pool = pool[:room]
-    rows, meta = {}, {}
-    for i in range(0, len(pool), BATCH):
+    if desc_max is None:
+        desc_max = _env_int('AI_DESC_MAX', 500)
+    desc_room = max(0, desc_max - st.s.get('desc_count', 0))
+    npool = [c for c in pool if len(c['have']) < len(SLOTS)]   # 빈 이름 칸이 있는 곳만 이름 요청
+    tasks = [('names', npool[i:i + NAME_BATCH]) for i in range(0, len(npool), NAME_BATCH)]
+    dpool = [c for c in pool if not c.get('hd')][:desc_room]
+    tasks += [('desc', dpool[i:i + DESC_BATCH]) for i in range(0, len(dpool), DESC_BATCH)]
+    system = {'names': SYS_NAMES, 'desc': SYS_DESC}
+
+    def work(t):
+        mode, items = t
         if clock() > end:
-            rep['stopped'] = 'time'
-            break
-        items = pool[i:i + BATCH]
-        ans = router.ask(SYSTEM, make_prompt(items))
-        rep['requests'] += 1
-        if ans is None:
-            rep['stopped'] = 'providers-exhausted'
-            break
-        text, pname, model = ans
-        got = validate(parse_json(text), items)
-        for it in items:
-            st.done.add(it['id'])            # 답이 비어도 다시 보내지 않는다(같은 장소 두 번 금지)
-        for rid, v in got.items():
-            rows[rid] = {**v['names'], 'd': v['desc'], 'src': 'ai', 'provider': pname, 'model': model, 'date': today(), 'city': next(c['city'] for c in items if c['id'] == rid)}
-            meta[pname] = model
-        rep['places'] += len(items)
-        st.s['count'] += len(items)
-        st.s['by_provider'][pname] = st.s['by_provider'].get(pname, 0) + 1
+            return t, 'time'
+        return t, router.ask(system[mode], make_prompt(items, mode))
+
+    rows, meta, st_stop = {}, {}, ''
+    with concurrent.futures.ThreadPoolExecutor(max_workers=max(1, workers)) as ex:
+        for t, ans in ex.map(work, tasks):
+            mode, items = t
+            if ans == 'time':
+                st_stop = st_stop or 'time'
+                continue
+            if ans is None:
+                st_stop = st_stop or 'providers-exhausted'
+                continue
+            text, pname, model = ans
+            rep['requests'] += 1
+            got = validate(parse_json(text), items, mode)
+            by_id = {c['id']: c for c in items}
+            for rid, v in got.items():
+                r = rows.setdefault(rid, {'d': {}, 'src': 'ai', 'provider': pname, 'model': model, 'date': today(), 'city': by_id[rid]['city']})
+                r.update(v['names']); r['d'].update(v['desc'])
+                meta[pname] = model
+            if mode == 'names':
+                for it in items:
+                    st.done.add(it['id'])        # 답이 비어도 다시 보내지 않는다(같은 장소 두 번 금지)
+                rep['places'] += len(items); st.s['count'] += len(items)
+            else:
+                st.s['desc_count'] = st.s.get('desc_count', 0) + len(items)
+                st.done.update(it['id'] for it in items)
+            st.s['by_provider'][pname] = st.s['by_provider'].get(pname, 0) + 1
+    rep['stopped'] = st_stop
     rep['rows'] = len(rows)
     rep['by_provider'] = dict(router.used)
     if rows and not dry_run:
         n = st.s['shard']; st.s['shard'] = n + 1
-        d = doc(rows, meta)
-        store.put_json(f"{st.pre}out/aifill-{today()}-{n:04d}.json.gz", d)
+        store.put_json(f"{st.pre}out/aifill-{today()}-{n:04d}.json.gz", doc(rows, meta))
     if not dry_run:
         st.save()
     log(f"처리 {rep['places']}곳 · 요청 {rep['requests']}회 · 채움 {rep['rows']}곳 · 공급자 {rep['by_provider']} · 멈춤 {rep['stopped'] or '끝'}")
     return rep
-
-
-# ---------------------------------------------------------------- 입력 모으기(Storage)
-def gather_store(store, work, cities, extra_dir='', max_files=60):
-    """Storage 의 수집 층 col_*(최신 run)을 우선 도시의 나라부터 받아 로컬 경로 목록을 돌려준다. 이름·소개 층은 extra_dir(워크플로가 layers_extra 에서 받아 둠)에서 읽는다."""
-    import coverage as CV
-    names, desc = {}, {}
-    if extra_dir and os.path.isdir(extra_dir):
-        ex = [os.path.join(extra_dir, f) for f in sorted(os.listdir(extra_dir)) if f.startswith(('names-', 'desc-')) and f.endswith('.json.gz')]
-        CV.side_ids(ex, names)
-        desc = {k: v for k, v in (CV.desc_ids(ex) or {}).items() if k in SLOTS}
-    latest = store.get_json('processed/latest.json', None)
-    if not latest:
-        return [], names, desc
-    paths = latest.get('paths') or {f: f"processed/out/{latest['run']}/{f}" for f in latest.get('files', [])}
-    keys = sorted(v for k, v in paths.items() if k.startswith('col_') and not k.startswith('col_info_'))
-    ccs = {}
-    for k in keys:
-        m = re.match(r'col_([A-Z0-9]{2})_', os.path.basename(k))
-        if m:
-            ccs.setdefault(m.group(1), []).append(k)
-    want = []
-    for c in cities:
-        for k in ccs.get(CITY_CC.get(c['key']), []):
-            if k not in want:
-                want.append(k)
-    want = want[:max_files]
-    got = store.pull(want, os.path.join(work, 'col'), strict=False)
-    return [got[k] for k in want if k in got], names, desc
-
-
-# 우선 도시 키 → 나라 코드(수집 층 파일 이름 col_<cc>_N). 목록에 없는 도시는 건너뛴다.
-CITY_CC = {'jeju': 'KR', 'seoul': 'KR', 'busan': 'KR', 'gangneung': 'KR', 'gyeongju': 'KR', 'yeosu': 'KR', 'jeonju': 'KR', 'sokcho': 'KR',
-           'osaka': 'JP', 'tokyo': 'JP', 'fukuoka': 'JP', 'kyoto': 'JP', 'sapporo': 'JP', 'okinawa_naha': 'JP', 'danang': 'VN', 'nhatrang': 'VN',
-           'hochiminh': 'VN', 'hanoi': 'VN', 'bangkok': 'TH', 'taipei': 'TW', 'hongkong': 'HK', 'singapore': 'SG', 'cebu': 'PH', 'manila': 'PH', 'guam': 'GU',
-           'bali_south': 'ID', 'shanghai': 'CN', 'paris': 'FR', 'rome': 'IT', 'barcelona': 'ES', 'london': 'GB', 'prague': 'CZ', 'newyork': 'US',
-           'losangeles': 'US', 'honolulu': 'US', 'sydney': 'AU', 'istanbul': 'TR', 'dubai': 'AE'}
 
 
 # ---------------------------------------------------------------- 앱 묶음(publish)에 싣는 층 만들기
@@ -490,7 +480,7 @@ def main():
     ap.add_argument('--store', default=os.environ.get('STORE', ''))
     ap.add_argument('--col-dir', default='')
     ap.add_argument('--extra-dir', default='')
-    ap.add_argument('--max-places', type=int, default=_env_int('AI_MAX_PLACES', 1500))
+    ap.add_argument('--max-places', type=int, default=_env_int('AI_MAX_PLACES', 20000))
     ap.add_argument('--budget-min', type=float, default=55.0)
     ap.add_argument('--dry-run', action='store_true')
     a = ap.parse_args()
@@ -512,7 +502,7 @@ def main():
         _, names, desc = gather_store(store, work, [], a.extra_dir)
     else:
         files, names, desc = gather_store(store, work, cities, a.extra_dir)
-    run(store, files, names, desc, Router(provs), a.max_places, a.budget_min, cities, dry_run=a.dry_run)
+    run(store, files, names, desc, Router(provs), a.max_places, a.budget_min, cities, dry_run=a.dry_run, workers=_env_int('AI_CONCURRENCY', 4))
     return 0
 
 

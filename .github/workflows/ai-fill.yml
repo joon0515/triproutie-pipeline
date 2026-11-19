@@ -1,15 +1,15 @@
 # AI 채움(ai-fill) — 장소 이름 5개 언어 번역·음역 + 짧은 설명을 공식 무료 AI 사용량(공급자 묶음)으로 매일 조금씩. 코드 scripts/ai_fill.py, 공급자·한도 docs/PROVIDERS.md.
-# 하루 1회·실행당 60분 이내·동시 실행 1개. 비밀값이 하나도 없으면 인증·설치 없이 바로 끝낸다(공급자 건너뜀). 끄기: 저장소 변수 AI_FILL_OFF=1.
+# 3시간마다 1회(하루 상한은 state 가 합산)·실행당 60분 이내·동시 실행 1개. 비밀값이 하나도 없으면 인증·설치 없이 바로 끝낸다(공급자 건너뜀). 끄기: 저장소 변수 AI_FILL_OFF=1.
 # 결과·진행 위치는 Storage processed/ai_fill/ 에만(저장소에 커밋하지 않고 upload-artifact 도 쓰지 않는다). 앱 사용자 데이터는 보내지 않는다 — 공개 장소 데이터만.
 name: ai-fill
 on:
   schedule:
-    - cron: "37 18 * * *"
+    - cron: "37 */3 * * *"
   workflow_dispatch:
     inputs:
       max_places:
         description: "이번 실행 처리 상한(곳)"
-        default: "1500"
+        default: "20000"
 permissions:
   contents: read
   id-token: write
@@ -67,7 +67,7 @@ jobs:
           for P in names-wd names-osm names-ovt desc-wd desc-kto desc-tw desc-osm; do gcloud storage cp -q "gs://$GCS_BUCKET/places/v1/layers_extra/$P*.json.gz" "$RUNNER_TEMP/extra/" 2>/dev/null || true; done
       - name: ai-fill
         if: steps.gate.outputs.on == '1'
-        run: python3 scripts/ai_fill.py run --store "$STORE" --extra-dir "$RUNNER_TEMP/extra" --max-places "${{ inputs.max_places || '1500' }}" --budget-min 50 | tee -a "$GITHUB_STEP_SUMMARY"
+        run: python3 scripts/ai_fill.py run --store "$STORE" --extra-dir "$RUNNER_TEMP/extra" --max-places "${{ inputs.max_places || '20000' }}" --budget-min 50 | tee -a "$GITHUB_STEP_SUMMARY"
       - name: 앱 묶음 층 내보내기(names-ai·desc-ai → layers_extra, 기존 출처 이름·설명이 있는 칸은 빼고)
         if: steps.gate.outputs.on == '1'
         run: |
