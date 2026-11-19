@@ -147,7 +147,13 @@ def http_post(url, headers, body, timeout=60):
             raise RateLimited(w, daily=w > 900)
         if e.code in (401, 403):
             raise ProviderError(f'auth {e.code}')
-        raise ProviderError(f'http {e.code}')
+        why = ''
+        try:   # 오류 이유 코드·짧은 문구만(요청 내용·키는 기록하지 않는다)
+            er = json.loads(e.read()).get('error') or {}
+            why = ' ' + re.sub(r'[^A-Za-z0-9 _.,:\-]', '', str(er.get('status') or '') + ' ' + str(er.get('message') or ''))[:90]
+        except (ValueError, AttributeError, OSError):
+            pass
+        raise ProviderError(f'http {e.code}{why}')
     except (urllib.error.URLError, TimeoutError, ValueError, OSError):
         raise ProviderError('network')
 
