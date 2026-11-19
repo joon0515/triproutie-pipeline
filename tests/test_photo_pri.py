@@ -134,6 +134,11 @@ class PhotoPri(unittest.TestCase):
         grid2 = {k: [(a, b, n, dict(p, url='http://other.example/a.jpg'))] for k, [(a, b, n, p)] in grid.items()}
         self.assertIsNone(PL.from_kto(d, grid2, 0))  # https 로 바꿀 수 없는 주소는 싣지 않음
 
+    def test_tile_box_from_center(self):
+        self.assertEqual(PP.tile_box({'bbox': [1, 2, 3, 4]}), [1, 2, 3, 4])
+        self.assertEqual(PP.tile_box({'center': [34.7, 135.5], 'res': 5}), [135.3, 34.5, 135.7, 34.900000000000006])
+        self.assertIsNone(PP.tile_box({}))
+
     def test_no_banned_hosts(self):
         src = open(os.path.join(ROOT, 'scripts', 'photo_pri.py'), encoding='utf-8').read().lower()
         for h in ('instagram', 'naver', 'kakao', 'google.', 'tabelog', 'tripadvisor', 'youtube', 'tiktok'):
