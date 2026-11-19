@@ -25,6 +25,8 @@ class FakeRouter:
     def __init__(self, fn=good):
         self.fn, self.used = fn, {'gemini': 0}
 
+    ps = []
+
     def names(self):
         return ['gemini']
 
@@ -213,3 +215,24 @@ class Wait(unittest.TestCase):
         self.assertEqual(round(r.retry_in()), 31)
         p.dead = True
         self.assertIsNone(r.retry_in())
+
+
+class Quota(unittest.TestCase):
+    def test_run_cap_and_429_ends_provider(self):
+        env = {'GEMINI_API_KEY': 'k', 'AI_GEMINI_RUN': '2'}
+        p = A.Provider('gemini', A.SPEC['gemini'], env, sleep=lambda s: None)
+        r = A.Router([p], post=lambda u, h, b: {'candidates': [{'content': {'parts': [{'text': '{}'}]}}]}, sleep=lambda s: None)
+        self.assertTrue(r.ask('s', 'u')); self.assertTrue(r.ask('s', 'u'))
+        self.assertIsNone(r.ask('s', 'u'))          # 이 회차 상한
+        self.assertIsNone(r.retry_in())             # 기다려도 소용없음
+        p2 = A.Provider('gemini', A.SPEC['gemini'], {'GEMINI_API_KEY': 'k'}, sleep=lambda s: None)
+
+        def boom(u, h, b):
+            raise A.RateLimited(5)
+        r2 = A.Router([p2], post=boom, sleep=lambda s: None)
+        self.assertIsNone(r2.ask('s', 'u'))
+        self.assertTrue(p2.dead)                     # 429 한 번이면 회차 끝
+
+    def test_defaults_match_ai_studio(self):
+        self.assertEqual((A.SPEC['gemini']['rpm'], A.SPEC['gemini']['rpd'], A.SPEC['gemini']['run']), (12, 500, 60))
+        self.assertEqual((A.SPEC['gemini_b']['model'], A.SPEC['gemini_b']['rpd']), ('gemini-3.6-flash', 20))

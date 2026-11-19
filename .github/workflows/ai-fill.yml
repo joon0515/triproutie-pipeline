@@ -65,6 +65,9 @@ jobs:
         run: |
           mkdir -p "$RUNNER_TEMP/extra"
           for P in names-wd names-osm names-ovt desc-wd desc-kto desc-tw desc-osm; do gcloud storage cp -q "gs://$GCS_BUCKET/places/v1/layers_extra/$P*.json.gz" "$RUNNER_TEMP/extra/" 2>/dev/null || true; done
+      - name: 모델 ID 확인(models.list, 이름만)
+        if: steps.gate.outputs.on == '1'
+        run: python3 scripts/ai_fill.py models || true
       - name: ai-fill
         if: steps.gate.outputs.on == '1'
         run: set -o pipefail; python3 scripts/ai_fill.py run --store "$STORE" --extra-dir "$RUNNER_TEMP/extra" --max-places "${{ inputs.max_places || '20000' }}" --budget-min 50 | tee -a "$GITHUB_STEP_SUMMARY"

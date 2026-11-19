@@ -15,11 +15,12 @@
 - 모델 이름 기본값(Gemini gemini-3.1-flash-lite · Cerebras gpt-oss-120b 는 공식 문서에서 확인, 나머지 Groq·Cloudflare·NVIDIA 는 미확인 — 계정에서 쓸 수 있는 모델로 `AI_<이름>_MODEL` 지정).
 - 라우터: 켜진 공급자만(secret 이 모두 있어야 켜짐) → 앞에서부터 순서대로(gemini → cerebras → groq → cloudflare → nvidia). 분당·일당 한도를 코드가 먼저 지키고, 429 는 Retry-After 만큼(15분 넘으면 오늘은 끔) 쉬게 한 뒤 다음 공급자로. 401·403 이면 그 공급자는 오늘 끔. 오류 본문은 기록하지 않는다.
 
-## 하루 처리량 (11/20 처리량 올림)
-- Gemini 무료 등급의 모델별 RPM·RPD 숫자는 **공식 문서에 없고 AI Studio 화면(Rate limit)에서만 보인다**(rate-limits·quota 문서 확인) → 미확인. 코드 기본값은 flash-lite 계열 gemini-3.1-flash-lite, RPM 30·RPD 1,500(환경 변수 `AI_GEMINI_RPM`·`AI_GEMINI_RPD`)이고, 429 가 연달아 6번 오거나 재시도 대기가 15분을 넘으면 그 실행에서는 끈다. 대표가 AI Studio 에서 실제 숫자를 보면 바로 맞춘다.
-- 이름 요청 = 50곳 묶음(출력이 짧음), 설명 요청 = 10곳 묶음(하루 `AI_DESC_MAX` 기본 500곳까지), 동시 요청 `AI_CONCURRENCY` 기본 4(호출 시각을 60/rpm 초 간격으로 예약해 분당 한도 안).
-- 하루 상한 `AI_MAX_PLACES` 기본 20,000곳(= 이름 요청 약 400회 + 설명 50회). 3시간마다 실행(8회/일, 1회 50분 예산, 동시 실행 1개)하고 state 가 하루 합산.
-- 같은 키로 모델 두 개(gemini-3.1-flash-lite → 503·429 면 gemini-2.5-flash-lite)를 차례로 쓴다. 공급자를 더 켜도 상한은 그대로.
+## 하루 처리량 (11/20 AI Studio 실측 반영)
+- 대표 계정 AI Studio(TripMate - Free 프로젝트, 무료 등급) 실측: **Gemini 3.1 Flash Lite = RPM 15 · TPM 250K · RPD 500**, **Gemini 3.6 Flash = RPM 5 · TPM 250K · RPD 20**. 한도는 프로젝트 단위(여러 프로젝트로 늘리지 않는다).
+- 기본값: 주 모델 gemini-3.1-flash-lite(RPM 12로 여유, 하루 500요청 중 회차당 60), 보조 gemini-3.6-flash(RPM 4, 하루 20 중 회차당 3). 모델 ID 는 workflow 가 `ai_fill.py models`(models.list)로 매번 이름만 출력해 확인한다.
+- 하루 RPD 를 3시간마다 8회에 고르게: 회차당 ≤60요청, 오늘 쓴 요청 수는 state.json 의 req 로 합산. 429 가 한 번이라도 오면 그 회차는 끝낸다(다음 회차에서 다시).
+- 요청 크기: 이름 100곳 묶음(입력+출력 약 1만 토큰 → 분당 12회여도 TPM 25만 아래), 설명 10곳 묶음(하루 `AI_DESC_MAX` 기본 300곳 = 30요청). 하루 요청 예산 = 이름 200(=2만곳) + 설명 30 + 여유.
+- 실측 전 값(RPM 30·RPD 1500 가정)은 11/19 시험에서 429 로 한도 도달을 확인한 뒤 폐기.
 
 ## 결과·출처
 - Storage `processed/ai_fill/out/aifill-<날짜>-NNNN.json.gz`(schema `aifill-1`), 행 = {ko,en,ja,zh_Hans,zh_Hant(빈 칸만), d:{언어: 설명}, src:'ai', provider, model, date, city}. 진행 위치 `processed/ai_fill/state.json`(1MB 미만)·처리한 장소 `done.json.gz`(같은 장소 두 번 처리 금지).
