@@ -68,3 +68,11 @@ jobs:
       - name: ai-fill
         if: steps.gate.outputs.on == '1'
         run: python3 scripts/ai_fill.py run --store "$STORE" --extra-dir "$RUNNER_TEMP/extra" --max-places "${{ inputs.max_places || '1500' }}" --budget-min 50 | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: 앱 묶음 층 내보내기(names-ai·desc-ai → layers_extra, 기존 출처 이름·설명이 있는 칸은 빼고)
+        if: steps.gate.outputs.on == '1'
+        run: |
+          python3 scripts/ai_fill.py export --store "$STORE" --extra-dir "$RUNNER_TEMP/extra" --out-dir "$RUNNER_TEMP/aiout" | tee -a "$GITHUB_STEP_SUMMARY"
+          if ls "$RUNNER_TEMP"/aiout/*.json.gz >/dev/null 2>&1; then
+            gcloud storage rm -q "gs://$GCS_BUCKET/places/v1/layers_extra/names-ai-*.json.gz" "gs://$GCS_BUCKET/places/v1/layers_extra/desc-ai-*.json.gz" >/dev/null 2>&1 || true
+            gcloud storage cp -q "$RUNNER_TEMP"/aiout/*.json.gz "gs://$GCS_BUCKET/places/v1/layers_extra/"
+          fi

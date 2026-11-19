@@ -99,6 +99,8 @@ def describe(fn):
             e['region'] = j.get('region')
     if kind == 'names5':  # 이름 5개 언어(names-2) — rows 는 {장소 id: {ko,en,ja,zh_Hans,zh_Hant: 이름|null, q?|osm?}}, 출처 하나 = 파일 하나
         e['license'] = j.get('license') or 'mixed'
+        if j.get('src') == 'ai':  # (11/20 260기) AI 번역·음역 — 기존 출처 이름(Wikidata·OSM·Overture)이 항상 먼저, AI 는 빈 칸만. 행의 ai='provider|model|date'
+            e['prio'], e['credit'] = 9, j.get('credit')
         e['src'] = j.get('src')
         e['langs'] = {k: v for k, v in (j.get('langs') or {}).items() if isinstance(v, int)} or None
         bb = j.get('bbox')
@@ -108,6 +110,8 @@ def describe(fn):
             e['region'] = j['region']
     if kind == 'desc':  # 장소 소개 — rows 는 {장소 id: {ko,en,ja,zh_Hans,zh_Hant: 글|null, …}}, 출처 하나 = 파일 하나(라이선스를 섞지 않음)
         e['license'] = j.get('license') or 'mixed'
+        if j.get('src') == 'ai':  # AI 요약 — 공개 설명(Wikidata·관광공사 등)이 먼저
+            e['prio'], e['credit'] = 9, j.get('credit')
         e['src'] = j.get('src')
         e['langs'] = {k: v for k, v in (j.get('langs') or {}).items() if isinstance(v, int)} or None
         bb = j.get('bbox')

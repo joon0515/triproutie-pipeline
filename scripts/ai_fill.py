@@ -434,9 +434,59 @@ CITY_CC = {'jeju': 'KR', 'seoul': 'KR', 'busan': 'KR', 'gangneung': 'KR', 'gyeon
            'losangeles': 'US', 'honolulu': 'US', 'sydney': 'AU', 'istanbul': 'TR', 'dubai': 'AE'}
 
 
+# ---------------------------------------------------------------- 앱 묶음(publish)에 싣는 층 만들기
+EXPORT_MAX = 6 * 1024 * 1024
+CREDIT = {'names': 'AI 번역·음역 (Gemini 등 공식 무료 API, 행마다 provider·model·date)', 'desc': 'AI 요약 (근거 칸만 사용, 행마다 provider·model·date)'}
+
+
+def export_layers(store, out_dir, have_names=None, have_desc=None):
+    """Storage processed/ai_fill/out/* → names-ai-NN.json.gz(names-2)·desc-ai-NN.json.gz(desc-1). 돌려줌 = {파일: 행 수}.
+    우선순위: 기존 출처(Wikidata·OSM·Overture·수집 열) 이름·설명이 이미 있는 칸은 싣지 않는다 — AI 는 빈 칸만. 출처 표시: 문서에 src='ai'·license·credit, 행에 ai='provider|model|date'."""
+    have_names, have_desc = have_names or {}, have_desc or {}
+    nrows, drows = {}, {}
+    for k in store.list('processed/ai_fill/out/'):
+        j = store.get_json(k, None) or {}
+        if j.get('schema') != SCHEMA:
+            continue
+        for rid, v in (j.get('rows') or {}).items():
+            tag = '|'.join(str(v.get(x) or '') for x in ('provider', 'model', 'date'))
+            nm = {s: v[s] for s in SLOTS if v.get(s) and rid not in have_names.get(s, ())}
+            if nm:
+                nrows[rid] = {**{s: nm.get(s) for s in SLOTS}, 'ai': tag}
+            ds = {s: t for s, t in (v.get('d') or {}).items() if s in SLOTS and t and rid not in have_desc.get(s, ())}
+            if ds:
+                drows[rid] = {**{s: ds.get(s) for s in SLOTS}, 'ai': tag}
+    os.makedirs(out_dir, exist_ok=True)
+    for f in os.listdir(out_dir):
+        if f.startswith(('names-ai-', 'desc-ai-')):
+            os.remove(os.path.join(out_dir, f))
+    res = {}
+    for kind, rows, schema in (('names', nrows, 'names-2'), ('desc', drows, 'desc-1')):
+        n = 4
+        while rows:
+            parts = [{} for _ in range(n)]
+            for rid in sorted(rows):
+                parts[PD.shard_of(rid, n)][rid] = rows[rid]
+            files = {}
+            for i, p in enumerate(parts):
+                if p:
+                    cnt = {s: sum(1 for v in p.values() if v.get(s)) for s in SLOTS}
+                    d = {'schema': schema, 'dataset': kind, 'src': 'ai', 'license': 'AI-generated', 'credit': CREDIT[kind], 'page': None, 'built': today(), 'langs': cnt, 'rows': p}
+                    fn = f'{kind}-ai-{i:03d}.json.gz'
+                    files[fn] = (PD.write_layer(os.path.join(out_dir, fn), d), len(p))
+            if max(sz for sz, _ in files.values()) <= EXPORT_MAX or n >= 1024:
+                res.update({f: c for f, (_, c) in files.items()})
+                break
+            for f in files:
+                os.remove(os.path.join(out_dir, f))
+            n *= 2
+    return res
+
+
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument('cmd', choices=['run', 'providers'])
+    ap.add_argument('cmd', choices=['run', 'providers', 'export'])
+    ap.add_argument('--out-dir', default='')
     ap.add_argument('--store', default=os.environ.get('STORE', ''))
     ap.add_argument('--col-dir', default='')
     ap.add_argument('--extra-dir', default='')
@@ -444,6 +494,11 @@ def main():
     ap.add_argument('--budget-min', type=float, default=55.0)
     ap.add_argument('--dry-run', action='store_true')
     a = ap.parse_args()
+    if a.cmd == 'export':
+        _, names, desc = gather_store(Store(a.store), '', [], a.extra_dir)
+        r = export_layers(Store(a.store), a.out_dir, names, desc)
+        log(f'내보냄: 파일 {len(r)}개 · 행 {sum(r.values())}')
+        return 0
     provs = build_providers()
     on = [p.name for p in provs if p.enabled]
     log('켜진 공급자: ' + (', '.join(on) if on else '없음'))   # 이름만 — 키 값은 읽어도 쓰지 않는다

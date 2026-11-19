@@ -23,3 +23,8 @@
 - Storage `processed/ai_fill/out/aifill-<날짜>-NNNN.json.gz`(schema `aifill-1`), 행 = {ko,en,ja,zh_Hans,zh_Hant(빈 칸만), d:{언어: 설명}, src:'ai', provider, model, date, city}. 진행 위치 `processed/ai_fill/state.json`(1MB 미만)·처리한 장소 `done.json.gz`(같은 장소 두 번 처리 금지).
 - 이 층은 아직 앱 목록(publish_layers)에 싣지 않는다. 싣기 전에 앱이 'AI 번역·AI 요약' 표시와 우선순위(Wikidata·OSM·Overture 이름이 먼저)를 정해야 한다 — 후속 작업.
 - 겹침 확인: gen_fix3 PLACE_DESC_PLAN 은 Wikidata·TourAPI 설명(`scripts/place_desc.py`, 기계 번역 없음)이고 이 문서는 그 빈칸을 AI 로 메우는 별도 층이다. 같은 칸을 두 번 만들지 않도록 place_desc 의 desc-* 층에 설명이 있는 장소는 AI 설명을 받지 않고(이름 빈칸만), 이름도 다 있으면 후보에서 뺀다.
+
+## 앱 묶음(publish) 연결 (11/20)
+- ai-fill 실행 끝에 `ai_fill.py export` 가 Storage `processed/ai_fill/out/*` 전부를 `layers_extra/names-ai-NNN.json.gz`(schema names-2)·`desc-ai-NNN.json.gz`(desc-1)로 바꿔 올린다. 다음 process 게시(finalize_layers)가 layers_extra 를 그대로 싣는다.
+- 우선순위: 기존 출처(Wikidata·OSM·Overture·수집 열) 이름·설명이 있는 칸은 내보낼 때 뺀다. 목록 항목에 `prio: 9`(AI)를 달아 앱도 같은 순서로 쓰게 한다(출처 파일 사이 충돌 시 AI 가 마지막).
+- 출처 표시: 문서 src='ai'·license='AI-generated'·credit, 행 ai='provider|model|date'. 앱은 이 칸이 있으면 'AI 번역'·'AI 요약' 표시.
