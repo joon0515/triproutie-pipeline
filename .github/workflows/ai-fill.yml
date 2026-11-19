@@ -1,0 +1,70 @@
+# AI 채움(ai-fill) — 장소 이름 5개 언어 번역·음역 + 짧은 설명을 공식 무료 AI 사용량(공급자 묶음)으로 매일 조금씩. 코드 scripts/ai_fill.py, 공급자·한도 docs/PROVIDERS.md.
+# 하루 1회·실행당 60분 이내·동시 실행 1개. 비밀값이 하나도 없으면 인증·설치 없이 바로 끝낸다(공급자 건너뜀). 끄기: 저장소 변수 AI_FILL_OFF=1.
+# 결과·진행 위치는 Storage processed/ai_fill/ 에만(저장소에 커밋하지 않고 upload-artifact 도 쓰지 않는다). 앱 사용자 데이터는 보내지 않는다 — 공개 장소 데이터만.
+name: ai-fill
+on:
+  schedule:
+    - cron: "37 18 * * *"
+  workflow_dispatch:
+    inputs:
+      max_places:
+        description: "이번 실행 처리 상한(곳)"
+        default: "1500"
+permissions:
+  contents: read
+  id-token: write
+concurrency:
+  group: ai-fill
+  cancel-in-progress: false
+env:
+  GCS_BUCKET: ${{ vars.GCS_BUCKET || 'trip-mate-0vum9k.firebasestorage.app' }}
+  STORE: gs://${{ vars.GCS_BUCKET || 'trip-mate-0vum9k.firebasestorage.app' }}/collect/v1
+jobs:
+  fill:
+    if: github.repository == 'joon0515/triproutie-pipeline' && vars.AI_FILL_OFF != '1'
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    env:
+      GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+      CF_ACCOUNT_ID: ${{ secrets.CF_ACCOUNT_ID }}
+      CF_AI_TOKEN: ${{ secrets.CF_AI_TOKEN }}
+      GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
+      CEREBRAS_API_KEY: ${{ secrets.CEREBRAS_API_KEY }}
+      NVIDIA_API_KEY: ${{ secrets.NVIDIA_API_KEY }}
+    steps:
+      - name: 공급자 확인(이름만)
+        id: gate
+        run: |
+          on=0
+          [ -n "$GEMINI_API_KEY" ] && on=1
+          [ -n "$CF_ACCOUNT_ID" ] && [ -n "$CF_AI_TOKEN" ] && on=1
+          [ -n "$GROQ_API_KEY" ] && on=1
+          [ -n "$CEREBRAS_API_KEY" ] && on=1
+          [ -n "$NVIDIA_API_KEY" ] && on=1
+          echo "on=$on" >> "$GITHUB_OUTPUT"
+          [ "$on" = 1 ] || echo "켜진 공급자 없음 — 아무것도 하지 않고 끝냄" | tee -a "$GITHUB_STEP_SUMMARY"
+      - uses: actions/checkout@v4
+        if: steps.gate.outputs.on == '1'
+      - uses: google-github-actions/auth@v2
+        if: steps.gate.outputs.on == '1'
+        with:
+          workload_identity_provider: ${{ vars.GCP_WIF_PROVIDER || 'projects/222914945328/locations/global/workloadIdentityPools/github-pool/providers/github-provider' }}
+          service_account: ${{ vars.GCP_SA_EMAIL || 'pipeline-uploader@trip-mate-0vum9k.iam.gserviceaccount.com' }}
+      - uses: google-github-actions/setup-gcloud@v2
+        if: steps.gate.outputs.on == '1'
+      - uses: actions/setup-python@v5
+        if: steps.gate.outputs.on == '1'
+        with: {python-version: "3.12"}
+      - run: pip install -q pyyaml >/dev/null
+        if: steps.gate.outputs.on == '1'
+      - name: test(공급자 mock)
+        if: steps.gate.outputs.on == '1'
+        run: set -o pipefail; python3 -W ignore -m unittest tests/test_ai_fill.py 2>&1 | tail -3
+      - name: 이름·소개 층 받기(이미 있는 값은 건드리지 않기 위해)
+        if: steps.gate.outputs.on == '1'
+        run: |
+          mkdir -p "$RUNNER_TEMP/extra"
+          for P in names-wd names-osm names-ovt desc-wd desc-kto desc-tw desc-osm; do gcloud storage cp -q "gs://$GCS_BUCKET/places/v1/layers_extra/$P*.json.gz" "$RUNNER_TEMP/extra/" 2>/dev/null || true; done
+      - name: ai-fill
+        if: steps.gate.outputs.on == '1'
+        run: python3 scripts/ai_fill.py run --store "$STORE" --extra-dir "$RUNNER_TEMP/extra" --max-places "${{ inputs.max_places || '1500' }}" --budget-min 50 | tee -a "$GITHUB_STEP_SUMMARY"
