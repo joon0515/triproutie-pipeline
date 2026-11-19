@@ -26,7 +26,7 @@ SLOTS = PD.SLOTS
 SCHEMA = 'aifill-1'
 NAME_MAX = 120
 DESC_MAX = 120
-NAME_BATCH = 50                 # 이름 요청 하나에 담는 장소 수(출력이 짧다)
+NAME_BATCH = 100                # 이름 요청 하나에 담는 장소 수(출력이 짧다)
 DESC_BATCH = 10                 # 설명 요청 하나에 담는 장소 수(출력이 길다 — 따로 작게)
 BATCH = NAME_BATCH
 UA = 'TripRoutie-aifill/1.0 (+https://github.com/joon0515/triproutie-pipeline)'
@@ -45,9 +45,9 @@ def today():
 # 한도는 공식 문서로 확인한 값만 기본값으로 둔다(docs/PROVIDERS.md). 문서에 숫자가 없는 것은 보수적인 값 + 환경 변수로 바꿀 수 있게 한다.
 # AI_<이름>_RPM / AI_<이름>_RPD / AI_<이름>_MODEL 로 덮어쓴다.
 SPEC = {
-    'gemini':   {'keys': ('GEMINI_API_KEY',), 'model': 'gemini-3.1-flash-lite', 'rpm': 30, 'rpd': 1500, 'kind': 'gemini',
+    'gemini':   {'keys': ('GEMINI_API_KEY',), 'model': 'gemini-3.1-flash-lite', 'rpm': 12, 'rpd': 500, 'run': 60, 'kind': 'gemini',   # AI Studio 실측(무료, 11/20): RPM 15·TPM 250K·RPD 500 — RPM 은 12 로 여유
                  'url': 'https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent'},
-    'gemini_b': {'keys': ('GEMINI_API_KEY',), 'model': 'gemini-3.5-flash', 'rpm': 30, 'rpd': 500, 'kind': 'gemini',   # 같은 키·다른 모델(모델별 한도 따로) — 앞 모델이 503/429 일 때 이어받음. (2.5-flash-lite 는 새 키에 404 라 3.5-flash)
+    'gemini_b': {'keys': ('GEMINI_API_KEY',), 'model': 'gemini-3.6-flash', 'rpm': 4, 'rpd': 20, 'run': 3, 'kind': 'gemini',   # AI Studio 실측: RPM 5·RPD 20. 같은 키·다른 모델 — 앞 모델 실패 때 이어받음(모델 ID 는 `ai_fill.py models` 로 확인)
                  'url': 'https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent'},
     'cerebras': {'keys': ('CEREBRAS_API_KEY',), 'model': 'gpt-oss-120b', 'rpm': 5, 'rpd': 200, 'kind': 'openai',   # 공식 표: RPM 5(Free Trial)
                  'url': 'https://api.cerebras.ai/v1/chat/completions'},
@@ -87,6 +87,8 @@ class Provider:
         self.model = self.env.get(f'AI_{up}_MODEL') or spec['model']
         self.rpm = int(self.env.get(f'AI_{up}_RPM') or spec['rpm'])
         self.rpd = int(self.env.get(f'AI_{up}_RPD') or spec['rpd'])
+        self.run_cap = int(self.env.get(f'AI_{up}_RUN') or spec.get('run') or self.rpd)   # 한 실행(회차)에서 쓸 요청 수 — 하루 한도를 회차에 고르게
+        self.run_used = 0
         self.next_at, self.day_count, self.day, self.cool_until, self.dead, self.streak = 0.0, 0, today(), 0.0, False, 0
         self.lock = threading.Lock()
 
@@ -101,7 +103,7 @@ class Provider:
 
     def available(self):
         self._roll()
-        return self.enabled and not self.dead and self.day_count < self.rpd and self.clock() >= self.cool_until
+        return self.enabled and not self.dead and self.day_count < self.rpd and self.run_used < self.run_cap and self.clock() >= self.cool_until
 
     def wait_slot(self):
         """분당 한도 — 호출 시각을 60/rpm 초 간격으로 예약한다(여러 스레드가 같이 불러도 분당 rpm 개를 넘지 않음). 기다림은 잠금 밖에서."""
@@ -110,6 +112,7 @@ class Provider:
             at = max(now, self.next_at)
             self.next_at = at + 60.0 / max(1, self.rpm)
             self.day_count += 1
+            self.run_used += 1
         if at > now:
             self.sleep(at - now)
 
@@ -177,7 +180,7 @@ class Router:
 
     def retry_in(self):
         """지금은 못 쓰지만 곧 쓸 수 있는 공급자가 있으면 그때까지 초, 없으면 None(오늘은 끝)."""
-        w = [max(0.0, p.cool_until - self.clock()) for p in self.ps if not p.dead and p.day_count < p.rpd]
+        w = [max(0.0, p.cool_until - self.clock()) for p in self.ps if not p.dead and p.day_count < p.rpd and p.run_used < p.run_cap]
         return min(w) + 1 if w else None
 
     def ask(self, system, user):
@@ -202,8 +205,7 @@ class Router:
                 with p.lock:
                     p.cool_until = self.clock() + e.wait
                     p.streak += 1
-                    if e.daily or p.streak >= 6:   # 연달아 429 — 오늘 한도를 다 쓴 것으로 보고 끈다
-                        p.dead = True
+                    p.dead = True   # 429 면 이 회차는 끝(다음 회차에서 다시)
                 log(f'{p.name}: 429 — 다음 공급자로')
                 continue
             except ProviderError as e:
@@ -353,10 +355,10 @@ class State:
     def __init__(self, store, prefix='processed/ai_fill/'):
         self.store, self.pre = store, prefix
         s = store.get_json(prefix + 'state.json', {}) or {}
-        self.s = {'day': s.get('day', ''), 'count': s.get('count', 0), 'files_done': s.get('files_done', 0), 'shard': s.get('shard', 0), 'total': s.get('total', 0), 'by_provider': s.get('by_provider', {}), 'desc_count': s.get('desc_count', 0)}
+        self.s = {'day': s.get('day', ''), 'count': s.get('count', 0), 'files_done': s.get('files_done', 0), 'shard': s.get('shard', 0), 'total': s.get('total', 0), 'by_provider': s.get('by_provider', {}), 'desc_count': s.get('desc_count', 0), 'req': s.get('req', {})}
         self.done = set(store.get_json(prefix + 'done.json.gz', []) or [])
         if self.s['day'] != today():
-            self.s['day'], self.s['count'], self.s['by_provider'], self.s['desc_count'] = today(), 0, {}, 0
+            self.s['day'], self.s['count'], self.s['by_provider'], self.s['desc_count'], self.s['req'] = today(), 0, {}, 0, {}
 
     def save(self):
         self.store.put_json(self.pre + 'state.json', self.s)
@@ -377,6 +379,8 @@ def run(store, col_files, have_names, have_desc, router, max_places=20000, budge
         rep['stopped'] = 'no-provider'
         log('켜진 공급자 없음 — 아무것도 하지 않음')
         return rep
+    for p in router.ps:   # 오늘 이미 쓴 요청 수를 이어받는다(하루 한도 합산)
+        p.day_count = st.s['req'].get(p.name, 0)
     room = max_places - st.s['count']
     if room <= 0:
         rep['stopped'] = 'daily-cap'
@@ -387,7 +391,7 @@ def run(store, col_files, have_names, have_desc, router, max_places=20000, budge
     pool.sort(key=lambda c: (c['rank'], c['id']))
     pool = pool[:room]
     if desc_max is None:
-        desc_max = _env_int('AI_DESC_MAX', 500)
+        desc_max = _env_int('AI_DESC_MAX', 300)
     desc_room = max(0, desc_max - st.s.get('desc_count', 0))
     npool = [c for c in pool if len(c['have']) < len(SLOTS)]   # 빈 이름 칸이 있는 곳만 이름 요청
     tasks = [('names', npool[i:i + NAME_BATCH]) for i in range(0, len(npool), NAME_BATCH)]
@@ -436,6 +440,8 @@ def run(store, col_files, have_names, have_desc, router, max_places=20000, budge
                 st.done.update(it['id'] for it in items)
             st.s['by_provider'][pname] = st.s['by_provider'].get(pname, 0) + 1
     rep['stopped'] = st_stop
+    for p in router.ps:
+        st.s['req'][p.name] = p.day_count
     rep['rows'] = len(rows)
     rep['by_provider'] = dict(router.used)
     if rows and not dry_run:
@@ -535,7 +541,7 @@ def export_layers(store, out_dir, have_names=None, have_desc=None):
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument('cmd', choices=['run', 'providers', 'export'])
+    ap.add_argument('cmd', choices=['run', 'providers', 'export', 'models'])
     ap.add_argument('--out-dir', default='')
     ap.add_argument('--store', default=os.environ.get('STORE', ''))
     ap.add_argument('--col-dir', default='')
@@ -544,6 +550,19 @@ def main():
     ap.add_argument('--budget-min', type=float, default=55.0)
     ap.add_argument('--dry-run', action='store_true')
     a = ap.parse_args()
+    if a.cmd == 'models':   # Gemini models.list — 모델 ID 확인(이름만 출력)
+        k = os.environ.get('GEMINI_API_KEY')
+        if not k:
+            return 0
+        req = urllib.request.Request('https://generativelanguage.googleapis.com/v1beta/models?pageSize=200', headers={'x-goog-api-key': k, 'User-Agent': UA})
+        try:
+            j = json.loads(urllib.request.urlopen(req, timeout=60).read())
+        except Exception as e:  # noqa: BLE001
+            log(f'models 실패 {type(e).__name__}'); return 0
+        for m in j.get('models', []):
+            if 'generateContent' in (m.get('supportedGenerationMethods') or []) and 'flash' in m.get('name', ''):
+                log('model ' + m['name'].split('/')[-1])
+        return 0
     if a.cmd == 'export':
         _, names, desc = gather_store(Store(a.store), '', [], a.extra_dir)
         r = export_layers(Store(a.store), a.out_dir, names, desc)
