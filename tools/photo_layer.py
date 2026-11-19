@@ -45,6 +45,20 @@ def kto_photos(kto_dir):
     return grid
 
 
+# (11/20 262기) TourAPI firstimage 는 http://tong.visitkorea.or.kr/… 로 오는데 앱(tl_world_extra)은 https 만 싣는다 → 같은 호스트의 https 로 바꾼다
+#  (https 로 같은 파일 200 확인, http 는 301). 공공누리 유형 원문 주소도 함께 둔다.
+KTO_HOSTS = ('tong.visitkorea.or.kr',)
+KOGL_URL = {'KOGL-1': 'https://www.kogl.or.kr/info/licenseType1.do', 'KOGL-3': 'https://www.kogl.or.kr/info/licenseType3.do'}
+
+
+def kto_https(u):
+    u = (u or '').strip()
+    for h in KTO_HOSTS:
+        if u.startswith('http://' + h + '/'):
+            return 'https://' + u[len('http://'):]
+    return u
+
+
 def from_kto(d, grid, i):
     la, lo = d['_lat'][i], d['_lon'][i]
     mine = {nrm(d[k][i]) for k in ('nm', 'ko') if isinstance(d.get(k), list) and isinstance(d[k][i], str)} - {''}
@@ -62,8 +76,11 @@ def from_kto(d, grid, i):
         return None
     p = best[1]
     lic = {'KOGL-1': '공공누리 제1유형(출처표시)', 'KOGL-3': '공공누리 제3유형(출처표시·변경금지)'}[p['license']]
-    v = {'photo_url': p['url'], 'photo_thumb': p.get('thumb') or p['url'], 'photo_credit': f"사진: {p.get('credit') or '한국관광공사'} · {lic}",
-         'photo_license': p['license'], 'photo_author': p.get('credit') or '한국관광공사', 'photo_src': 'tourapi'}
+    url, thumb = kto_https(p['url']), kto_https(p.get('thumb') or p['url'])
+    if not url.startswith('https://'):
+        return None  # (11/20 262기) 앱은 https 만 그린다 — 바꿀 수 없는 주소는 싣지 않는다
+    v = {'photo_url': url, 'photo_thumb': thumb if thumb.startswith('https://') else url, 'photo_credit': f"사진: {p.get('credit') or '한국관광공사'} · {lic}",
+         'photo_license': p['license'], 'photo_license_url': KOGL_URL[p['license']], 'photo_author': p.get('credit') or '한국관광공사', 'photo_src': 'tourapi'}
     if p.get('no_modify') or p['license'] == 'KOGL-3':
         v['no_modify'] = True
     return v

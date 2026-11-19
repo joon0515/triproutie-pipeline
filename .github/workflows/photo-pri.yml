@@ -1,0 +1,44 @@
+# 사진 우선 층(photos-pri·photos-city) — 262기. 인기 도시(sources/priority_cities.json) 일정 후보·도시 대표 사진부터. scripts/photo_pri.py 머리말.
+# 4시간마다 + 수동. 결과는 Storage places/v1/layers_extra/ 에만(publish 가 함께 게시) — 저장소·artifact·로그에 장소 내용을 남기지 않는다(개수만).
+# Unsplash: 저장소 비밀 UNSPLASH_ACCESS_KEY 가 있으면 도시 대표 사진(도시당 검색 1회·90일마다), 없으면 Wikidata P18 → Commons 만. 끄기: 변수 PHOTO_PRI_OFF=1.
+name: photo-pri
+on:
+  schedule:
+    - cron: "23 */4 * * *"
+  workflow_dispatch:
+    inputs:
+      budget:
+        description: "예산(분)"
+        default: "50"
+permissions:
+  contents: read
+  id-token: write
+concurrency:
+  group: photo-pri
+  cancel-in-progress: false
+env:
+  GCS_BUCKET: ${{ vars.GCS_BUCKET || 'trip-mate-0vum9k.firebasestorage.app' }}
+  STORE: gs://${{ vars.GCS_BUCKET || 'trip-mate-0vum9k.firebasestorage.app' }}/collect/v1
+jobs:
+  photos:
+    if: github.repository == 'joon0515/triproutie-pipeline' && github.ref == 'refs/heads/main' && vars.PHOTO_PRI_OFF != '1'
+    runs-on: ubuntu-latest
+    timeout-minutes: 75
+    steps:
+      - uses: actions/checkout@v4
+      - uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ vars.GCP_WIF_PROVIDER || 'projects/222914945328/locations/global/workloadIdentityPools/github-pool/providers/github-provider' }}
+          service_account: ${{ vars.GCP_SA_EMAIL || 'pipeline-uploader@trip-mate-0vum9k.iam.gserviceaccount.com' }}
+      - uses: google-github-actions/setup-gcloud@v2
+      - uses: actions/setup-python@v5
+        with: {python-version: "3.12"}
+      - run: pip install -q pyyaml >/dev/null
+      - name: test (mock, no network)
+        run: set -o pipefail; python3 -W ignore -m unittest tests/test_photo_pri.py 2>&1 | tail -3
+      - name: build
+        env:
+          UNSPLASH_ACCESS_KEY: ${{ secrets.UNSPLASH_ACCESS_KEY }}
+        run: |
+          set -o pipefail
+          python3 scripts/photo_pri.py build --store "$STORE" --bucket "$GCS_BUCKET" --budget-min "${{ inputs.budget || '50' }}" --out "$RUNNER_TEMP/ppri" | tail -60

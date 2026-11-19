@@ -131,3 +131,11 @@ python3 scripts/publish_layers.py --tag t --dir <층 폴더> --bucket b --tools 
 - `rec-<나라>-NN.json.gz`(schema `rec-1`, kind `rec`, 2단 목록) · `names-ovt-<나라>.json.gz`(names-2, CDLA-Permissive-2.0) · `col_ovtadd_<나라>.json.gz`(collect-1, 행마다 `lic`).
 - 만드는 곳 `scripts/rec_index.py` / `.github/workflows/rec-index.yml`(주 1회). 계산식·표시 문구·사용자 평가 전환 규칙은 `docs/RECOMMEND_INDEX.md`.
 - 앱 표시: '트립루티 추천 지수 NN' 칩 + '?' 설명. 다른 서비스 평점처럼 보이게 하지 않는다(별 모양 없음).
+
+## 사진 우선 층(11/20, 262기) — `scripts/photo_pri.py` · `photo-pri.yml`(4시간마다)
+- 왜: 11/19 일정 장소 사진 0.0%. place-desc 의 P18 캐시가 4,250 QID(QLever wikidata 429) · Commons 판정 상태 'cooling' · 순서가 QID 번호 순.
+- 순서: priority_cities 순위 → 도시 상자와 겹치는 세계 타일의 상자 안 행(타일 점수 높은 순, 도시당 3,000). P18 = 주간 덤프 조인 먼저, 없는 우선 QID 만 QLever wikidata(끝점마다 쉼 따로).
+- 판정: Commons SDC(CC0·CC BY·CC BY-SA, 저작자 있는 것만). 판정 캐시 `processed/photos/commons.json.gz` 는 place_names 가 같이 읽는다.
+- 도시 대표 사진 `photos-city-1`(행 `city:<key>`): Unsplash 공식 API(비밀 UNSPLASH_ACCESS_KEY 있을 때, 핫링크·download_location 1회·작가+Unsplash 표기·utm) → 없으면 도시 Wikidata 항목 P18(상자 안 좌표만).
+- TourAPI 사진(tools/photo_layer.py): `http://tong.visitkorea.or.kr` → https(앱은 https 만 그림) + 공공누리 유형 원문 주소.
+- 결과 = `places/v1/layers_extra/photos-pri-NN.json.gz`·`photos-city-1.json.gz` (Storage 만, 커밋 0).
