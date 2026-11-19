@@ -10,6 +10,9 @@ name: commons-dump
 on:
   schedule:
     - cron: "41 9 * * 6"     # 토요일 UTC 09:41 — 금요일 wikidata-dump 뒤(새 P18·도시 항목을 판정)
+  workflow_run:              # (270기) wikidata-dump 가 끝나면 이어서(새 P18·도시 항목 판정). 판정할 것이 없으면 plan 이 any=false
+    workflows: [wikidata-dump]
+    types: [completed]
   workflow_dispatch:
     inputs: {}
 permissions:

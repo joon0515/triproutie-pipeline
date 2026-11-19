@@ -5,6 +5,9 @@ name: photo-pri
 on:
   schedule:
     - cron: "23 */4 * * *"
+  workflow_run:              # (270기) commons-dump 판정이 끝나면 바로 층을 다시 만든다(도시 사진·해외 장소)
+    workflows: [commons-dump]
+    types: [completed]
   workflow_dispatch:
     inputs:
       budget:
