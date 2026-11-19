@@ -447,6 +447,7 @@ def run(store, bucket=None, tiles_dir=None, out=None, budget_min=50.0, http_wd=N
     crow, _ = city_rows(cities, cstate, ccache, None, 0, key=None, clock=clock)  # 판정 뒤 다시(요청 없음)
     store.put_json('processed/photos/cities.json', cstate)
     cdiag = city_diag(cities, cstate, ccache)
+    cdiag['cooling'] = {f'{n}:{k}': {x: y for x, y in (v or {}).items() if x in ('cool_until', 'code', 'ra')} for n, hs in (('wd', st.get('hosts_wd')), ('c', st.get('hosts_c'))) for k, v in list((hs or {}).items())[:3]}
     rows, by_city = pri_rows(prio, cache, pcache, ccache, keys_of)
     out = out or tempfile.mkdtemp(prefix='ppri_', dir=os.environ.get('RUNNER_TEMP') or None)
     os.makedirs(out, exist_ok=True)

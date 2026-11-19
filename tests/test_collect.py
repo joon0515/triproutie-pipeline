@@ -359,6 +359,25 @@ class BadInput(unittest.TestCase):
         self.assertIsNone(r['err'], r); self.assertTrue(r['counts'])
         self.assertEqual(r['skips'], 1); self.assertNotIn('skipped_sites', r['counts'])
 
+    def test_429_retry_after_honored_not_forced_to_a_day(self):  # 263기: QLever 429 가 짧은 Retry-After 를 줘도 하루씩 막히던 것(사진 0%)
+        import datetime
+        class H(Exception):
+            pass
+
+        def mk(code, ra):
+            def w(url, headers):
+                if url.endswith('/robots.txt'):
+                    raise urllib.error.HTTPError(url, 404, 'x', {}, None)
+                raise urllib.error.HTTPError(url, code, 'x', {'Retry-After': ra} if ra else {}, None)
+            return w
+        for code, ra, lo, hi in ((429, '120', 100, 140), (429, '5', 55, 70), (429, None, 80000, 90000), (429, '999999', 80000, 90000), (403, None, 86400 * 3, 86400 * 400)):
+            hosts = {}
+            h = K.Http(src(daily_limit=50), {}, hosts, opener=mk(code, ra), sleep=lambda s: None)
+            with self.assertRaises(K.Blocked):
+                h.get('https://q.example/x')
+            left = (datetime.datetime.fromisoformat(hosts['q.example']['cool_until']) - K.now()).total_seconds()
+            self.assertTrue(lo <= left <= hi, (code, ra, left))
+
     def test_city_rank(self):
         self.assertEqual(K.city_rank(33.45, 126.55), 1)        # 제주
         self.assertEqual(K.city_rank(34.69, 135.50), 2)        # 오사카
