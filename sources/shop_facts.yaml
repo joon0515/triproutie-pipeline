@@ -1,0 +1,19 @@
+# 쇼핑 사실 파일(256기, 2026-11-20) — 브랜드·매장 '공식' 사이트에서 사람이 직접 읽은 공개 사실만. 문장은 앱이 우리 말로 만든다(이 파일에는 숫자·참거짓만).
+# 규칙: url = 읽은 공식 쪽, checked = 읽은 날, robots = 그날 robots.txt 확인 결과. 셋 중 하나라도 없으면 shop_index.py 가 버린다.
+#       다른 사이트(블로그·여행 매체·리뷰 사이트)의 문장·목록은 옮기지 않는다. 바뀔 수 있는 조건이라 앱은 '기준일'을 같이 보인다.
+#       match: names(브랜드 이름 앞부분, 여러 언어) · qid(있으면) · cc(나라) · near([위도, 경도, 반경 m] — 특정 매장 하나일 때)
+facts:
+  - id: donki_taxfree
+    match: {cc: JP, names: ["Don Quijote", "ドン・キホーテ", "ドンキホーテ", "돈키호테", "唐吉訶德", "唐吉诃德", "MEGAドン・キホーテ", "MEGA Don Quijote"]}
+    taxfree: {min: 5000, cur: JPY, tax: excl, passport: true, same_day_same_store: true}
+    url: https://donki.com/en/tax_free
+    checked: 2026-11-20
+    robots: "donki.com robots.txt 에 일반 크롤러 금지 없음(특정 봇만 금지) — 2026-11-20"
+    note: "일본 면세 제도는 2026-11-01 부터 출국 때 세관 확인 뒤 환급 방식(생성기 trip_gen_v2 shopRefund 와 같은 사실). 매장 조건은 위 쪽 기준."
+  - id: starbucks_pike_place
+    match: {cc: US, names: ["Starbucks", "Original Starbucks"], near: [47.6097, -122.3422, 150]}
+    first_year: 1971
+    url: https://about.starbucks.com/history/our-original-store/
+    checked: 2026-11-20
+    robots: "about.starbucks.com robots.txt 금지 줄 없음 — 2026-11-20"
+    note: "공식 쪽: 1971년 4월 Pike Place Market 에서 처음 문을 엶."

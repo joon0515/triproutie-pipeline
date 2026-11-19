@@ -6,11 +6,14 @@ W="$RUNNER_TEMP/tourapi"; S="tourapi/state.json"; G="gs://$GCS_BUCKET"
 mkdir -p "$W/store" "$W/layers"
 cp "$S" "$W/state_before.json" 2>/dev/null || echo '{}' > "$W/state_before.json"
 gcloud storage cp -q "$G/tourapi/v1/store/area_*.json" "$W/store/" >/dev/null 2>&1 || echo "store: 처음 실행(누적본 없음)"
+gcloud storage cp -q "$G/tourapi/v1/store/festivals.json" "$W/store/" >/dev/null 2>&1 || echo "행사: 처음(앞 파일 없음)"
 python3 scripts/tourapi_daily.py --state "$S" --store "$W/store" --layers "$W/layers" --agg "$W/agg_tourapi.json"
 RC=$?
 UP=0
 if ls "$W"/store/area_*.json >/dev/null 2>&1; then
   gcloud storage cp -q "$W"/store/area_*.json "$G/tourapi/v1/store/" >/dev/null 2>&1 || UP=1
+  [ -e "$W/store/festivals.json" ] && { gcloud storage cp -q "$W/store/festivals.json" "$G/tourapi/v1/store/" >/dev/null 2>&1 || UP=1; }
+  [ -e "$W/layers/events_kto.json.gz" ] && { gcloud storage cp -q "$W/layers/events_kto.json.gz" "$G/places/v1/layers_extra/" >/dev/null 2>&1 || UP=1; }
   [ $UP = 0 ] && { gcloud storage cp -q "$W"/layers/kto_*.json.gz "$G/places/v1/layers_extra/" >/dev/null 2>&1 || UP=1; }
   [ $UP = 0 ] && { gcloud storage cp -q "$W/agg_tourapi.json" "$G/tourapi/v1/agg_tourapi.json" >/dev/null 2>&1 || UP=1; }
 fi

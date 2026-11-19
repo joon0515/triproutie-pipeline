@@ -47,6 +47,18 @@ def collect(store, srcs, gaz, cities, opener=None, sleep=time.sleep, budget_s=15
     return got
 
 
+def brand_snapshot(store, pat, keep=400, day=None):
+    """(256기) 나라별 브랜드 언급 누적 수를 날짜별로 쌓는다(brand_hist.json) → shop_index.py 가 30일 증가율(트렌드)을 낸다. 숫자만."""
+    snap = {cc: t['all']['brand_n'] for cc, t in (pat.get('groups') or {}).get('cc', {}).items()
+            if isinstance(t.get('all'), dict) and t['all'].get('brand_n')}
+    h = store.get_json('brand_hist.json', {}) or {}
+    h[day or pat.get('built') or today()] = snap
+    for d in sorted(h)[:-keep]:
+        h.pop(d)
+    store.put_json('brand_hist.json', h)
+    return h
+
+
 def build(store, srcs, got, min_n=T.MIN_N, log=print):
     by_id, outs = {s['id']: s for s in srcs}, {}
     for cls in CLASSES:
@@ -56,6 +68,8 @@ def build(store, srcs, got, min_n=T.MIN_N, log=print):
                           {i: {'docs': len(got[i]), 'days': sum(len(s['days']) for s in got[i])} for i in ids})
         patch = T.to_model_patch(pat, min_n)
         store.put_json(f'patterns.{cls}.json', pat)
+        if cls == 'clean':
+            brand_snapshot(store, pat)
         store.put_json('itinerary_model_patch.json' if cls == 'clean' else f'itinerary_model_patch.{cls}.json', patch)
         outs[cls] = (pat, patch)
         log(f"## {cls}: 글 {len(samples)}편 · 덧댈 칸 — 전체 {len(patch['global'])} · 나라 {len(patch['regions'])} · 도시 {len(patch['cities'])} (표본 {min_n}개 이상만)")
@@ -82,7 +96,7 @@ def main():
             gaz.load(p)
         except (OSError, ValueError):
             pass
-    print(f'장소 자료 이름 {len(gaz.m)}개')
+    print(f'장소 자료 이름 {len(gaz.m)}개 · 브랜드 이름 {len(gaz.b)}개')
     srcs = [s for s in S.load_sources() if not args.only or s['id'] == args.only]
     store = Store(args.store)
     build(store, srcs, collect(store, srcs, gaz, Cities()), args.min_n)
