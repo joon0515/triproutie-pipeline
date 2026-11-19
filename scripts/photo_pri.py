@@ -103,6 +103,14 @@ def tile_box(t):
     if isinstance(c, list) and len(c) == 2 and all(isinstance(x, (int, float)) for x in c):
         p = H3_PAD.get(t.get('res'), 1.2)
         return [c[1] - p, c[0] - p, c[1] + p, c[0] + p]
+    cells = t.get('h3r5')  # (263기) 실제 지역 목록(part_manifest.py)의 타일 항목에는 bbox·center 가 없고 h3r5(해상도 5 셀 id 목록)만 있다 → 셀 가운데 ± 0.2도(셀 변 약 9km)
+    if isinstance(cells, list) and cells and all(isinstance(x, str) for x in cells):
+        try:
+            import h3
+            pts = [h3.cell_to_latlng(x) for x in cells]
+        except Exception:
+            return None
+        return [min(p[1] for p in pts) - 0.2, min(p[0] for p in pts) - 0.2, max(p[1] for p in pts) + 0.2, max(p[0] for p in pts) + 0.2]
     return None
 
 

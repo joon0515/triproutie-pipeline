@@ -166,6 +166,13 @@ class PhotoPri(unittest.TestCase):
         self.assertEqual(PP.tile_box({'center': [34.7, 135.5], 'res': 5}), [135.3, 34.5, 135.7, 34.900000000000006])
         self.assertIsNone(PP.tile_box({}))
 
+    def test_tile_box_from_real_manifest_entry(self):  # 263기: 실제 항목 모양 {file, tile, cc, h3r5:[셀 id], n, size, sha256} — bbox·center 없음 → 사진 0% 의 원인
+        import h3
+        cell = h3.latlng_to_cell(34.69, 135.50, 5)
+        bb = PP.tile_box({'file': 'w-x_JP.json.gz', 'cc': 'JP', 'h3r5': [cell], 'n': 5})
+        self.assertTrue(bb and PP.overlap(bb, [135.49, 34.68, 135.51, 34.70]))
+        self.assertIsNone(PP.tile_box({'file': 'w-x', 'h3r5': []}))
+
     def test_no_banned_hosts(self):
         src = open(os.path.join(ROOT, 'scripts', 'photo_pri.py'), encoding='utf-8').read().lower()
         for h in ('instagram', 'naver', 'kakao', 'google.', 'tabelog', 'tripadvisor', 'youtube', 'tiktok'):

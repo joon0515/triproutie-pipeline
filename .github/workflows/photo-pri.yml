@@ -33,7 +33,7 @@ jobs:
       - uses: google-github-actions/setup-gcloud@v2
       - uses: actions/setup-python@v5
         with: {python-version: "3.12"}
-      - run: pip install -q pyyaml >/dev/null
+      - run: pip install -q pyyaml h3 >/dev/null
       - name: test (mock, no network)
         run: set -o pipefail; python3 -W ignore -m unittest tests/test_photo_pri.py 2>&1 | tail -3
       - name: build
