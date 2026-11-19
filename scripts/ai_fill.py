@@ -26,7 +26,7 @@ SLOTS = PD.SLOTS
 SCHEMA = 'aifill-1'
 NAME_MAX = 120
 DESC_MAX = 120
-BATCH = 15                      # 한 요청에 담는 장소 수
+BATCH = 10                      # 한 요청에 담는 장소 수
 UA = 'TripRoutie-aifill/1.0 (+https://github.com/joon0515/triproutie-pipeline)'
 BANNED = re.compile(PD.BANNED_WORDS.pattern + r'|추측|아마|maybe|perhaps|probably', re.I)
 
@@ -131,7 +131,7 @@ class Provider:
             raise ProviderError('응답 모양')
 
 
-def http_post(url, headers, body, timeout=60):
+def http_post(url, headers, body, timeout=180):
     """실제 호출. 오류 본문은 로그에 쓰지 않는다(키·내용 보호) — 코드만 올린다."""
     req = urllib.request.Request(url, data=json.dumps(body).encode(), method='POST',
                                  headers={'Content-Type': 'application/json', 'User-Agent': UA, **headers})
@@ -154,8 +154,8 @@ def http_post(url, headers, body, timeout=60):
         except (ValueError, AttributeError, OSError):
             pass
         raise ProviderError(f'http {e.code}{why}')
-    except (urllib.error.URLError, TimeoutError, ValueError, OSError):
-        raise ProviderError('network')
+    except (urllib.error.URLError, TimeoutError, ValueError, OSError) as e:
+        raise ProviderError('network ' + type(getattr(e, 'reason', e)).__name__)
 
 
 class Router:
@@ -186,7 +186,7 @@ class Router:
                 continue
             except ProviderError as e:
                 log(f'{p.name}: 실패({e}) — 다음 공급자로')
-                p.cool_until = self.clock() + 300
+                p.cool_until = self.clock() + (30 if str(e).startswith('network') else 300)
                 if str(e).startswith('auth'):
                     p.dead = True
                 continue
