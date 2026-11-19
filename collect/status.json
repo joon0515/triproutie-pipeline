@@ -49,7 +49,7 @@
   "official_sites": {
    "failing": 1,
    "ok_today": 5,
-   "rows_last": 21,
+   "rows_last": 7,
    "shards": 6
   },
   "open_dataset": {
@@ -60,9 +60,9 @@
   },
   "overture_places": {
    "failing": 0,
-   "ok_today": 2,
-   "rows_last": 33133306,
-   "shards": 21
+   "ok_today": 3,
+   "rows_last": 33231205,
+   "shards": 22
   },
   "taiwan_tourism": {
    "failing": 0,
@@ -83,5 +83,5 @@
    "shards": 10
   }
  },
- "updated": "2026-11-19T02:06Z"
+ "updated": "2026-11-19T02:23Z"
 }
