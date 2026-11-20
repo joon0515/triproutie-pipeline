@@ -925,7 +925,7 @@ def main():
     key = os.environ.get('UNSPLASH_ACCESS_KEY') or None
     if key and any(forbidden(u) for u in (UNSPLASH_API,)):
         key = None
-    kr_key = os.environ.get('DATA_GO_KR_KEY') or None
+    kr_key = (os.environ.get('DATA_GO_KR_KEY') or '').strip() or None  # (270기) 원인: 비밀 값 끝 줄바꿈 → %0A 로 붙어 403 SERVICE_KEY_IS_NOT_REGISTERED. tourapi_daily 와 같이 strip
     if kr_key and forbidden(KR_LOC_API):
         kr_key = None
     run(Store(a.store), a.bucket, a.tiles, a.out, a.budget_min, key=key, dry_run=a.dry_run, src=src, kr_key=kr_key)
