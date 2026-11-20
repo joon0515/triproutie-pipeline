@@ -1,0 +1,23 @@
+# 공용 준비 단계(275기): GCP 로그인(Workload Identity, 키 파일 없음) + gcloud + Python.
+# 워크플로 25개 중 21개에 같은 9줄이 복사돼 있던 것을 한곳으로 모았다. 동작은 옮기기 전과 같다(같은 액션·같은 판·같은 기본값).
+# composite 는 vars 를 읽지 못하므로 부르는 쪽이 with 로 넘긴다. 비어 있으면 아래 기본값(옮기기 전 워크플로의 || 기본값과 같음).
+# 쓰는 법(checkout 다음):
+#   - uses: ./.github/actions/gcp-setup
+#     with: {wif: "${{ vars.GCP_WIF_PROVIDER }}", sa: "${{ vars.GCP_SA_EMAIL }}"}
+name: gcp-setup
+description: GCP OIDC 로그인 + gcloud + Python 3.12
+inputs:
+  wif: {description: Workload Identity provider(vars.GCP_WIF_PROVIDER), required: false, default: ""}
+  sa: {description: 서비스 계정(vars.GCP_SA_EMAIL), required: false, default: ""}
+  python: {description: "Python 판. 'none' 이면 설치하지 않음", required: false, default: "3.12"}
+runs:
+  using: composite
+  steps:
+    - uses: google-github-actions/auth@v2
+      with:
+        workload_identity_provider: ${{ inputs.wif || 'projects/222914945328/locations/global/workloadIdentityPools/github-pool/providers/github-provider' }}
+        service_account: ${{ inputs.sa || 'pipeline-uploader@trip-mate-0vum9k.iam.gserviceaccount.com' }}
+    - uses: google-github-actions/setup-gcloud@v2
+    - if: inputs.python != 'none'
+      uses: actions/setup-python@v5
+      with: {python-version: "${{ inputs.python }}"}

@@ -37,13 +37,10 @@ jobs:
       matrix: ${{ steps.p.outputs.matrix }}
     steps:
       - uses: actions/checkout@v4
-      - uses: google-github-actions/auth@v2
+      - uses: ./.github/actions/gcp-setup
         with:
-          workload_identity_provider: ${{ vars.GCP_WIF_PROVIDER || 'projects/222914945328/locations/global/workloadIdentityPools/github-pool/providers/github-provider' }}
-          service_account: ${{ vars.GCP_SA_EMAIL || 'pipeline-uploader@trip-mate-0vum9k.iam.gserviceaccount.com' }}
-      - uses: google-github-actions/setup-gcloud@v2
-      - uses: actions/setup-python@v5
-        with: {python-version: "3.12"}
+          wif: "${{ vars.GCP_WIF_PROVIDER }}"
+          sa: "${{ vars.GCP_SA_EMAIL }}"
       - run: pip install -q pyyaml numpy >/dev/null
       - name: test (mock, no network)
         run: set -o pipefail; python3 -W ignore -m unittest tests/test_wd_dump.py tests/test_commons_dump.py 2>&1 | tail -3
@@ -60,13 +57,10 @@ jobs:
       matrix: ${{ fromJson(needs.plan.outputs.matrix) }}
     steps:
       - uses: actions/checkout@v4
-      - uses: google-github-actions/auth@v2
+      - uses: ./.github/actions/gcp-setup
         with:
-          workload_identity_provider: ${{ vars.GCP_WIF_PROVIDER || 'projects/222914945328/locations/global/workloadIdentityPools/github-pool/providers/github-provider' }}
-          service_account: ${{ vars.GCP_SA_EMAIL || 'pipeline-uploader@trip-mate-0vum9k.iam.gserviceaccount.com' }}
-      - uses: google-github-actions/setup-gcloud@v2
-      - uses: actions/setup-python@v5
-        with: {python-version: "3.12"}
+          wif: "${{ vars.GCP_WIF_PROVIDER }}"
+          sa: "${{ vars.GCP_SA_EMAIL }}"
       - run: pip install -q pyyaml numpy >/dev/null
       - name: scan ${{ matrix.job }}/${{ env.JOBS }}
         env:
@@ -79,13 +73,10 @@ jobs:
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
-      - uses: google-github-actions/auth@v2
+      - uses: ./.github/actions/gcp-setup
         with:
-          workload_identity_provider: ${{ vars.GCP_WIF_PROVIDER || 'projects/222914945328/locations/global/workloadIdentityPools/github-pool/providers/github-provider' }}
-          service_account: ${{ vars.GCP_SA_EMAIL || 'pipeline-uploader@trip-mate-0vum9k.iam.gserviceaccount.com' }}
-      - uses: google-github-actions/setup-gcloud@v2
-      - uses: actions/setup-python@v5
-        with: {python-version: "3.12"}
+          wif: "${{ vars.GCP_WIF_PROVIDER }}"
+          sa: "${{ vars.GCP_SA_EMAIL }}"
       - run: pip install -q pyyaml >/dev/null
       - name: merge
         env:
