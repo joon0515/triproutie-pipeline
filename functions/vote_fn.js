@@ -117,7 +117,14 @@ function baseHeaders(res) {
 const IP_LIMIT = Object.freeze({ windowMs: 10 * 60e3, casts: 60, newPerLink: 25, memMax: 5000 });
 function clientKey(req) {
   const xff = String((req.get && req.get('x-forwarded-for')) || '').split(',').map((x) => x.trim()).filter(Boolean);
-  const ip = xff.length ? xff[xff.length - 1] : String(req.ip || '');
+  let ip = xff.length ? xff[xff.length - 1] : String(req.ip || '');
+  // SCAN1120: IPv6 는 한 사람이 /64 안에서 주소를 무한히 바꿀 수 있다 → 앞 4묶음(/64)으로 묶어 센다.
+  if (ip.includes(':') && !/^::ffff:\d/.test(ip)) {
+    const [head, tail = ''] = ip.split('::');
+    const h = head ? head.split(':') : [], t = tail ? tail.split(':') : [];
+    const full = [...h, ...Array(Math.max(0, 8 - h.length - t.length)).fill('0'), ...t];
+    ip = full.slice(0, 4).map((x) => x.toLowerCase().replace(/^0+(?=.)/, '')).join(':') + '::/64';
+  }
   return require('crypto').createHash('sha256').update('tlv276|' + ip).digest('base64').slice(0, 16);
 }
 function makeIpGate(now = Date.now, L = IP_LIMIT) {
