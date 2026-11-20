@@ -410,7 +410,3 @@ def place(src, pid, nm, lat, lon, cat=None, names=None, hours=None, url=None, ad
         r.update(extra)
     r['lic'], r['src'] = src.get('license'), src['id']
     return r
-
-
-def gz_json(obj):
-    return gzip.compress(json.dumps(obj, ensure_ascii=False, separators=(',', ':')).encode(), 6)

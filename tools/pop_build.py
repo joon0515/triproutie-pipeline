@@ -123,15 +123,6 @@ def merge_score(s, pop):
     return min(100, WIKI_BASE + round(0.24 * pop))
 
 
-def alt_score(s, cf, src, saves=0):
-    """위키 문서가 없는 곳(식당·카페·가게)의 대체 점수: 팩 점수 + 출처가 여럿이면 가점 + 신뢰도 가점 + 우리 앱에서 담은 수(place_stats).
-    src 비트: 1 meta · 2 Microsoft · 4 Foursquare(Overture 경유) · 8 AllThePlaces · 128 Foursquare OS Places 직접.
-    위키가 있는 명소(평균 s2 가 60~90)보다 위로 올라가지 않게 85 에서 자른다. 담은 수가 생기면 그것이 가장 큰 신호가 된다."""
-    n_src = bin(src & 0xff).count('1')
-    v = s * 0.5 + (6 if n_src >= 2 else 0) + (3 if (src & 132) else 0) + (3 if cf >= 95 else 0) + min(40, 10 * math.log2(1 + max(0, saves)))
-    return max(0, min(85, round(v)))
-
-
 def months():
     """최근 12개의 꽉 찬 달: (시작 YYYYMM0100, 끝 YYYYMMDD00)."""
     t = time.gmtime()

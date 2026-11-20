@@ -525,6 +525,11 @@ def load_kto_cards(bucket, wd):
     return cards
 
 
+def write_gz_doc(path, doc):
+    with open(path, 'wb') as f:
+        f.write(gzip.compress(json.dumps(doc, ensure_ascii=False, separators=(',', ':')).encode()))
+
+
 def pri_doc(rows, part):
     return {'schema': 'photos-1', 'region': 'priority', 'part': part, 'license': 'mixed — 행마다 photo_license(CC0·CC BY·CC BY-SA)',
             'attribution': '사진: 위키미디어 공용(사진마다 저작자·라이선스) · 사진 고르기: Wikidata P18 (CC0)', 'built': today(), 'rows': rows}
@@ -533,6 +538,27 @@ def pri_doc(rows, part):
 def city_doc(rows):
     return {'schema': 'photos-1', 'region': 'cities', 'license': 'mixed — 행마다 photo_license(Unsplash License · CC0 · CC BY · CC BY-SA)',
             'attribution': '도시 사진: Unsplash(작가·Unsplash 표기, 핫링크) 또는 위키미디어 공용(저작자·라이선스)', 'built': today(), 'rows': rows}
+
+
+def pov_rows_missing(pov_doc, rows):
+    """(270기) Commons 덤프의 촬영 좌표·묘사 대상으로 고른 사진(자유 라이선스+저작자, 50m) — P18·TourAPI·이름 맞춤이 없는 행만."""
+    out = {}
+    for rk, v in sorted(((pov_doc or {}).get('rows') or {}).items()):
+        r = PN.photo_row(v[2], v[3]) if isinstance(v, list) and len(v) > 3 else None
+        if r and rk not in rows:
+            out[rk] = dict(r, match='pov_' + str(v[0]))
+    return out
+
+
+def name_geo_rows_missing(geo_hits, ccache, rows):
+    """(270기 2차) 이름+좌표로 맞춘 덤프 항목의 P18 — 판정이 자유+저작자인 것만, 아직 사진이 없는 행만."""
+    out = {}
+    for rk, (q, u) in sorted(geo_hits.items()):
+        cc = ccache.get(u)
+        v = PN.photo_row(u, cc[1]) if cc else None
+        if v and rk not in rows:
+            out[rk] = dict(v, q=q, match='name_geo')
+    return out
 
 
 def run(store, bucket=None, tiles_dir=None, out=None, budget_min=50.0, http_wd=None, http_c=None, key=None, opener=None, clock=time.time, dry_run=False, src=None, kto_cards=None, kr_key=None):
@@ -580,7 +606,6 @@ def run(store, bucket=None, tiles_dir=None, out=None, budget_min=50.0, http_wd=N
         geo = (store.get_json('processed/photos/geo_items.json.gz', None) or {}).get('cities') or {}
         qnames = {g[0]: g[5] for items in geo.values() for g in items if isinstance(g, list) and len(g) >= 6}  # (270기) QID → 라벨·별칭(ja·th·fr·en 등 20개 언어)
         qsl = {g[0]: g[3] for items in geo.values() for g in items if isinstance(g, list) and len(g) >= 6}  # QID → sitelinks
-        pop_rows = {}
         try:
             for c in cities:
                 ts = tiles_for(c['bbox'])
@@ -642,18 +667,10 @@ def run(store, bucket=None, tiles_dir=None, out=None, budget_min=50.0, http_wd=N
             store.put_json('processed/photos/kr_loc4.json.gz', lcache)
         for rk, v in kr_got.items():
             rows.setdefault(rk, v)
-    pov_n = 0
-    for rk, v in sorted(((store.get_json('processed/photos/pov.json.gz', None) or {}).get('rows') or {}).items()):
-        # (270기) Commons 덤프의 촬영 좌표·묘사 대상으로 고른 사진(자유 라이선스+저작자, 50m) — P18·TourAPI·이름 맞춤이 없는 행만
-        r = PN.photo_row(v[2], v[3]) if isinstance(v, list) and len(v) > 3 else None
-        if r and rk not in rows:
-            rows[rk] = dict(r, match='pov_' + str(v[0])); pov_n += 1
-    geo_n = 0
-    for rk, (q, u) in sorted(geo_hits.items()):  # (270기 2차) 이름+좌표로 맞춘 덤프 항목의 P18 — 판정이 자유+저작자인 것만
-        cc = ccache.get(u)
-        v = PN.photo_row(u, cc[1]) if cc else None
-        if v and rk not in rows:
-            rows[rk] = dict(v, q=q, match='name_geo'); geo_n += 1
+    pov = pov_rows_missing(store.get_json('processed/photos/pov.json.gz', None), rows)
+    rows.update(pov)
+    name_geo = name_geo_rows_missing(geo_hits, ccache, rows)
+    rows.update(name_geo)
     out = out or tempfile.mkdtemp(prefix='ppri_', dir=os.environ.get('RUNNER_TEMP') or None)
     os.makedirs(out, exist_ok=True)
     for f in glob.glob(os.path.join(out, 'photos-pri-*.json.gz')) + glob.glob(os.path.join(out, 'photos-city-*.json.gz')):
@@ -661,19 +678,14 @@ def run(store, bucket=None, tiles_dir=None, out=None, budget_min=50.0, http_wd=N
     made = {}
     if rows:
         made.update(PN.write_sharded(out, 'photos-pri', rows, pri_doc, n=PRI_SHARDS))
-    if pop_rows:  # (270기) 위키 연결이 없던 명소(한국 fsq·해시 행 등)에 덤프 이름+좌표 연결로 인기 점수 — popularity-1 층(앱 정렬)
-        p = os.path.join(out, 'pop-geo-1.json.gz')
-        with open(p, 'wb') as f:
-            f.write(gzip.compress(json.dumps(pop_doc(pop_rows), ensure_ascii=False, separators=(',', ':')).encode()))
-        made['pop-geo-1.json.gz'] = len(pop_rows)
-    if crow:
-        p = os.path.join(out, 'photos-city-1.json.gz')
-        with open(p, 'wb') as f:
-            f.write(gzip.compress(json.dumps(city_doc(crow), ensure_ascii=False, separators=(',', ':')).encode()))
-        made['photos-city-1.json.gz'] = len(crow)
+    # (270기) pop-geo-1 = 위키 연결이 없던 명소(한국 fsq·해시 행 등)에 덤프 이름+좌표 연결로 인기 점수 — popularity-1 층(앱 정렬)
+    for name, make_doc, layer_rows in (('pop-geo-1.json.gz', pop_doc, pop_rows), ('photos-city-1.json.gz', city_doc, crow)):
+        if layer_rows:
+            write_gz_doc(os.path.join(out, name), make_doc(layer_rows))
+            made[name] = len(layer_rows)
     rep = {'p18_asked': p_asked, 'p18_left': len(need) - p_asked, 'p18_stop': p_stop, 'commons_asked': asked, 'commons_left': len(todo) - asked,
            'commons_stop': stop, 'rows': len(rows), 'cities': len(crow), 'unsplash': sum(1 for v in crow.values() if v.get('photo_src') == 'unsplash'),
-           'by_city': by_city, 'city_diag': cdiag, 'kto': {k: list(v) for k, v in kto_stat.items()}, 'tile_cov': tile_cov(city_ids, rows), 'geo_matched': len(geo_hits), 'geo_rows': geo_n, 'pov_rows': pov_n, 'sight_cov': tile_cov(sight_ids, rows),
+           'by_city': by_city, 'city_diag': cdiag, 'kto': {k: list(v) for k, v in kto_stat.items()}, 'tile_cov': tile_cov(city_ids, rows), 'geo_matched': len(geo_hits), 'geo_rows': len(name_geo), 'pov_rows': len(pov), 'sight_cov': tile_cov(sight_ids, rows),
            'pop_geo': len(pop_rows), 'kr_loc': {'asked': kr_asked, 'rows': len(kr_got), 'why': kr_why}, 'miss': miss_diag(sight_ids, rows, targets, geo)}
     st['last'] = dict(rep, at=datetime.datetime.now(datetime.timezone.utc).isoformat())
     store.put_json('processed/photos/state.json', st)
