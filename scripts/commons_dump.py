@@ -26,6 +26,8 @@ FILEPATH = WD.FILEPATH
 TITLE_RE = re.compile(rb'"title": ?"File:((?:[^"\\]|\\.)*)"')
 WANT = set()
 REFRESH = 90
+POV_M = 50.0
+TGRID = {}       # (270기) 촬영 좌표로 사진을 찾을 장소 격자 — photo_pri 가 남긴 processed/photos/targets.json.gz
 
 
 def log(m):
@@ -57,6 +59,64 @@ def sdc(ent):
     return e
 
 
+def set_targets(cities):
+    """targets.json.gz 의 cities → 격자(0.001도 칸). 각 항목 (행 id, 위도, 경도, 정규화 이름 set, QID|None)."""
+    TGRID.clear()
+    for items in (cities or {}).values():
+        for t in items or []:
+            if isinstance(t, list) and len(t) >= 5:
+                TGRID.setdefault((int(t[1] * 1000), int(t[2] * 1000)), []).append((t[0], t[1], t[2], set(t[3] or ()), t[4]))
+
+
+def _norm(x):
+    import unicodedata
+    return re.sub(r'[\s\W_]+', '', unicodedata.normalize('NFKC', x or '').lower())
+
+
+def name_hit(names, texts):
+    """장소 이름(정규화)이 파일 이름·설명 글에 들어 있나. 영문·숫자만인 이름은 4글자, 그 밖(한자·가나 등)은 3글자 이상만(흔한 짧은 말 오탐 방지)."""
+    for n in names:
+        if len(n) >= (4 if n.isascii() else 3) and any(n in t for t in texts):
+            return True
+    return False
+
+
+def pov_hits(ent, title):
+    """mediainfo 항목 → [(행 id, 순위 0=묘사 대상 QID 일치 · 1=이름 일치, 거리 m)] — 촬영 좌표(P1259)·대상 좌표(P625) 50m 이내만."""
+    import math
+    st = ent.get('statements') or {}
+    pts = []
+    for pr in ('P1259', 'P625'):
+        for c in st.get(pr) or []:
+            v = ((c.get('mainsnak') or {}).get('datavalue') or {}).get('value')
+            if isinstance(v, dict) and isinstance(v.get('latitude'), (int, float)) and isinstance(v.get('longitude'), (int, float)):
+                pts.append((v['latitude'], v['longitude']))
+    if not pts:
+        return []
+    dep = {((c.get('mainsnak') or {}).get('datavalue') or {}).get('value', {}).get('id') for c in st.get('P180') or []} - {None}
+    texts = None
+    out = {}
+    for la, lo in pts:
+        cy, cx = int(la * 1000), int(lo * 1000)
+        for dy in (-1, 0, 1):
+            for dx in (-1, 0, 1):
+                for rid, tla, tlo, names, q in TGRID.get((cy + dy, cx + dx), ()):
+                    dm = 6371000.0 * math.hypot(math.radians(lo - tlo) * math.cos(math.radians(la)), math.radians(la - tla))
+                    if dm > POV_M:
+                        continue
+                    if q and q in dep:
+                        rank = 0
+                    else:
+                        if texts is None:
+                            texts = [_norm(title.rsplit('.', 1)[0])] + [_norm(v.get('value')) for v in (ent.get('labels') or {}).values() if isinstance(v, dict)]
+                        if not name_hit(names, texts):
+                            continue
+                        rank = 1
+                    if rid not in out or (rank, dm) < out[rid]:
+                        out[rid] = (rank, dm)
+    return [(r, a, b) for r, (a, b) in out.items()]
+
+
 class Sink:
     """풀린 줄 → 원하는 파일만 json 으로 풀어 판정. wd_dump.Lines 와 같은 앞·뒤 조각 규칙."""
 
@@ -75,15 +135,29 @@ class Sink:
         except ValueError:
             self.bad += 1
             return
-        if u not in self.want:
+        geo = TGRID and (b'"P1259"' in ln or b'"P625"' in ln)
+        if u not in self.want and not geo:
             return
         try:
             ent = json.loads(ln.rstrip(b',\r\n '))
         except ValueError:
             self.bad += 1
             return
-        self.out[u] = [self.day, self.judge(sdc(ent))]
-        self.hit += 1
+        j = None
+        if u in self.want:
+            j = self.judge(sdc(ent))
+            self.out[u] = [self.day, j]
+            self.hit += 1
+        if geo:
+            hits = pov_hits(ent, urllib.parse.unquote(u[len(FILEPATH):]))
+            if hits:
+                j = self.judge(sdc(ent)) if j is None else j
+                if j:  # 자유 라이선스 + 저작자인 사진만 후보
+                    pv = self.out.setdefault('_pov', {})
+                    for rid, rank, dm in hits:
+                        v = [rank, round(dm, 1), u, j]
+                        if rid not in pv or (rank, dm, u) < (pv[rid][0], pv[rid][1], pv[rid][2]):
+                            pv[rid] = v
 
     feed = WD.Lines.feed
     tail = WD.Lines.tail
@@ -154,31 +228,46 @@ def main():
     if a.cmd == 'plan':
         m = WD.meta_of(DUMP)
         want, total = want_files(store)
-        if want:
-            store.put_json(f"processed/photos/cdump/{m['date']}/want.json.gz", want)
-        m['want'] = len(want)
+        store.put_json(f"processed/photos/cdump/{m['date']}/want.json.gz", want)
+        tg = store.get_json('processed/photos/targets.json.gz', None) or {}
+        import hashlib
+        th = hashlib.sha1((m['date'] + json.dumps(tg.get('cities') or {}, sort_keys=True)).encode()).hexdigest()[:16] if tg.get('cities') else None
+        pov_todo = th is not None and (store.get_json('processed/photos/cdump/state.json', None) or {}).get('pov') != th
+        if pov_todo:
+            store.put_json(f"processed/photos/cdump/{m['date']}/targets.json.gz", tg)
+        m['want'], m['pov'] = len(want), th if pov_todo else None
         print('meta=' + json.dumps(m, separators=(',', ':')))
         print('matrix=' + json.dumps({'job': list(range(a.jobs))}, separators=(',', ':')))
-        print(f"any={'true' if want else 'false'}")
+        print(f"any={'true' if want or pov_todo else 'false'}")
+        log(f"촬영 좌표로 찾을 장소 {sum(len(v) for v in (tg.get('cities') or {}).values()):,} · {'훑음' if pov_todo else '같은 덤프·같은 장소 — 건너뜀'}")
         log(f"덤프 {m['date']} · {m['size'] / 2 ** 30:.1f} GiB · P18 파일 {total:,} 중 판정할 것 {len(want):,}")
         return 0
     m = json.loads(open(a.meta).read()) if os.path.exists(a.meta) else json.loads(a.meta)
     if a.cmd == 'scan':
         WANT.update(store.get_json(f"processed/photos/cdump/{m['date']}/want.json.gz", []) or [])
+        set_targets((store.get_json(f"processed/photos/cdump/{m['date']}/targets.json.gz", None) or {}).get('cities'))
         parts = a.jobs * a.procs
         import multiprocessing as mp
         with mp.get_context('fork').Pool(a.procs) as pool:
             res = pool.map(scan_part, [(p, parts, m['size'], m['eos_bit'], m['date'], m['url']) for p in (a.job * a.procs + i for i in range(a.procs))])
         out = {}
         for o, s in res:
+            for rid, v in (o.pop('_pov', None) or {}).items():
+                cur = out.setdefault('_pov', {}).get(rid)
+                if cur is None or tuple(v[:3]) < tuple(cur[:3]):
+                    out['_pov'][rid] = v
             out.update(o)
             log(f"조각 {s['part']}/{parts}: 줄 {s['lines']:,} · 맞은 파일 {s['hit']:,} · {s.get('mb', 0)} MB · {s['sec']}초")
         store.put_json(f"processed/photos/cdump/{m['date']}/job-{a.job:03d}.json.gz", out)
         return 0
     keys = [k for k in store.list(f"processed/photos/cdump/{m['date']}/") if k.rsplit('/', 1)[-1].startswith('job-')]
-    got = {}
+    got, pov = {}, {}
     for k in keys:
-        got.update(store.get_json(k, {}) or {})
+        part = store.get_json(k, {}) or {}
+        for rid, v in (part.pop('_pov', None) or {}).items():
+            if rid not in pov or tuple(v[:3]) < tuple(pov[rid][:3]):
+                pov[rid] = v
+        got.update(part)
     want = store.get_json(f"processed/photos/cdump/{m['date']}/want.json.gz", []) or []
     mine = store.get_json('processed/photos/commons.json.gz', {}) or {}
     for u, v in got.items():
@@ -189,9 +278,13 @@ def main():
             if u not in got and (u not in mine or mine[u][0] < m['date']):
                 mine[u] = [m['date'], {}]
     store.put_json('processed/photos/commons.json.gz', mine)
+    if m.get('pov') and len(keys) >= a.jobs:
+        store.put_json('processed/photos/pov.json.gz', {'date': m['date'], 'rows': pov})
+        store.put_json('processed/photos/cdump/state.json', {'pov': m['pov'], 'rows': len(pov), 'at': datetime.datetime.now(datetime.timezone.utc).isoformat()})
     ok = sum(1 for v in got.values() if v[1])
     msg = (f"## Commons SDC 덤프 판정 {m['date']}\n- 조각 파일 {len(keys)}/{a.jobs} · 판정할 파일 {len(want):,} 중 덤프에서 찾음 {len(got):,}"
-           f" · 실을 수 있음(CC0·CC BY·CC BY-SA + 저작자) {ok:,} · 판정 캐시 {len(mine):,}\n")
+           f" · 실을 수 있음(CC0·CC BY·CC BY-SA + 저작자) {ok:,} · 판정 캐시 {len(mine):,}\n"
+           f"- 촬영 좌표·묘사 대상으로 사진 찾은 장소 {len(pov):,}(묘사 대상 일치 {sum(1 for v in pov.values() if v[0] == 0):,} · 이름 일치 {sum(1 for v in pov.values() if v[0] == 1):,})\n")
     p = os.environ.get('GITHUB_STEP_SUMMARY')
     if p:
         open(p, 'a', encoding='utf-8').write(msg)

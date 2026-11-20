@@ -181,8 +181,11 @@ class Meter:
                 dv = self.desc is not None and any(k in self.desc[sl] for sl in DESC_SLOTS for k in keys if k)
                 rv = self.rec is not None and any(k in self.rec['any'] for k in keys if k)
                 r2v = self.rec is not None and any(k in self.rec['two'] for k in keys if k)
+                ph = f[ATTRS.index('photo')]
                 for g in ci:
                     g['desc'] += dv; g['rec'] += rv; g['rec2'] += r2v
+                    if t == 'sight':  # (270기) 관광·명소만 — 사진 분모·분자
+                        g['sight_n'] = g.get('sight_n', 0) + 1; g['sight_photo'] = g.get('sight_photo', 0) + ph
             for g in tg:
                 g['n'] += 1
                 for a, v in zip(ATTRS, f):
@@ -416,7 +419,10 @@ def to_md(rep, prev=None, top=25):
             order = sorted(ci, key=lambda c: (pri.get(c, 999), -ci[c]['n']))
             L += ['### 5-2. 도시별 — 일정 장소 기준(명소·식당·카페·숙소·교통 거점, 우선 도시 순 — sources/priority_cities.json)',
                   '| 순위 | 도시 | 일정 장소 | ' + ' | '.join(ko[a] for a in ck) + ' |', '|---' * (len(ck) + 3) + '|']
-            L += [f"| {pri.get(c, '-')} | {c} | {ci[c]['n']:,} | " + ' | '.join(_pct(ci[c].get(a, 0), ci[c]['n']) for a in ck) + ' |' for c in order]
+            L[-1] = L[-1] + '---|---|'
+            L[-2] = L[-2] + ' 관광·명소 수 | 관광·명소 사진 |'
+            L += [f"| {pri.get(c, '-')} | {c} | {ci[c]['n']:,} | " + ' | '.join(_pct(ci[c].get(a, 0), ci[c]['n']) for a in ck)
+                  + f" | {ci[c].get('sight_n', 0):,} | {_pct(ci[c].get('sight_photo', 0), ci[c].get('sight_n', 0))} |" for c in order]
         L += ['### 6. 출처별 게시 행', ', '.join(f'{k} {v:,}' for k, v in sorted(lay['by_source'].items(), key=lambda kv: -kv[1])[:15])]
         dsc = lay.get('desc')
         if dsc:
