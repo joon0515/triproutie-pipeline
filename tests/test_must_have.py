@@ -58,6 +58,9 @@ class T(unittest.TestCase):
         ids = sorted(r['id'] for r in by_cc['KR'])
         self.assertEqual(ids, ['kto:11', 'kto:126452', 'wikidata:Q1'])
         self.assertEqual(ph['kto:126452']['photo_license'], 'KOGL-1'); self.assertEqual(ph['wikidata:Q1']['photo_license'], 'CC BY-SA 4.0')
+        ix = MH.Index([{'id': ['h:x'], 'nm': ['昌德宮'], 'ko': ['창덕궁'], '_lat': [37.5794], '_lon': [126.9910]}], [126.7, 37.4, 127.2, 37.7])
+        self.assertTrue(ix.has(37.5794 + 500 / 111320.0, 126.9910, ['Changdeokgung', '창덕궁'], MH.PRESENT_M))   # 같은 이름 500m — 있음
+        self.assertFalse(ix.has(37.5794 + 900 / 111320.0, 126.9910, ['창덕궁'], MH.PRESENT_M))                    # 900m — 다른 곳으로 봄
         f = os.path.join(d, 'out', 'col_mustadd_KR-00.json.gz')
         doc = json.loads(gzip.decompress(open(f, 'rb').read()))
         self.assertEqual((doc['schema'], doc['n'], sorted(doc['lic'])), ('collect-1', 3, ['CC0', 'KOGL', 'KOGL']))
