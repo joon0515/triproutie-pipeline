@@ -18,6 +18,13 @@ runs:
         workload_identity_provider: ${{ inputs.wif || 'projects/222914945328/locations/global/workloadIdentityPools/github-pool/providers/github-provider' }}
         service_account: ${{ inputs.sa || 'pipeline-uploader@trip-mate-0vum9k.iam.gserviceaccount.com' }}
     - uses: google-github-actions/setup-gcloud@v2
+    # (295기) 실행당 GCS 다운로드 바이트 상한 — tools/gcs_meter/gcloud 를 PATH 앞에 끼운다. 상한은 job 의 env GCS_DL_CAP_BYTES(기본 1 GiB).
+    #   job 끝에 'gcloud gcs-meter report'(if: always())를 두면 받은 바이트가 로그에 남고, 상한을 넘었으면 job 이 실패한다.
+    - shell: bash
+      run: |
+        echo "GCS_METER_REAL=$(command -v gcloud)" >> "$GITHUB_ENV"
+        echo "GCS_METER_FILE=$RUNNER_TEMP/gcs_meter.json" >> "$GITHUB_ENV"
+        echo "$GITHUB_WORKSPACE/tools/gcs_meter" >> "$GITHUB_PATH"
     - if: inputs.python != 'none'
       uses: actions/setup-python@v5
       with: {python-version: "${{ inputs.python }}"}

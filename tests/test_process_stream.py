@@ -174,3 +174,57 @@ class Stream(unittest.TestCase):
 
 if __name__ == '__main__':
     unittest.main()
+
+
+class PublishCache295(unittest.TestCase):
+    """(295기) 게시 캐시 — 지난번에 검사한 같은 층 파일(같은 키·md5)은 다시 받지 않는다. 바뀌지 않았으면 게시 자체를 건너뛴다."""
+
+    def _store(self, n_files=30):
+        sys.path.insert(0, os.path.join(HERE, "..", "scripts"))
+        d = tempfile.mkdtemp(); store = K.Store(os.path.join(d, 'store'))
+        files, paths = [], {}
+        for k in range(n_files):
+            f = f'col_JP_{k}.json.gz'
+            rows = [{'id': f'x:{k}', 'nm': f'寺{k}', 'lat': 35.0 + k / 100, 'lon': 139.0, 'src': 'x', 'lic': 'CC0', 'c': 'temple', 'url': None}]
+            store.put_json(f'processed/out/r1/{f}', P.to_layer('JP', rows))
+            files.append(f); paths[f] = f'processed/out/r1/{f}'
+        store.put_json('processed/latest.json', {'run': 'r1', 'files': files, 'paths': paths, 'counts': {'JP': n_files}})
+        cur = os.path.join(d, 'cur'); os.makedirs(cur)
+        pulled = []
+        real = store.pull
+        store.pull = lambda keys, dest, strict=True: (pulled.extend(keys), real(keys, dest, strict))[1]
+        return P, store, files, paths, cur, pulled
+
+    def test_cached_files_not_pulled(self):
+        P, store, files, paths, cur, pulled = self._store()
+        tools = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'tools')
+        import publish_layers as PL
+        tag, msg = P.publish(store, 'bucket', '', dry_run=True, tools=tools, current_dir=cur)
+        self.assertTrue(tag, msg)
+        self.assertEqual(len(set(pulled)), 30)  # 캐시 없음 → 전부 받음
+        # 캐시를 지난 게시가 남긴 모양으로 채운다
+        meta = store.meta(paths.values())
+        tmp = tempfile.mkdtemp(); got = store.pull(list(paths.values()), tmp)
+        gfiles = {paths[f]: {'n': 1, 'errs': [], 'entry': PL.describe(got[paths[f]]), 'meta': meta[paths[f]]} for f in files}
+        fsig = __import__('hashlib').sha1(__import__('json').dumps([sorted(P.FORBIDDEN), sorted(P.FORBIDDEN_LABELS)]).encode()).hexdigest()
+        store.put_json(P.GATE_CACHE, {'fsig': fsig, 'files': gfiles})
+        pulled.clear(); store.put_json('published/history.json', [])
+        tag, msg = P.publish(store, 'bucket', '', dry_run=True, tools=tools, current_dir=cur)
+        self.assertTrue(tag, msg)
+        self.assertLessEqual(len(pulled), 20)  # 표본 20곳 파일만(파일당 1개씩)
+        # 파일 하나가 바뀌면(md5 다름) 그 파일은 다시 검사한다
+        j = store.get_json(paths[files[5]]); j['nm'][0] = '��'; store.put_json(paths[files[5]], j)
+        pulled.clear(); store.put_json('published/history.json', [])
+        tag, errs = P.publish(store, 'bucket', '', dry_run=True, tools=tools, current_dir=cur)
+        self.assertIsNone(tag)
+        self.assertTrue(any(files[5] in e and '글자 깨짐' in e for e in errs), errs)
+
+    def test_unchanged_paths_skip_publish(self):
+        P, store, files, paths, cur, pulled = self._store(3)
+        import hashlib, json
+        psig = hashlib.sha1(json.dumps(sorted(paths.values())).encode()).hexdigest()
+        store.put_json('published/history.json', [{'tag': 'c0', 'run': 'r0', 'counts': {'JP': 3}, 'dry': False, 'psig': psig}])
+        tag, msg = P.publish(store, 'bucket', '', dry_run=True, tools='tools', current_dir=cur)
+        self.assertIsNone(tag)
+        self.assertTrue(any('바뀐 층 파일 없음' in m for m in msg), msg)
+        self.assertEqual(pulled, [])

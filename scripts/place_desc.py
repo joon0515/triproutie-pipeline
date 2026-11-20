@@ -209,6 +209,43 @@ def _gz(p):
         return json.loads(gzip.decompress(f.read()))
 
 
+SEED_CACHE = 'processed/desc/col_seeds.json.gz'  # (295기) 수집 층 파일마다 뽑은 씨앗 — 바뀐 층 파일만 받는다
+SEED_CACHE_V = 1
+
+
+def col_partial(j, with_city=True):
+    """수집 층 한 파일 → 씨앗 조각(JSON 으로 저장 가능). Seeds.add_col 과 같은 순서·같은 값."""
+    if j.get('schema') != 'collect-1' or j.get('dataset') != 'places':
+        return None
+    n = len(j.get('id') or [])
+    col = lambda k: j.get(k) if isinstance(j.get(k), list) and len(j[k]) == n else [None] * n
+    ids, wid, wd, dsc = col('id'), col('wid'), col('wd'), col('dsc')
+    dla, dlo = col('dla'), col('dlo')
+    nm = [col(k) for k in ('nm', 'ko', 'en', 'ja', 'zh')]
+    pt = {'n': n, 'q': [], 'names': [], 'tw': [], 'city': []}
+    la = lo = 0
+    for i in range(n):
+        keys = [ids[i], wid[i]]
+        if isinstance(dla[i], int) and isinstance(dlo[i], int):
+            la += dla[i]; lo += dlo[i]
+            if wd[i] and with_city and QID.search(wd[i] or ''):
+                pt['city'].append([wd[i], keys, la / 1e5, lo / 1e5])
+        names = [c[i] for c in nm if c[i]]
+        if wd[i]:
+            if QID.search(wd[i] or ''):
+                pt['q'].append([wd[i], keys])
+            for k in keys:
+                if k:
+                    pt['names'].append([k, names])
+        t = first_sentence(dsc[i]) if dsc[i] else None
+        t = t and ok_text(t, names)
+        if t and han_script(t) != 'Hans':
+            for k in keys:
+                if k:
+                    pt['tw'].append([k, t])
+    return pt
+
+
 class Seeds:
     """QID → 장소 id 들, 장소 id → 이름들(이름과 같은 설명 거르기), 대만 소개."""
 
@@ -230,33 +267,22 @@ class Seeds:
 
     def add_col(self, j):
         """수집 층(collect-1) 한 파일."""
-        if j.get('schema') != 'collect-1' or j.get('dataset') != 'places':
+        self.apply_partial(col_partial(j, bool(self.cities)))
+
+    def apply_partial(self, pt):
+        """(295기) col_partial 결과를 씨앗에 더한다 — 파일을 다시 받지 않고 캐시에서 같은 결과를 만든다(순서도 같음)."""
+        if not pt:
             return
-        n = len(j.get('id') or [])
-        col = lambda k: j.get(k) if isinstance(j.get(k), list) and len(j[k]) == n else [None] * n
-        ids, wid, wd, dsc = col('id'), col('wid'), col('wd'), col('dsc')
-        dla, dlo = col('dla'), col('dlo')
-        nm = [col(k) for k in ('nm', 'ko', 'en', 'ja', 'zh')]
-        la = lo = 0
-        for i in range(n):
-            self.n_rows += 1
-            keys = [ids[i], wid[i]]
-            if isinstance(dla[i], int) and isinstance(dlo[i], int):
-                la += dla[i]; lo += dlo[i]
-                if wd[i] and self.cities:
-                    self.add_city(wd[i], keys, la / 1e5, lo / 1e5)
-            names = [c[i] for c in nm if c[i]]
-            if wd[i]:
-                self.add_q(wd[i], keys)
-                for k in keys:
-                    if k:
-                        self.names[k] = names
-            t = first_sentence(dsc[i]) if dsc[i] else None
-            t = t and ok_text(t, names)
-            if t and han_script(t) != 'Hans':
-                for k in keys:
-                    if k:
-                        self.tw[k] = t
+        self.n_rows += pt['n']
+        for q, keys in pt['q']:
+            self.add_q(q, keys)
+        for k, names in pt['names']:
+            self.names[k] = names
+        for k, t in pt['tw']:
+            self.tw[k] = t
+        if self.cities:
+            for q, keys, lat, lon in pt['city']:
+                self.add_city(q, keys, lat, lon)
 
     def add_city(self, q, keys, lat, lon, cap=5000):
         m = QID.search(q or '')
@@ -421,15 +447,25 @@ def gather(store, bucket=None, extra_dir=None, budget_end=None, clock=time.time)
     latest = store.get_json('processed/latest.json', {}) or {}
     paths = latest.get('paths') or {f: f"processed/out/{latest.get('run')}/{f}" for f in latest.get('files', [])}
     keys = sorted(v for k, v in paths.items() if k.startswith('col_') and not k.startswith('col_info_'))
+    # (295기) 11/17~19 에 place-desc 가 매 실행 수집 층 전체(약 5 GiB)를 받아 해외 egress 가 쌓였다 → 파일마다 뽑은 씨앗을 캐시하고
+    #   처음 보는 Storage 키(= 새로 가공된 층 파일, 키에 가공 판이 들어 있어 내용이 바뀌면 키도 바뀜)만 받는다.
+    pc = store.get_json(SEED_CACHE, {}) or {}
+    parts = pc.get('parts', {}) if pc.get('v') == SEED_CACHE_V and pc.get('city') == bool(S.cities) else {}
+    need = [k for k in keys if k not in parts]
     wd = tempfile.mkdtemp(dir=os.environ.get('RUNNER_TEMP') or None)
     try:
-        for i in range(0, len(keys), 40):
-            got = store.pull(keys[i:i + 40], wd, strict=False)
-            for k in keys[i:i + 40]:
+        for i in range(0, len(need), 40):
+            got = store.pull(need[i:i + 40], wd, strict=False)
+            for k in need[i:i + 40]:
                 if k in got:
-                    S.add_col(_gz(got[k])); os.remove(got[k])
+                    parts[k] = col_partial(_gz(got[k]), bool(S.cities)); os.remove(got[k])
     finally:
         shutil.rmtree(wd, ignore_errors=True)
+    for k in keys:
+        S.apply_partial(parts.get(k))
+    log(f'수집 층 {len(keys)}개 중 새로 받은 것 {len(need)}개(나머지는 씨앗 캐시)')
+    if need:
+        store.put_json(SEED_CACHE, {'v': SEED_CACHE_V, 'city': bool(S.cities), 'parts': {k: parts[k] for k in keys if k in parts}})
     if extra_dir:  # 시험: 로컬 폴더(hours-*.json.gz · kto_*.json.gz · w-*.json.gz)
         for p in sorted(glob.glob(os.path.join(extra_dir, '*.json.gz'))):
             b = os.path.basename(p)

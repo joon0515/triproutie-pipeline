@@ -1,0 +1,177 @@
+#!/usr/bin/env python3
+"""gcloud 앞에 끼우는 '실행당 GCS 다운로드 바이트 상한'(295기, 11/17~19 해외 egress 598 GiB 사고 대응).
+
+gcp-setup 이 이 폴더를 PATH 맨 앞에 넣는다 → 워크플로 bash 와 파이썬 subprocess 의 'gcloud' 가 모두 여기를 거친다.
+- 'gcloud storage cp|cat|rsync' 가운데 gs:// → 로컬(러너)로 내려받는 것만 잰다. gs:// → gs:// (서버 쪽 복사)·올리기는 무료라 세지 않는다.
+- 받기 전에 'gcloud storage du -s <원본들>'(메타데이터만, 다운로드 0)로 크기를 재고, 이번 job 누적 + 이번 크기 > 상한이면 받지 않고 멈춘다.
+- 멈출 때: 표시 파일(tripped)을 남기고, 부른 쪽(파이썬·bash) 프로세스에 SIGTERM — 실패를 삼키는 코드도 계속 받지 못하게 한다.
+  job 끝의 'gcs-meter report' 단계가 표시 파일을 보고 job 을 실패로 만든다 → failure-digest 이슈로 알림.
+하루 상한: job 끝 report 가 gs://$GCS_BUCKET/collect/v1/guards/egress/<UTC 날짜>/<run>-<job>-<바이트> 빈 표시 객체를 남기고(올리기 = 무료),
+  다음 job 들은 받기 전에 오늘 표시들의 바이트 합을 본다(목록만) → GCS_DL_DAY_CAP_BYTES(기본 2 GiB) 넘으면 멈춘다. 모든 워크플로 합산.
+환경 변수: GCS_DL_CAP_BYTES(기본 1 GiB) · GCS_METER_FILE(기본 $RUNNER_TEMP/gcs_meter.json) · GCS_METER_REAL(진짜 gcloud 경로, gcp-setup 이 넣음).
+'gcloud gcs-meter report' = 누적 출력(+상한 넘었으면 종료 코드 3).
+"""
+import json
+import os
+import signal
+import subprocess
+import sys
+
+CAP_DEFAULT = 1 << 30
+DAY_CAP_DEFAULT = 2 << 30
+HERE = os.path.dirname(os.path.abspath(__file__))
+
+
+def real_gcloud():
+    r = os.environ.get('GCS_METER_REAL')
+    if r and os.path.exists(r):
+        return r
+    for d in os.environ.get('PATH', '').split(os.pathsep):
+        p = os.path.join(d, 'gcloud')
+        if os.path.abspath(d) != HERE and os.path.isfile(p) and os.access(p, os.X_OK):
+            return p
+    sys.exit('gcs-meter: 진짜 gcloud 를 찾지 못함')
+
+
+def meter_path():
+    return os.environ.get('GCS_METER_FILE') or os.path.join(os.environ.get('RUNNER_TEMP') or '/tmp', 'gcs_meter.json')
+
+
+def cap():
+    try:
+        return int(os.environ.get('GCS_DL_CAP_BYTES') or CAP_DEFAULT)
+    except ValueError:
+        return CAP_DEFAULT
+
+
+def load():
+    try:
+        return json.load(open(meter_path()))
+    except (OSError, ValueError):
+        return {'bytes': 0, 'calls': 0, 'tripped': None}
+
+
+def save(m):
+    p = meter_path()
+    open(p + '.tmp', 'w').write(json.dumps(m))
+    os.replace(p + '.tmp', p)
+
+
+def day_prefix():
+    b = os.environ.get('GCS_BUCKET')
+    import datetime
+    return f"gs://{b}/collect/v1/guards/egress/{datetime.datetime.now(datetime.timezone.utc):%Y-%m-%d}" if b else None
+
+
+def day_used(real):
+    """오늘 다른 job 들이 남긴 표시 객체 이름의 바이트 합(목록만, 다운로드 0)."""
+    pre = day_prefix()
+    if not pre:
+        return 0
+    r = subprocess.run([real, 'storage', 'ls', pre + '/'], capture_output=True, text=True)
+    tot = 0
+    for u in r.stdout.split():
+        t = u.rstrip('/').rsplit('-', 1)[-1]
+        if t.isdigit():
+            tot += int(t)
+    return tot
+
+
+def day_cap():
+    try:
+        return int(os.environ.get('GCS_DL_DAY_CAP_BYTES') or DAY_CAP_DEFAULT)
+    except ValueError:
+        return DAY_CAP_DEFAULT
+
+
+def human(n):
+    return f'{n / (1 << 30):.3f} GiB ({n:,} B)'
+
+
+def download_sources(args, stdin_lines):
+    """args = 'storage' 다음 인자들. 내려받기면 원본 gs:// 목록, 아니면 None."""
+    if not args:
+        return None
+    op, rest = args[0], args[1:]
+    pos = [a for a in rest if not a.startswith('-')]
+    # 값이 있는 옵션(--content-type=x 처럼 = 로 붙은 것만 씀 — 이 저장소 규칙)은 pos 에 안 들어간다
+    if op == 'cat':
+        return [a for a in pos if a.startswith('gs://')]
+    if op in ('cp', 'rsync', 'mv'):
+        use_stdin = any(a in ('-I', '--read-paths-from-stdin') for a in rest)
+        srcs = (stdin_lines if use_stdin else pos[:-1]) if pos else []
+        dest = pos[-1] if pos else ''
+        if dest.startswith('gs://'):
+            return None  # 올리기 또는 서버 쪽 복사 — egress 아님
+        return [s for s in srcs if s.startswith('gs://')]
+    return None
+
+
+def size_of(real, srcs):
+    """du -s 로 원본 크기 합(와일드카드·폴더 포함). 못 재면 None."""
+    total = 0
+    for i in range(0, len(srcs), 200):
+        r = subprocess.run([real, 'storage', 'du', '-s', *srcs[i:i + 200]], capture_output=True, text=True)
+        got = False
+        for line in r.stdout.splitlines():
+            p = line.split()
+            if p and p[0].isdigit():
+                total += int(p[0]); got = True
+        if r.returncode != 0 and not got:
+            return None if 'matched no objects' not in (r.stderr or '') and 'not found' not in (r.stderr or '').lower() else total
+    return total
+
+
+def trip(m, why):
+    m['tripped'] = why
+    save(m)
+    sys.stderr.write(f'::error::gcs-meter: 실행당 GCS 다운로드 상한을 넘어 멈춤 — {why}\n')
+    try:
+        os.kill(os.getppid(), signal.SIGTERM)  # 실패를 삼키는 부른 쪽도 멈춘다
+    except OSError:
+        pass
+    sys.exit(3)
+
+
+def main(argv):
+    real = real_gcloud()
+    if argv[:2] == ['gcs-meter', 'report']:
+        m = load()
+        pre = day_prefix()
+        if pre and m['bytes'] > 0 and not m.get('marked'):
+            import tempfile
+            job = ''.join(c if c.isalnum() else '_' for c in os.environ.get('GITHUB_JOB', 'job'))[:40]
+            tag = f"{os.environ.get('GITHUB_RUN_ID', '0')}_{os.environ.get('GITHUB_RUN_ATTEMPT', '1')}_{job}_{os.getpid()}-{m['bytes']}"
+            e = tempfile.NamedTemporaryFile(delete=False); e.close()
+            subprocess.run([real, 'storage', 'cp', '-q', e.name, f'{pre}/{tag}'], capture_output=True)
+            os.remove(e.name); m['marked'] = True; save(m)
+        print(f'gcs-meter: 이번 job GCS 다운로드 {human(m["bytes"])} · 받기 {m["calls"]}번 · 상한 {human(cap())}' + (f' · 멈춤: {m["tripped"]}' if m.get('tripped') else ''))
+        return 3 if m.get('tripped') else 0
+    stdin_data = None
+    srcs = None
+    if argv[:1] == ['storage']:
+        if any(a in ('-I', '--read-paths-from-stdin') for a in argv):
+            stdin_data = sys.stdin.buffer.read()
+        lines = [x.strip() for x in (stdin_data or b'').decode('utf-8', 'replace').splitlines() if x.strip()]
+        srcs = download_sources(argv[1:], lines)
+    if srcs:
+        m = load()
+        if m.get('tripped'):
+            trip(m, '앞서 이미 상한을 넘음: ' + m['tripped'])
+        n = size_of(real, srcs)
+        if n is None:
+            trip(m, f'크기를 잴 수 없는 내려받기 {srcs[0]} 외 {len(srcs) - 1}개')
+        if m['calls'] % 20 == 0:  # job 첫 받기와 그 뒤 20번마다 하루 합계 확인
+            used = day_used(real)
+            if used + m['bytes'] + n > day_cap():
+                trip(m, f'하루 상한 — 오늘 다른 job {human(used)} + 이 job {human(m["bytes"])} + 이번 {human(n)} > {human(day_cap())}')
+        if m['bytes'] + n > cap():
+            trip(m, f'{srcs[0]} 외 {len(srcs) - 1}개 {human(n)} — 누적 {human(m["bytes"])} + 이번 > 상한 {human(cap())}')
+        m['bytes'] += n; m['calls'] += 1
+        save(m)
+    r = subprocess.run([real, *argv], input=stdin_data)
+    return r.returncode
+
+
+if __name__ == '__main__':
+    sys.exit(main(sys.argv[1:]))

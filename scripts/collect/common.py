@@ -3,7 +3,7 @@
 원칙(바꾸지 말 것): 이용약관·robots.txt·라이선스가 허락하는 출처만. 위장(브라우저 흉내)·프록시 돌리기·robots 무시·CAPTCHA 우회 없음.
 User-Agent 에는 저장소 주소를 연락처로 싣는다. 개인정보(사람 이름·개인 메일·개인 전화)는 받지 않는다 — 업체·기관의 공식 전화만.
 """
-import datetime, gzip, hashlib, io, json, math, os, re, subprocess, time, unicodedata, urllib.error, urllib.parse, urllib.request
+import base64, datetime, gzip, hashlib, io, json, math, os, re, subprocess, time, unicodedata, urllib.error, urllib.parse, urllib.request
 import http.client
 import urllib.robotparser
 
@@ -188,6 +188,32 @@ class Store:
                 if k.startswith(prefix) and not k.endswith('.tmp'):
                     out.append(k)
         return sorted(out)
+
+    def meta(self, keys):
+        """(295기) keys → {key: 'size:md5'} — 내용이 같은지 내려받지 않고 본다(메타데이터 목록만, 다운로드 0). 못 잰 key 는 빠진다."""
+        keys = list(keys)
+        out = {}
+        if not self.gs:
+            for k in keys:
+                p = self._p(k)
+                if os.path.exists(p):
+                    with open(p, 'rb') as f:
+                        out[k] = f'{os.path.getsize(p)}:' + base64.b64encode(hashlib.md5(f.read()).digest()).decode()
+            return out
+        want = set(keys)
+        for pre in sorted({k.rsplit('/', 1)[0] for k in keys}):
+            r = subprocess.run(['gcloud', 'storage', 'objects', 'list', f'{self._p(pre)}/*', '--format=json'], capture_output=True, text=True)
+            try:
+                rows = json.loads(r.stdout or '[]') if r.returncode == 0 else []
+            except ValueError:
+                rows = []
+            for o in rows:
+                name = o.get('name') or ''
+                k = name[len(self.root.split('/', 3)[3]) + 1:] if self.root.count('/') >= 3 else name
+                md5, size = o.get('md5_hash') or o.get('md5Hash'), o.get('size')
+                if k in want and md5 and size is not None:
+                    out[k] = f'{int(size)}:{md5}'
+        return out
 
     # ---- 여러 파일 한꺼번에(gcloud 를 파일마다 부르지 않게 — 파일 수천 개면 그것만으로 몇 시간) ----
     def pull(self, keys, dest, strict=True):

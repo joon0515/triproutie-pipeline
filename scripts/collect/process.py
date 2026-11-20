@@ -24,13 +24,14 @@ import argparse, datetime, glob, gzip, hashlib, json, math, os, random, re, reso
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
-from common import LANGS, Store, bad_text, forbidden, norm_name, now, today, valid_coord  # noqa: E402
+from common import FORBIDDEN, FORBIDDEN_LABELS, LANGS, Store, bad_text, forbidden, norm_name, now, today, valid_coord  # noqa: E402
 
 PLACE_SETS = {'places', 'official', 'transit'}
 INFO_SETS = {'advisory', 'holidays', 'transit_feeds'}
 PART_ROWS = 50000
 TILE_DEG = 0.5       # 층 파일 한 개가 덮는 칸(위도 0.5° 줄 × 경도 0.5° 칸) — 앱이 도시 근처 파일만 받게(docs/SCALE.md)
 CELL_FLUSH = 10000   # 칸이 바뀔 때 이만큼 모였으면 파일을 끊는다(작은 칸은 옆 칸과 한 파일로)
+GATE_CACHE = 'published/gate_cache.json.gz'  # (295기) 게시 관문 결과 캐시 — 바뀐 층 파일만 받는다
 PUB_PULL = 40        # 게시 때 층 파일을 한 번에 받는 수(받아 검사·기술한 뒤 곧 지움 — 러너 디스크 14GB)
 R50 = 50.0
 CELL = 0.0005  # 약 55m 격자(이웃 9칸을 본다)
@@ -696,39 +697,54 @@ def gate(layers, prev_counts, counts):
     return gate_stream(list(layers), layers.__getitem__, prev_counts, counts)
 
 
-def gate_stream(files, load, prev_counts, counts):
-    """gate 와 같은 검사·같은 표본(씨앗 20)을 파일 하나씩 읽어서 한다 — load(파일) → dict. 층 전체를 메모리에 올리지 않는다."""
+def _file_check(f, j):
+    """층 파일 하나의 관문 검사 → (표본 모집단 행 수 또는 None, 오류 목록). gate_stream 과 게시 캐시(295기)가 같이 쓴다."""
+    errs = []
+    if j.get('schema') != 'collect-1':
+        return None, [f'{f}: schema']
+    if j.get('dataset') != 'places':
+        if not isinstance(j.get('rows'), dict) or not j['rows']:
+            errs.append(f'{f}: info rows 없음')
+        return None, errs
+    n = len(j['id'])
+    if any(len(j[k]) != n for k in ('nm', 'dla', 'dlo', 'c', 'src', 'lic')):
+        return None, [f'{f}: 열 길이 다름']
+    la = lo = 0; bad = miss = garb = forb = 0
+    for i in range(n):
+        la += j['dla'][i]; lo += j['dlo'][i]
+        if not valid_coord(la / 1e5, lo / 1e5):
+            bad += 1
+        if not j['id'][i] or not j['nm'][i] or not j['src'][i] or not j['lic'][i]:
+            miss += 1
+        if any(bad_text(j[k][i]) for k in ('nm', 'ko', 'en', 'ja', 'zh')):
+            garb += 1
+        if j['url'][i] and forbidden(j['url'][i]):
+            forb += 1
+    for name, v in (('좌표 범위 밖', bad), ('필수 칸 빠짐', miss), ('글자 깨짐', garb), ('금지 도메인', forb)):
+        if v:
+            errs.append(f'{f}: {name} {v}행')
+    return n, errs
+
+
+def gate_stream(files, load, prev_counts, counts, cached=None, results=None):
+    """gate 와 같은 검사·같은 표본(씨앗 20)을 파일 하나씩 읽어서 한다 — load(파일) → dict. 층 전체를 메모리에 올리지 않는다.
+    (295기) cached = {파일: (n, 오류)} — 지난 게시 때 같은 내용(같은 Storage 키·md5)으로 이미 검사한 파일은 다시 받지 않는다.
+    results(dict) 에는 이번에 검사한 파일의 (n, 오류)를 채워 돌려준다(다음 게시의 cached)."""
     errs = []
     for cc, n in prev_counts.items():
         if n and counts.get(cc, 0) < n * 0.95:
             errs.append(f'{cc}: 장소 수 {n} → {counts.get(cc, 0)} (-5% 넘게 감소)')
     spans = []  # (파일, 행 수) — 표본을 뽑을 모집단(파일 순서 · 행 순서)
     for f in files:
-        j = load(f)
-        if j.get('schema') != 'collect-1':
-            errs.append(f'{f}: schema'); continue
-        if j.get('dataset') != 'places':
-            if not isinstance(j.get('rows'), dict) or not j['rows']:
-                errs.append(f'{f}: info rows 없음')
-            continue
-        n = len(j['id'])
-        if any(len(j[k]) != n for k in ('nm', 'dla', 'dlo', 'c', 'src', 'lic')):
-            errs.append(f'{f}: 열 길이 다름'); continue
-        la = lo = 0; bad = miss = garb = forb = 0
-        for i in range(n):
-            la += j['dla'][i]; lo += j['dlo'][i]
-            if not valid_coord(la / 1e5, lo / 1e5):
-                bad += 1
-            if not j['id'][i] or not j['nm'][i] or not j['src'][i] or not j['lic'][i]:
-                miss += 1
-            if any(bad_text(j[k][i]) for k in ('nm', 'ko', 'en', 'ja', 'zh')):
-                garb += 1
-            if j['url'][i] and forbidden(j['url'][i]):
-                forb += 1
-        spans.append((f, n))
-        for name, v in (('좌표 범위 밖', bad), ('필수 칸 빠짐', miss), ('글자 깨짐', garb), ('금지 도메인', forb)):
-            if v:
-                errs.append(f'{f}: {name} {v}행')
+        if cached and f in cached:
+            n, fe = cached[f]
+        else:
+            n, fe = _file_check(f, load(f))
+        if results is not None:
+            results[f] = (n, list(fe))
+        errs.extend(fe)
+        if n is not None:
+            spans.append((f, n))
     total = sum(n for _, n in spans)
     cache = {}
     for g in random.Random(20).sample(range(total), min(20, total)):  # sample(list) 와 같은 자리를 고른다(자리는 모집단 길이에만 달림)
@@ -751,6 +767,9 @@ def publish(store, bucket, kms_key, dry_run=False, tools='tools', current_dir=No
     hist = store.get_json('published/history.json', []) or []
     if hist and hist[-1]['run'] == latest['run']:
         return None, []  # 이미 게시한 판
+    psig = hashlib.sha1(json.dumps(sorted(layer_paths(latest).values())).encode()).hexdigest()
+    if hist and not hist[-1].get('dry') and hist[-1].get('psig') == psig and hist[-1].get('counts') == latest.get('counts'):
+        return None, ['바뀐 층 파일 없음 — 게시 건너뜀(295기: 같은 내용을 다시 받지 않음)']
     # 층 파일을 PUB_PULL 개씩 받아 검사·기술(describe)하고 곧 지운다 — 2억 행이면 층 파일이 10GB 를 넘어 러너 디스크(14GB)에 다 둘 수 없다.
     # 수집 층은 Storage 안에서 바로 복사(서버 쪽)해 게시하므로 러너를 거치지 않는다.
     sys.path.insert(0, os.path.join(HERE, '..'))
@@ -758,14 +777,15 @@ def publish(store, bucket, kms_key, dry_run=False, tools='tools', current_dir=No
     paths = layer_paths(latest)
     files = list(latest['files'])
     ld = tempfile.mkdtemp(dir=os.environ.get('RUNNER_TEMP') or None)
-    entries, scrubbed = {}, {}
+    entries, scrubbed, cached = {}, {}, {}
     fixd = tempfile.mkdtemp(dir=os.environ.get('RUNNER_TEMP') or None)
 
     def load(f):
         p = os.path.join(ld, f)
         if not os.path.exists(p):
             i = files.index(f)
-            store.pull([paths[x] for x in files[i:i + PUB_PULL] if not os.path.exists(os.path.join(ld, x))], ld, strict=False)
+            ahead = [x for x in files[i + 1:i + PUB_PULL] if x not in cached and not os.path.exists(os.path.join(ld, x))]  # (295기) 캐시된 파일은 미리 받지 않음
+            store.pull([paths[x] for x in [f] + ahead], ld, strict=False)
         if not os.path.exists(p):
             return {}
         try:
@@ -785,7 +805,26 @@ def publish(store, bucket, kms_key, dry_run=False, tools='tools', current_dir=No
         finally:
             os.remove(p)
 
-    errs = gate_stream(latest['files'], load, hist[-1]['counts'] if hist else {}, latest['counts'])
+    # (295기) 게시 캐시: 지난 게시 때 검사·기술한 층 파일(같은 Storage 키·크기·md5, 같은 금지 목록)은 다시 받지 않는다.
+    #   11/17~19 에 게시가 매시간 층 전체(약 5.6 GiB)를 러너로 받아 해외 egress 가 쌓인 것을 막는다(COST_295.md).
+    fsig = hashlib.sha1(json.dumps([sorted(FORBIDDEN), sorted(FORBIDDEN_LABELS)]).encode()).hexdigest()
+    gc = store.get_json(GATE_CACHE, {}) or {}
+    gfiles = gc.get('files', {}) if gc.get('fsig') == fsig else {}
+    meta = store.meta([paths[f] for f in files]) if gfiles else {}
+    for f in files:
+        c = gfiles.get(paths[f])
+        if c and c.get('entry') and meta.get(paths[f]) and c.get('meta') == meta[paths[f]]:
+            cached[f] = (c['n'], c['errs'])
+            entries[f] = c['entry']
+    results = {}
+    errs = gate_stream(latest['files'], load, hist[-1]['counts'] if hist else {}, latest['counts'], cached=cached, results=results)
+    print(f'게시 캐시: 층 {len(files)}개 중 {len(cached)}개는 다시 받지 않음', file=sys.stderr)
+    if not dry_run:
+        newm = store.meta([paths[f] for f in results if f not in cached and f in entries])
+        keep = {paths[f]: gfiles[paths[f]] for f in cached}
+        keep.update({paths[f]: {'n': results[f][0], 'errs': results[f][1], 'entry': entries[f], 'meta': newm[paths[f]]}
+                     for f in results if f not in cached and f in entries and newm.get(paths[f]) and f not in scrubbed})
+        store.put_json(GATE_CACHE, {'fsig': fsig, 'files': keep})
     if errs:
         return None, errs
     missing = [f for f in files if f not in entries]
@@ -826,7 +865,7 @@ def publish(store, bucket, kms_key, dry_run=False, tools='tools', current_dir=No
     r = subprocess.run(cmd, capture_output=True, text=True)
     if r.returncode != 0:
         return None, ['publish_layers 실패: ' + (r.stderr or r.stdout)[-300:]]
-    hist.append({'tag': tag, 'run': latest['run'], 'counts': latest['counts'], 'at': now().isoformat(), 'dry': dry_run})
+    hist.append({'tag': tag, 'run': latest['run'], 'counts': latest['counts'], 'at': now().isoformat(), 'dry': dry_run, 'psig': psig})
     old = [h for h in hist if not h.get('dry')][:-keep]
     if not dry_run:
         for h in old:  # 직전 3개 판만 남긴다(수집이 만든 c… 태그만)
