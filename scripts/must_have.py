@@ -234,8 +234,16 @@ def run(store, bucket=None, tiles_dir=None, kto_dir=None, out=None, top=TOP, dry
     pub = None
     if bucket:
         import place_desc as PD
+        import publish_layers as PLY
         lj = PD.gs_json(f'gs://{bucket}/places/v1/layers.json') or {}
-        files = [e.get('file') for e in lj.get('layers') or [] if isinstance(e, dict)]
+
+        def cat(path):
+            r = PD.gs('cat', f'gs://{bucket}/{path}')
+            return r.stdout if r.returncode == 0 else None
+        try:  # 2단 목록(collect 등은 part 목록 안)까지 따라간다 — process.publish 와 같은 방식
+            files = [e.get('file') for e in PLY.entries_of(lj, cat)]
+        except Exception:  # noqa: BLE001
+            files = [e.get('file') for e in lj.get('layers') or [] if isinstance(e, dict)]
         pub = {'version': lj.get('version'), 'col_mustadd': sum(1 for f in files if isinstance(f, str) and 'col_mustadd_' in f),
                'photos_must': sum(1 for f in files if isinstance(f, str) and 'photos-must' in f)}
     store.put_json('processed/photos/must_state.json', {'built': today(), 'cities': {k: {x: y for x, y in v.items() if x != 'missing_names'} for k, v in reps.items()}})
