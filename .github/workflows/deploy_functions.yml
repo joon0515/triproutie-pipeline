@@ -46,6 +46,10 @@ jobs:
         run: |
           node test_geo_fn.js | tail -1 | tee /tmp/geo.txt
           grep -qx 'geo_fn: 63/0' /tmp/geo.txt
+      - name: mkt test (16/0)
+        run: |
+          node test_mkt_fn.js | tail -1 | tee /tmp/mkt.txt
+          grep -qx 'mkt_fn: 16/0' /tmp/mkt.txt
       - name: acct test (62/0)
         run: |
           node test_acct_fn.js | tail -1 | tee /tmp/acct.txt
@@ -109,6 +113,10 @@ jobs:
         run: |
           node test_geo_fn.js | tail -1 | tee /tmp/geo.txt
           grep -qx 'geo_fn: 63/0' /tmp/geo.txt
+      - name: mkt test (16/0)
+        run: |
+          node test_mkt_fn.js | tail -1 | tee /tmp/mkt.txt
+          grep -qx 'mkt_fn: 16/0' /tmp/mkt.txt
       - name: acct test (62/0)
         run: |
           node test_acct_fn.js | tail -1 | tee /tmp/acct.txt
