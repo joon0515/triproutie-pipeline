@@ -631,11 +631,11 @@ def run(store, bucket=None, tiles_dir=None, out=None, budget_min=50.0, http_wd=N
         rows.setdefault(rk, v)  # P18(Commons)가 이미 있는 행이 먼저
     kr_got, kr_why, kr_asked = {}, {}, 0
     if targets:
-        lcache = store.get_json('processed/photos/kr_loc2.json.gz', {}) or {}
+        lcache = store.get_json('processed/photos/kr_loc3.json.gz', {}) or {}
         sight_t = {k: [t for t in targets.get(k) or [] if t[0] in set(sight_ids.get(k, [])[:TOP_N])] for k in KR_CITIES}
         kr_got, kr_why, kr_asked = kr_loc(sight_t, rows, lcache, kr_key)
         if kr_asked:
-            store.put_json('processed/photos/kr_loc2.json.gz', lcache)
+            store.put_json('processed/photos/kr_loc3.json.gz', lcache)
         for rk, v in kr_got.items():
             rows.setdefault(rk, v)
     pov_n = 0
@@ -689,7 +689,7 @@ def run(store, bucket=None, tiles_dir=None, out=None, budget_min=50.0, http_wd=N
 TOP_N = 50
 KR_LOC_API = 'https://apis.data.go.kr/B551011/KorService2/locationBasedList2'
 KR_LOC_TYPES = {'12', '14', '15'}   # 관광지·문화시설·축제공연행사
-KR_LOC_RADIUS = 200
+KR_LOC_RADIUS = 1000              # (270기) 200m 에서 146곳 중 항목 0 이 116(응답 정상) — 산·해변·공원처럼 넓은 곳은 TourAPI 점이 멀다. 이름 일치는 그대로 필수
 KR_LOC_MAX = 150                    # 하루 호출 한도(tourapi_daily 900 회와 합쳐 data.go.kr 1,000 안쪽 — 도시 3곳 × 상위 50)
 KR_LOC_REFRESH = 30
 KR_CITIES = ('jeju', 'busan', 'seoul')
@@ -705,7 +705,7 @@ def kr_keys(s):
 
 def kr_loc_get(la, lo, key, opener=None):
     q = urllib.parse.urlencode({'serviceKey': key, 'MobileOS': 'ETC', 'MobileApp': 'TripRoutie', '_type': 'json', 'mapX': f'{lo:.6f}', 'mapY': f'{la:.6f}',
-                                'radius': KR_LOC_RADIUS, 'numOfRows': 30, 'pageNo': 1, 'arrange': 'E'})
+                                'radius': KR_LOC_RADIUS, 'numOfRows': 100, 'pageNo': 1, 'arrange': 'E'})
     req = urllib.request.Request(f'{KR_LOC_API}?{q}', headers={'User-Agent': 'TripRoutie-pipeline/1.0'})
     if opener:
         return opener(req)
@@ -908,7 +908,7 @@ def report_lines(rep, cities):
          f"- 도시 사진 단계: {rep.get('city_diag')}",
          f"- 덤프 이름+좌표(100m·닮음 0.8) 맞춤 타일 행 {rep.get('geo_matched', 0):,} · 그중 사진(자유+저작자) {rep.get('geo_rows', 0):,}",
          f"- 한국 TourAPI 사진 붙임(도시: 상자 안 사진 카드 · 붙은 타일 행): {rep.get('kto')}",
-         f"- 한국 위치기반 목록(관광지·문화시설·축제, 200m·이름): {rep.get('kr_loc')}",
+         f"- 한국 위치기반 목록(관광지·문화시설·축제, 1km·이름): {rep.get('kr_loc')}",
          f"- 관광·명소 상위 50 중 사진 없는 행의 원인(개수, 앞 10개 표본 · 이름 없음): {rep.get('miss')}",
          f"- 촬영 좌표·묘사 대상(Commons 덤프) 사진 붙인 행 {rep.get('pov_rows', 0):,}",
          '| 순위 | 도시 | 일정 후보(QID) | QID 사진 | 타일 행(전체, QID 없는 행 포함) | 사진 있음 | 비율 | 상위 50 중 사진 | 관광·명소 행 | 관광·명소 사진 비율 | 관광·명소 상위 50 중 사진 |',
