@@ -26,6 +26,7 @@ import place_names as PN  # noqa: E402
 from common import Store, today  # noqa: E402
 
 TOP = 30
+KR_BOX = [124.5, 33.0, 131.0, 38.7]
 PRESENT_M = 150.0
 KTO_DUP_M = 200.0
 KTO_CAT = {'12': 'tourist_attraction', '14': 'museum', '28': 'amusement_park'}
@@ -184,6 +185,15 @@ def run(store, bucket=None, tiles_dir=None, kto_dir=None, out=None, top=TOP, dry
                 if r['id'] not in seen:  # 상자가 겹치는 도시(서울·인천 등)에서 한 번만
                     seen.add(r['id']); by_cc.setdefault(cc, []).append(r)
             photos.update(ph)
+        # (270기) 우선 도시 상자 밖 한국 전역의 TourAPI 관광지·문화시설·레포츠도 일정용 장소로(같은 규칙: 앱 타일에 200m·이름으로 없을 때만)
+        rest = [k for k in kto if not any(c['bbox'][0] <= k['lon'] <= c['bbox'][2] and c['bbox'][1] <= k['lat'] <= c['bbox'][3] for c in cities)]
+        if rest:
+            adds, ph, rep = city_run({'key': 'kr_rest', 'bbox': KR_BOX}, tiles_for(KR_BOX), None, rest, ccache, top)
+            reps['kr_rest'] = rep
+            for r in adds:
+                if r['id'] not in seen:
+                    seen.add(r['id']); by_cc.setdefault('KR', []).append(r)
+            photos.update(ph)
     finally:
         shutil.rmtree(wd, ignore_errors=True)
     out = out or tempfile.mkdtemp(prefix='must_out_', dir=os.environ.get('RUNNER_TEMP') or None)
@@ -219,7 +229,7 @@ def run(store, bucket=None, tiles_dir=None, kto_dir=None, out=None, top=TOP, dry
     L = [f'## 꼭 있어야 할 명소 점검·보충 {today()}',
          f"- 보충 행 {sum(len(v) for v in by_cc.values()):,}(나라 {len(by_cc)}) · 사진 {len(photos):,}",
          '| 도시 | 꼭 있어야 할 명소 | 타일에 있음 | 빠짐(보충 전) | Wikidata 로 보충 | 보충 뒤 빠짐 | TourAPI 상자 안 | TourAPI 보충 | 빠졌던 명소(Wikidata 라벨) |', '|---|---|---|---|---|---|---|---|---|']
-    for c in cities:
+    for c in cities + [{'key': 'kr_rest'}]:
         r = reps.get(c['key']) or {}
         L.append(f"| {c['key']} | {r.get('must', 0)} | {r.get('present', 0)} | {r.get('missing_before', 0)} | {r.get('wd_added', 0)} | {r.get('missing_after', 0)} | {r.get('kto_in_box', 0):,} | "
                  f"{r.get('kto_added', 0):,} | {', '.join(r.get('missing_names') or [])} |")
