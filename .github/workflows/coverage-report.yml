@@ -45,8 +45,8 @@ jobs:
           mkdir -p "$RUNNER_TEMP/desc"; gcloud storage cp -q "gs://$GCS_BUCKET/places/v1/layers_extra/desc-*.json.gz" "$RUNNER_TEMP/desc/" 2>/dev/null || true
           # (11/18) 이름 5개 언어 층(names-wd-* Wikidata · names-osm-* OSM, 2단 목록이라 layers_extra 에서)·Commons 사진 층(photos-wd-*) — 0절
           # (11/18 245기) 추천 지수 층(rec-*)·새로 더한 일정 장소(col_ovtadd_*) → 9절, Overture 이름(names-ovt-*) → 0절
-          mkdir -p "$RUNNER_TEMP/rec"; for P in rec col_ovtadd_; do gcloud storage cp -q "gs://$GCS_BUCKET/places/v1/layers_extra/$P*.json.gz" "$RUNNER_TEMP/rec/" 2>/dev/null || true; done
-          for P in names-wd names-osm names-ovt photos-wd photos-pri photos-city; do gcloud storage cp -q "gs://$GCS_BUCKET/places/v1/layers_extra/$P-*.json.gz" "$RUNNER_TEMP/side/" 2>/dev/null || true; done
+          mkdir -p "$RUNNER_TEMP/rec"; for P in rec col_ovtadd_ col_mustadd_; do gcloud storage cp -q "gs://$GCS_BUCKET/places/v1/layers_extra/$P*.json.gz" "$RUNNER_TEMP/rec/" 2>/dev/null || true; done
+          for P in names-wd names-osm names-ovt photos-wd photos-pri photos-city photos-must; do gcloud storage cp -q "gs://$GCS_BUCKET/places/v1/layers_extra/$P-*.json.gz" "$RUNNER_TEMP/side/" 2>/dev/null || true; done
           ls "$RUNNER_TEMP/side" | sed -E 's/-?[0-9]*\.json\.gz$//' | sort | uniq -c | head -40
       - name: Storage 용량·비용 상한(읽기 전용 측정 — 이름·크기만)
         env:

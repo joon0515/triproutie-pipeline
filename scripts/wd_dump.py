@@ -94,6 +94,8 @@ def image_files(cl, props=IMG_PROPS):
     return list(dict.fromkeys(u for _, _, u in sorted(out)))
 
 
+# (270기) '꼭 있어야 할 명소' 후보에서 뺄 항목: 행정구역·마을(P1082 인구), 역(P81 노선), 강(P403·P885), 회사(P452 업종), 학교(P2196 학생 수), 공항(P238)
+NONPLACE_PROPS = ('P1082', 'P81', 'P403', 'P885', 'P452', 'P2196', 'P238')
 GEO_LANGS = ('en', 'ja', 'ko', 'zh', 'zh-hans', 'zh-hant', 'zh-tw', 'zh-cn', 'fr', 'th', 'vi', 'id', 'es', 'it', 'cs', 'tr', 'ar', 'de', 'tl', 'ms')
 
 
@@ -127,7 +129,8 @@ def geo_item(ent):
     names = sorted(n[:80] for n in names)[:24]
     if not names:
         return None
-    return keys, [ent.get('id'), round(pt[0], 6), round(pt[1], 6), len(ent.get('sitelinks') or {}), files[0], names]
+    nonplace = int(any(cl.get(pr) for pr in NONPLACE_PROPS))
+    return keys, [ent.get('id'), round(pt[0], 6), round(pt[1], 6), len(ent.get('sitelinks') or {}), files[0], names, nonplace]
 
 
 def log(m):
@@ -485,6 +488,9 @@ def main():
         qn = len(load_qids(store))
         m['qids'] = qn
         skip = (not a.force) and st.get('date') == m['date'] and st.get('qids', -1) >= qn and st.get('jobs') == a.jobs  # 조각이 빠졌으면 다시
+        gi = ((store.get_json('processed/photos/geo_items.json.gz', None) or {}).get('cities') or {}).get('tokyo') or [[]]
+        if skip and len(gi[0]) < 7:
+            skip = False  # (270기 6차) 꼭 있어야 할 명소용 '장소 아님' 표시(nonplace)를 아직 모으지 않음
         if skip and ((store.get_json('processed/photos/city_items.json', None) or {}).get('cities') or {}).get('tokyo', {}).get('files') is None:
             skip = False  # (270기 2차) 도시 후보 여러 장·상자 안 명소(geo_items)를 아직 모으지 않음
         if skip and (store.get_json('processed/photos/city_items.json', None) or {}).get('date') != m['date']:
