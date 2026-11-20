@@ -2,6 +2,7 @@
 // 262기 vote_fn 시험(네트워크·에뮬레이터 없음, 가짜 db). node test_vote_fn.js
 const assert = require('assert');
 const V = require('./vote_fn');
+const UA = (k) => (k === 'user-agent' ? 'Mozilla/5.0 (iPhone)' : k === 'x-forwarded-for' ? '1.2.3.4, 9.9.9.9' : '');
 let pass = 0;
 const ok = (name, f) => Promise.resolve().then(f).then(() => { pass++; }, (e) => { console.error('FAIL', name, e.message); process.exitCode = 1; });
 
@@ -74,18 +75,18 @@ function res() {
     const h = V.makeHandlers(() => fakeDb(store), () => NOW);
     const bid = 'B'.repeat(20);
     let r = res();
-    await h.cast({ method: 'POST', body: { t: TOK, bid, v: { p1: 1 } } }, r);
+    await h.cast({ method: 'POST', get: UA, body: { t: TOK, bid, v: { p1: 1 } } }, r);
     assert.deepStrictEqual([r.code, r.body], [200, { ok: true }]);
     r = res();
-    await h.cast({ method: 'POST', body: { t: TOK, bid, v: { p1: -1 } } }, r);
+    await h.cast({ method: 'POST', get: UA, body: { t: TOK, bid, v: { p1: -1 } } }, r);
     assert.strictEqual(store[`vote_links/${TOK}/ballots/${bid}`].v.p1, -1);
     assert.strictEqual(store[`vote_links/${TOK}`].nb, 1);
     store[`vote_links/${TOK}`].nb = V.MAX_BALLOTS;
     r = res();
-    await h.cast({ method: 'POST', body: { t: TOK, bid: 'C'.repeat(20), v: { p1: 1 } } }, r);
+    await h.cast({ method: 'POST', get: UA, body: { t: TOK, bid: 'C'.repeat(20), v: { p1: 1 } } }, r);
     assert.deepStrictEqual([r.code, r.body.reason], [400, 'full']);
     r = res();
-    await h.cast({ method: 'GET', body: {} }, r);
+    await h.cast({ method: 'GET', get: UA, body: {} }, r);
     assert.strictEqual(r.code, 405);
   });
   await ok('언어 고르기', () => {
@@ -93,5 +94,24 @@ function res() {
     assert.strictEqual(V.pickLang('en-US,ko;q=0.8'), 'en');
     assert.strictEqual(V.pickLang('fr'), 'en');
   });
-  console.log(`vote_fn ${pass}/4 통과`);
+  await ok('276 웹 면: 보안 머리글·봇 거름·같은 주소 몰아넣기 막기', async () => {
+    const store = { [`vote_links/${TOK}`]: link() };
+    const h = V.makeHandlers(() => fakeDb(store), () => NOW);
+    let r = res();
+    await h.page({ method: 'GET', query: { t: TOK }, get: () => 'ko' }, r);
+    for (const k of ['Strict-Transport-Security', 'X-Frame-Options', 'X-Robots-Tag', 'Permissions-Policy', 'Content-Security-Policy']) assert.ok(r.h[k], k);
+    assert.ok(/noai/.test(r.h['X-Robots-Tag']));
+    r = res();
+    await h.cast({ method: 'POST', get: () => '', body: { t: TOK, bid: 'D'.repeat(20), v: { p1: 1 } } }, r);
+    assert.deepStrictEqual([r.code, r.body.reason], [400, 'client']);
+    assert.ok(r.h['Strict-Transport-Security']);
+    let last = 0;
+    for (let i = 0; i < V.IP_LIMIT.newPerLink + 1; i++) { r = res(); await h.cast({ method: 'POST', get: UA, body: { t: TOK, bid: 'E' + String(i).padStart(19, '0'), v: { p1: 1 } } }, r); last = r.code; }
+    assert.strictEqual(last, 429);
+    const xff = (ip) => (k) => (k === 'user-agent' ? 'Mozilla/5.0' : k === 'x-forwarded-for' ? ip : '');
+    assert.strictEqual(V.clientKey({ get: xff('6.6.6.6, 1.1.1.1') }), V.clientKey({ get: xff('7.7.7.7, 1.1.1.1') }), '앞쪽 꾸민 주소는 무시');
+    const g = V.makeIpGate(() => NOW, { windowMs: 1000, casts: 2, newPerLink: 9, memMax: 10 });
+    assert.deepStrictEqual([g.hit('k', 'a', false), g.hit('k', 'a', false), g.hit('k', 'a', false)], ['ok', 'ok', 'rate']);
+  });
+  console.log(`vote_fn ${pass}/5 통과`);
 })();
