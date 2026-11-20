@@ -42,6 +42,7 @@ jobs:
       - name: build
         env:
           UNSPLASH_ACCESS_KEY: ${{ secrets.UNSPLASH_ACCESS_KEY }}
+          DATA_GO_KR_KEY: ${{ secrets.DATA_GO_KR_KEY }}
         run: |
           set -o pipefail
           python3 scripts/photo_pri.py build --store "$STORE" --bucket "$GCS_BUCKET" --budget-min "${{ inputs.budget || '50' }}" --out "$RUNNER_TEMP/ppri" | tail -60
