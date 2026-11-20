@@ -29,6 +29,7 @@ TOP = 30
 KR_BOX = [124.5, 33.0, 131.0, 38.7]
 PROBES = ['경복궁', '성산일출봉', '창덕궁', '해운대해수욕장', '남산서울타워', '감천문화마을', '한라산', '우도', '불국사', '해동용궁사']  # (270기) 대표 명소가 실제로 들어갔는지 행으로 확인
 PRESENT_M = 150.0
+EXACT_M = 800.0
 KTO_DUP_M = 200.0
 KTO_CAT = {'12': 'tourist_attraction', '14': 'museum', '28': 'amusement_park'}
 HANGUL = re.compile('[가-힣]')
@@ -66,16 +67,22 @@ class Index:
         if ns:
             self.grid.setdefault((int(la * 500), int(lo * 500)), []).append((la, lo, ns))
 
-    def has(self, la, lo, names, max_m, sim=PP.GEO_SIM):
+    def has(self, la, lo, names, max_m, sim=PP.GEO_SIM, exact_m=EXACT_M):
+        """max_m 안에서 이름 닮음 sim 이상, 또는 exact_m 안에서 이름이 똑같은(정규화) 행이 있나.
+        (270기) 궁·공원·산처럼 넓은 곳은 Wikidata 점과 앱 행 점이 150m 넘게 떨어져 같은 곳을 또 넣었다(창덕궁 등) — 같은 이름이면 넓게 본다."""
         mine = {PP.geo_norm(n) for n in names} - {''}
         if not mine:
             return False
+        far = max(max_m, exact_m)
         gi, gj = int(la * 500), int(lo * 500)
-        r = max(1, int(max_m / 200) + 1)
+        r = max(1, int(far / 200) + 1)
         for di in range(-r, r + 1):
             for dj in range(-r, r + 1):
                 for tla, tlo, ns in self.grid.get((gi + di, gj + dj), ()):
-                    if PP._dist_m(la, lo, tla, tlo) <= max_m and any(PP.name_sim(a, b) >= sim for a in mine for b in ns):
+                    dm = PP._dist_m(la, lo, tla, tlo)
+                    if dm <= max_m and any(PP.name_sim(a, b) >= sim for a in mine for b in ns):
+                        return True
+                    if dm <= exact_m and mine & ns:
                         return True
         return False
 
