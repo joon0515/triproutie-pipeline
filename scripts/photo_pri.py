@@ -330,7 +330,7 @@ def city_rows(cities, cstate, ccache, http_wd, budget_end, key=None, opener=None
 
 
 # ---------- 4. 실행 ----------
-def city_diag(cities, cstate, ccache):
+def city_diag(cities, cstate, ccache, items=None, made=None):
     """도시 사진이 왜 0 인지 보이게(263기 관측): 단계별 도시 수. 상태 파일의 오류 이름만 센다(주소·열쇠 없음)."""
     d = {'no_state': 0, 'unsplash': 0, 'wd_hit': 0, 'judged': 0, 'free_license': 0, 'judged_not_free': 0}
     errs = {}
@@ -349,6 +349,11 @@ def city_diag(cities, cstate, ccache):
                     d['free_license'] += 1
                 else:
                     d['judged_not_free'] += 1
+        if made is not None and f"city:{c['key']}" not in made:  # (270기) 도시 사진이 빠진 도시: 후보 파일 판정 상태 개수(이름·주소 없음)
+            fs = list(dict.fromkeys([st.get('p')] + list(((items or {}).get(c['key']) or {}).get('files') or [])))
+            fs = [u for u in fs if u]
+            d.setdefault('missing', {})[c['key']] = {'files': len(fs), 'unjudged': sum(1 for u in fs if u not in ccache),
+                                                     'not_free': sum(1 for u in fs if u in ccache and not PN.photo_row(u, ccache[u][1]))}
         for k in ('wd_err', 'unsplash_err'):
             if st.get(k):
                 errs[f"{k}:{st[k]}"] = errs.get(f"{k}:{st[k]}", 0) + 1
@@ -567,7 +572,7 @@ def run(store, bucket=None, tiles_dir=None, out=None, budget_min=50.0, http_wd=N
     store.put_json('processed/photos/commons.json.gz', mine)
     crow, _ = city_rows(cities, cstate, ccache, None, 0, key=None, clock=clock, items=items)  # 판정 뒤 다시(요청 없음)
     store.put_json('processed/photos/cities.json', cstate)
-    cdiag = city_diag(cities, cstate, ccache)
+    cdiag = city_diag(cities, cstate, ccache, items, crow)
     cdiag['cooling'] = {f'{n}:{k}': {x: y for x, y in (v or {}).items() if x in ('cool_until', 'code', 'ra')} for n, hs in (('wd', st.get('hosts_wd')), ('c', st.get('hosts_c'))) for k, v in list((hs or {}).items())[:3]}
     rows, by_city = pri_rows(prio, cache, pcache, ccache, keys_of)
     for rk, v in kto_rows.items():
