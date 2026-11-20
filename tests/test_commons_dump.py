@@ -201,7 +201,10 @@ class T(unittest.TestCase):
                'claims': {'P625': [{'mainsnak': {'datavalue': {'value': {'latitude': 34.6873, 'longitude': 135.5259}}}}],
                           'P18': [{'mainsnak': {'datavalue': {'value': 'C.jpg'}}}]}}
         keys, g = WD.geo_item(ent)
-        self.assertEqual((keys, g[0], g[4], g[5]), (['osaka'], 'Q1', WD.FILEPATH + 'C.jpg', ['Osaka Castle', '大坂城', '大阪城']))
+        self.assertEqual((keys, g[0], g[4], g[5], g[6]), (['osaka'], 'Q1', WD.FILEPATH + 'C.jpg', ['Osaka Castle', '大坂城', '大阪城'], 0))
+        ent['claims']['P1082'] = [{}]
+        self.assertEqual(WD.geo_item(ent)[1][6], 1)
+        del ent['claims']['P1082']
         ent['claims']['P625'][0]['mainsnak']['datavalue']['value']['latitude'] = 10.0
         self.assertIsNone(WD.geo_item(ent))  # 상자 밖
 

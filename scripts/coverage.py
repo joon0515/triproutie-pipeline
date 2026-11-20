@@ -112,7 +112,7 @@ def add_rec_layers(m, d):
         return
     m.adding = True
     for f in sorted(os.listdir(d)):
-        if f.startswith('col_ovtadd_') and f.endswith('.json.gz'):
+        if f.startswith(('col_ovtadd_', 'col_mustadd_')) and f.endswith('.json.gz'):  # (270기) col_mustadd_ = 꼭 있어야 할 명소 보충(must_have.py)
             m.add_layer(_load(os.path.join(d, f)))
     m.adding = False
 
