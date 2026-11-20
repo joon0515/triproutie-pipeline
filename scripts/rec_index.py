@@ -72,10 +72,6 @@ def name_sim(a, b):
     return difflib.SequenceMatcher(None, a, b).ratio()
 
 
-def cat_key(c):
-    return re.sub(r'[^a-z]', '', (c or '').lower())
-
-
 def type_ok(ta, tb):
     return ta == tb or 'other' in (ta, tb)
 
