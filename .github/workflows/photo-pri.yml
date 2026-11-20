@@ -35,7 +35,7 @@ jobs:
           sa: "${{ vars.GCP_SA_EMAIL }}"
       - run: pip install -q pyyaml h3 >/dev/null
       - name: test (mock, no network)
-        run: set -o pipefail; python3 -W ignore -m unittest tests/test_photo_pri.py 2>&1 | tail -3
+        run: set -o pipefail; python3 -W ignore -m unittest tests/test_photo_pri.py tests/test_photo_pri_extra_rows.py 2>&1 | tail -3
       - name: build
         env:
           UNSPLASH_ACCESS_KEY: ${{ secrets.UNSPLASH_ACCESS_KEY }}

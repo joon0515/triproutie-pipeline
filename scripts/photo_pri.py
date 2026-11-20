@@ -540,6 +540,27 @@ def city_doc(rows):
             'attribution': '도시 사진: Unsplash(작가·Unsplash 표기, 핫링크) 또는 위키미디어 공용(저작자·라이선스)', 'built': today(), 'rows': rows}
 
 
+def pov_rows_missing(pov_doc, rows):
+    """(270기) Commons 덤프의 촬영 좌표·묘사 대상으로 고른 사진(자유 라이선스+저작자, 50m) — P18·TourAPI·이름 맞춤이 없는 행만."""
+    out = {}
+    for rk, v in sorted(((pov_doc or {}).get('rows') or {}).items()):
+        r = PN.photo_row(v[2], v[3]) if isinstance(v, list) and len(v) > 3 else None
+        if r and rk not in rows:
+            out[rk] = dict(r, match='pov_' + str(v[0]))
+    return out
+
+
+def name_geo_rows_missing(geo_hits, ccache, rows):
+    """(270기 2차) 이름+좌표로 맞춘 덤프 항목의 P18 — 판정이 자유+저작자인 것만, 아직 사진이 없는 행만."""
+    out = {}
+    for rk, (q, u) in sorted(geo_hits.items()):
+        cc = ccache.get(u)
+        v = PN.photo_row(u, cc[1]) if cc else None
+        if v and rk not in rows:
+            out[rk] = dict(v, q=q, match='name_geo')
+    return out
+
+
 def run(store, bucket=None, tiles_dir=None, out=None, budget_min=50.0, http_wd=None, http_c=None, key=None, opener=None, clock=time.time, dry_run=False, src=None, kto_cards=None, kr_key=None):
     t_end = clock() + budget_min * 60
     src = src or {}
@@ -646,18 +667,10 @@ def run(store, bucket=None, tiles_dir=None, out=None, budget_min=50.0, http_wd=N
             store.put_json('processed/photos/kr_loc4.json.gz', lcache)
         for rk, v in kr_got.items():
             rows.setdefault(rk, v)
-    pov_n = 0
-    for rk, v in sorted(((store.get_json('processed/photos/pov.json.gz', None) or {}).get('rows') or {}).items()):
-        # (270기) Commons 덤프의 촬영 좌표·묘사 대상으로 고른 사진(자유 라이선스+저작자, 50m) — P18·TourAPI·이름 맞춤이 없는 행만
-        r = PN.photo_row(v[2], v[3]) if isinstance(v, list) and len(v) > 3 else None
-        if r and rk not in rows:
-            rows[rk] = dict(r, match='pov_' + str(v[0])); pov_n += 1
-    geo_n = 0
-    for rk, (q, u) in sorted(geo_hits.items()):  # (270기 2차) 이름+좌표로 맞춘 덤프 항목의 P18 — 판정이 자유+저작자인 것만
-        cc = ccache.get(u)
-        v = PN.photo_row(u, cc[1]) if cc else None
-        if v and rk not in rows:
-            rows[rk] = dict(v, q=q, match='name_geo'); geo_n += 1
+    pov = pov_rows_missing(store.get_json('processed/photos/pov.json.gz', None), rows)
+    rows.update(pov)
+    name_geo = name_geo_rows_missing(geo_hits, ccache, rows)
+    rows.update(name_geo)
     out = out or tempfile.mkdtemp(prefix='ppri_', dir=os.environ.get('RUNNER_TEMP') or None)
     os.makedirs(out, exist_ok=True)
     for f in glob.glob(os.path.join(out, 'photos-pri-*.json.gz')) + glob.glob(os.path.join(out, 'photos-city-*.json.gz')):
@@ -672,7 +685,7 @@ def run(store, bucket=None, tiles_dir=None, out=None, budget_min=50.0, http_wd=N
             made[name] = len(layer_rows)
     rep = {'p18_asked': p_asked, 'p18_left': len(need) - p_asked, 'p18_stop': p_stop, 'commons_asked': asked, 'commons_left': len(todo) - asked,
            'commons_stop': stop, 'rows': len(rows), 'cities': len(crow), 'unsplash': sum(1 for v in crow.values() if v.get('photo_src') == 'unsplash'),
-           'by_city': by_city, 'city_diag': cdiag, 'kto': {k: list(v) for k, v in kto_stat.items()}, 'tile_cov': tile_cov(city_ids, rows), 'geo_matched': len(geo_hits), 'geo_rows': geo_n, 'pov_rows': pov_n, 'sight_cov': tile_cov(sight_ids, rows),
+           'by_city': by_city, 'city_diag': cdiag, 'kto': {k: list(v) for k, v in kto_stat.items()}, 'tile_cov': tile_cov(city_ids, rows), 'geo_matched': len(geo_hits), 'geo_rows': len(name_geo), 'pov_rows': len(pov), 'sight_cov': tile_cov(sight_ids, rows),
            'pop_geo': len(pop_rows), 'kr_loc': {'asked': kr_asked, 'rows': len(kr_got), 'why': kr_why}, 'miss': miss_diag(sight_ids, rows, targets, geo)}
     st['last'] = dict(rep, at=datetime.datetime.now(datetime.timezone.utc).isoformat())
     store.put_json('processed/photos/state.json', st)
