@@ -525,6 +525,11 @@ def load_kto_cards(bucket, wd):
     return cards
 
 
+def write_gz_doc(path, doc):
+    with open(path, 'wb') as f:
+        f.write(gzip.compress(json.dumps(doc, ensure_ascii=False, separators=(',', ':')).encode()))
+
+
 def pri_doc(rows, part):
     return {'schema': 'photos-1', 'region': 'priority', 'part': part, 'license': 'mixed — 행마다 photo_license(CC0·CC BY·CC BY-SA)',
             'attribution': '사진: 위키미디어 공용(사진마다 저작자·라이선스) · 사진 고르기: Wikidata P18 (CC0)', 'built': today(), 'rows': rows}
@@ -580,7 +585,6 @@ def run(store, bucket=None, tiles_dir=None, out=None, budget_min=50.0, http_wd=N
         geo = (store.get_json('processed/photos/geo_items.json.gz', None) or {}).get('cities') or {}
         qnames = {g[0]: g[5] for items in geo.values() for g in items if isinstance(g, list) and len(g) >= 6}  # (270기) QID → 라벨·별칭(ja·th·fr·en 등 20개 언어)
         qsl = {g[0]: g[3] for items in geo.values() for g in items if isinstance(g, list) and len(g) >= 6}  # QID → sitelinks
-        pop_rows = {}
         try:
             for c in cities:
                 ts = tiles_for(c['bbox'])
@@ -661,16 +665,11 @@ def run(store, bucket=None, tiles_dir=None, out=None, budget_min=50.0, http_wd=N
     made = {}
     if rows:
         made.update(PN.write_sharded(out, 'photos-pri', rows, pri_doc, n=PRI_SHARDS))
-    if pop_rows:  # (270기) 위키 연결이 없던 명소(한국 fsq·해시 행 등)에 덤프 이름+좌표 연결로 인기 점수 — popularity-1 층(앱 정렬)
-        p = os.path.join(out, 'pop-geo-1.json.gz')
-        with open(p, 'wb') as f:
-            f.write(gzip.compress(json.dumps(pop_doc(pop_rows), ensure_ascii=False, separators=(',', ':')).encode()))
-        made['pop-geo-1.json.gz'] = len(pop_rows)
-    if crow:
-        p = os.path.join(out, 'photos-city-1.json.gz')
-        with open(p, 'wb') as f:
-            f.write(gzip.compress(json.dumps(city_doc(crow), ensure_ascii=False, separators=(',', ':')).encode()))
-        made['photos-city-1.json.gz'] = len(crow)
+    # (270기) pop-geo-1 = 위키 연결이 없던 명소(한국 fsq·해시 행 등)에 덤프 이름+좌표 연결로 인기 점수 — popularity-1 층(앱 정렬)
+    for name, make_doc, layer_rows in (('pop-geo-1.json.gz', pop_doc, pop_rows), ('photos-city-1.json.gz', city_doc, crow)):
+        if layer_rows:
+            write_gz_doc(os.path.join(out, name), make_doc(layer_rows))
+            made[name] = len(layer_rows)
     rep = {'p18_asked': p_asked, 'p18_left': len(need) - p_asked, 'p18_stop': p_stop, 'commons_asked': asked, 'commons_left': len(todo) - asked,
            'commons_stop': stop, 'rows': len(rows), 'cities': len(crow), 'unsplash': sum(1 for v in crow.values() if v.get('photo_src') == 'unsplash'),
            'by_city': by_city, 'city_diag': cdiag, 'kto': {k: list(v) for k, v in kto_stat.items()}, 'tile_cov': tile_cov(city_ids, rows), 'geo_matched': len(geo_hits), 'geo_rows': geo_n, 'pov_rows': pov_n, 'sight_cov': tile_cov(sight_ids, rows),
