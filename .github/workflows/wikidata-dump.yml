@@ -44,7 +44,9 @@ jobs:
       - name: test (mock, no network)
         run: set -o pipefail; python3 -W ignore -m unittest tests/test_wd_dump.py 2>&1 | tail -3
       - id: p
-        run: python3 scripts/wd_dump.py plan --store "$STORE" --jobs "$JOBS" --procs "$PROCS" $( [ "${{ inputs.force }}" = "yes" ] && echo --force ) >> "$GITHUB_OUTPUT"
+        env:
+          IN_FORCE: ${{ inputs.force }}
+        run: python3 scripts/wd_dump.py plan --store "$STORE" --jobs "$JOBS" --procs "$PROCS" $( [ "$IN_FORCE" = "yes" ] && echo --force ) >> "$GITHUB_OUTPUT"
   scan:
     needs: plan
     if: needs.plan.outputs.any == 'true'

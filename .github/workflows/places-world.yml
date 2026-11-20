@@ -65,7 +65,11 @@ jobs:
       - name: build-and-upload
         env:
           FSQ_TOKEN: ${{ secrets.FSQ_TOKEN }}
-        run: bash scripts/run_region.sh "${{ matrix.region }}" "${{ inputs.tag }}"
+          IN_REGION: ${{ matrix.region }}
+          IN_TAG: ${{ inputs.tag }}
+        run: |
+          case "$IN_TAG" in *[!A-Za-z0-9._-]*) echo "::error::tag 형식"; exit 1;; esac
+          bash scripts/run_region.sh "$IN_REGION" "$IN_TAG"
   finalize:
     needs: build
     runs-on: ubuntu-latest
@@ -77,4 +81,8 @@ jobs:
           sa: "${{ vars.GCP_SA_EMAIL }}"
           python: none
       - run: pip install -q cryptography >/dev/null
-      - run: python3 scripts/finalize.py "${{ inputs.tag }}"
+      - env:
+          IN_TAG: ${{ inputs.tag }}
+        run: |
+          case "$IN_TAG" in *[!A-Za-z0-9._-]*) echo "::error::tag 형식"; exit 1;; esac
+          python3 scripts/finalize.py "$IN_TAG"

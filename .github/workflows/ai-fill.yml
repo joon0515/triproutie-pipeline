@@ -70,7 +70,9 @@ jobs:
         run: python3 scripts/ai_fill.py models || true
       - name: ai-fill
         if: steps.gate.outputs.on == '1'
-        run: set -o pipefail; python3 scripts/ai_fill.py run --store "$STORE" --extra-dir "$RUNNER_TEMP/extra" --max-places "${{ inputs.max_places || '20000' }}" --budget-min 50 | tee -a "$GITHUB_STEP_SUMMARY"
+        env:
+          IN_MAX: ${{ inputs.max_places || '20000' }}
+        run: set -o pipefail; case "$IN_MAX" in ''|*[!0-9]*) echo "::error::max_places 숫자만"; exit 1;; esac; python3 scripts/ai_fill.py run --store "$STORE" --extra-dir "$RUNNER_TEMP/extra" --max-places "$IN_MAX" --budget-min 50 | tee -a "$GITHUB_STEP_SUMMARY"
       - name: 앱 묶음 층 내보내기(names-ai·desc-ai → layers_extra, 기존 출처 이름·설명이 있는 칸은 빼고)
         if: steps.gate.outputs.on == '1'
         run: |

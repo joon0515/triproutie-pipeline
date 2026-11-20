@@ -28,6 +28,23 @@ class Workflows(unittest.TestCase):
             for jid, j in load(f)['jobs'].items():
                 self.assertTrue('timeout-minutes' in j or 'uses' in j or (os.path.basename(f), jid) in NO_TIMEOUT_OK, f'{os.path.basename(f)}:{jid} timeout-minutes 없음')
 
+    def test_string_inputs_not_in_run(self):
+        # 289기(SCAN1120 S10): 문자열 입력을 run 에 ${{ }} 로 끼워 넣으면 수동 실행 입력이 셸 명령이 된다 → env 로만(== 비교로 상수만 나오는 식은 허용).
+        for f in self.files:
+            d = load(f); wd = (d['on'] or {}).get('workflow_dispatch') if isinstance(d['on'], dict) else None
+            strs = [k for k, v in ((wd or {}).get('inputs') or {}).items() if (v or {}).get('type', 'string') == 'string']
+            for jid, j in d['jobs'].items():
+                for st in j.get('steps') or []:
+                    run = st.get('run') or ''
+                    for k in strs:
+                        self.assertNotRegex(run, r'\$\{\{[^}]*\b(github\.event\.)?inputs\.' + re.escape(k) + r'\b(?!\s*[!=]=)', f'{os.path.basename(f)}:{jid} run 에 inputs.{k}')
+
+    def test_firebase_tools_pinned(self):
+        # 289기(SCAN1120 S11): 자격 증명 단계의 npx firebase-tools 는 정확한 판(x.y.z)으로
+        for f in self.files:
+            for m in re.finditer(r'firebase-tools@([^\s"\']+)', open(f, encoding='utf-8').read()):
+                self.assertRegex(m.group(1), r'^\d+\.\d+\.\d+$', f'{os.path.basename(f)} firebase-tools@{m.group(1)}')
+
     def test_auth_through_composite(self):
         for f in self.files:
             b = os.path.basename(f)

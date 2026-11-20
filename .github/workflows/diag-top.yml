@@ -21,4 +21,7 @@ jobs:
           wif: "${{ vars.GCP_WIF_PROVIDER }}"
           sa: "${{ vars.GCP_SA_EMAIL }}"
       - run: pip install -q pyyaml h3 >/dev/null
-      - run: python3 scripts/diag_top.py --bucket "${{ vars.GCS_BUCKET || 'trip-mate-0vum9k.firebasestorage.app' }}" --cities "${{ inputs.cities }}"
+      - env:   # 289기(SCAN1120 S10): 입력은 env 로만(run 에 끼워 넣지 않음)
+          IN_BUCKET: ${{ vars.GCS_BUCKET || 'trip-mate-0vum9k.firebasestorage.app' }}
+          IN_CITIES: ${{ inputs.cities }}
+        run: python3 scripts/diag_top.py --bucket "$IN_BUCKET" --cities "$IN_CITIES"

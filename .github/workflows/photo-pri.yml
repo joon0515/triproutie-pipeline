@@ -40,6 +40,8 @@ jobs:
         env:
           UNSPLASH_ACCESS_KEY: ${{ secrets.UNSPLASH_ACCESS_KEY }}
           DATA_GO_KR_KEY: ${{ secrets.DATA_GO_KR_KEY }}
+          IN_BUDGET: ${{ inputs.budget || '50' }}
         run: |
           set -o pipefail
-          python3 scripts/photo_pri.py build --store "$STORE" --bucket "$GCS_BUCKET" --budget-min "${{ inputs.budget || '50' }}" --out "$RUNNER_TEMP/ppri" | tail -60
+          case "$IN_BUDGET" in ''|*[!0-9]*) echo "::error::budget 숫자만"; exit 1;; esac
+          python3 scripts/photo_pri.py build --store "$STORE" --bucket "$GCS_BUCKET" --budget-min "$IN_BUDGET" --out "$RUNNER_TEMP/ppri" | tail -60
