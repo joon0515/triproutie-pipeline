@@ -631,11 +631,11 @@ def run(store, bucket=None, tiles_dir=None, out=None, budget_min=50.0, http_wd=N
         rows.setdefault(rk, v)  # P18(Commons)가 이미 있는 행이 먼저
     kr_got, kr_why, kr_asked = {}, {}, 0
     if targets:
-        lcache = store.get_json('processed/photos/kr_loc3.json.gz', {}) or {}
+        lcache = store.get_json('processed/photos/kr_loc4.json.gz', {}) or {}
         sight_t = {k: [t for t in targets.get(k) or [] if t[0] in set(sight_ids.get(k, [])[:TOP_N])] for k in KR_CITIES}
         kr_got, kr_why, kr_asked = kr_loc(sight_t, rows, lcache, kr_key)
         if kr_asked:
-            store.put_json('processed/photos/kr_loc3.json.gz', lcache)
+            store.put_json('processed/photos/kr_loc4.json.gz', lcache)
         for rk, v in kr_got.items():
             rows.setdefault(rk, v)
     pov_n = 0
@@ -689,6 +689,7 @@ def run(store, bucket=None, tiles_dir=None, out=None, budget_min=50.0, http_wd=N
 TOP_N = 50
 KR_LOC_API = 'https://apis.data.go.kr/B551011/KorService2/locationBasedList2'
 KR_LOC_TYPES = {'12', '14', '15'}   # 관광지·문화시설·축제공연행사
+KR_LOC_ASK = ('12', '14')           # 묻는 유형(축제는 기간 행사라 상위 명소 사진으로는 빼고 두 번만)
 KR_LOC_RADIUS = 1000              # (270기) 200m 에서 146곳 중 항목 0 이 116(응답 정상) — 산·해변·공원처럼 넓은 곳은 TourAPI 점이 멀다. 이름 일치는 그대로 필수
 KR_LOC_MAX = 150                    # 하루 호출 한도(tourapi_daily 900 회와 합쳐 data.go.kr 1,000 안쪽 — 도시 3곳 × 상위 50)
 KR_LOC_REFRESH = 30
@@ -703,9 +704,9 @@ def kr_keys(s):
     return {k for k in (norm_name(s), norm_name(KR_BR.sub(' ', s))) if len(k) >= 2}
 
 
-def kr_loc_get(la, lo, key, opener=None):
+def kr_loc_get(la, lo, key, opener=None, ctype=None):
     q = urllib.parse.urlencode({'serviceKey': key, 'MobileOS': 'ETC', 'MobileApp': 'TripRoutie', '_type': 'json', 'mapX': f'{lo:.6f}', 'mapY': f'{la:.6f}',
-                                'radius': KR_LOC_RADIUS, 'numOfRows': 100, 'pageNo': 1, 'arrange': 'E'})
+                                'radius': KR_LOC_RADIUS, 'numOfRows': 100, 'pageNo': 1, 'arrange': 'E', **({'contentTypeId': ctype} if ctype else {})})
     req = urllib.request.Request(f'{KR_LOC_API}?{q}', headers={'User-Agent': 'TripRoutie-pipeline/1.0'})
     if opener:
         return opener(req)
@@ -785,7 +786,11 @@ def kr_loc(targets, rows, lcache, key, opener=None, cap=KR_LOC_MAX, now_day=None
                     continue
                 asked += 1
                 try:
-                    items = [{x: i.get(x) for x in ('contentid', 'contenttypeid', 'title', 'firstimage', 'firstimage2', 'cpyrhtDivCd')} for i in kr_loc_items(kr_loc_get(t[1], t[2], key, opener))]
+                    items = []
+                    for ct in KR_LOC_ASK:  # (270기) 유형을 지정해 묻는다 — 지정 없이 1km·가까운 순 100개면 도심에서는 식당(39)이 다 채웠다(41곳)
+                        asked += ct != KR_LOC_ASK[0]
+                        items += [{x: i.get(x) for x in ('contentid', 'contenttypeid', 'title', 'firstimage', 'firstimage2', 'cpyrhtDivCd')}
+                                  for i in kr_loc_items(kr_loc_get(t[1], t[2], key, opener, ct))]
                 except Exception as e:  # noqa: BLE001 — 이유 이름·HTTP 코드만(열쇠가 든 주소를 남기지 않음)
                     code = getattr(e, 'code', None) or (str(e) if isinstance(e, KrApiError) else None)
                     k2 = 'err:' + type(e).__name__ + (f':{code}' if code else '')
