@@ -1,0 +1,34 @@
+# 재사용 작업(275기): checkout → GCP 준비(gcp-setup) → 명령 실행(시간·재시도·지표를 같은 방식으로 남김).
+# 부르는 쪽: jobs.<id>.uses: ./.github/workflows/reusable-gcp-job.yml + with(아래 inputs). 권한(id-token: write)은 부르는 워크플로가 준다.
+# 실패 알림은 따로 하지 않는다 — 부르는 워크플로가 failure-digest 목록에 있으면 그쪽이 이슈 하나에 모은다(시험 test_workflows 가 목록 빠짐을 막음).
+# 지표: scripts/lib/run_job.sh 가 Step Summary 표 한 줄 + JSON 이벤트(job.started/attempt_failed/finished)를 남긴다.
+name: reusable-gcp-job
+on:
+  workflow_call:
+    inputs:
+      job: {type: string, required: true, description: 지표·로그에 쓰는 이름}
+      run: {type: string, required: true, description: 실행할 bash 명령(여러 줄 가능)}
+      env: {type: string, required: false, default: "", description: "K=V 줄들. 부르는 쪽 env 는 넘어오지 않으므로 여기로 넘긴다"}
+      retries: {type: number, required: false, default: 1, description: "시도 횟수(1 = 재시도 없음). 멱등한 명령만 2 이상"}
+      timeout: {type: number, required: false, default: 15}
+      python: {type: string, required: false, default: "3.12"}
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    timeout-minutes: ${{ inputs.timeout }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/gcp-setup
+        with:
+          wif: "${{ vars.GCP_WIF_PROVIDER }}"
+          sa: "${{ vars.GCP_SA_EMAIL }}"
+          python: ${{ inputs.python }}
+      - name: env
+        if: inputs.env != ''
+        env: {LINES: "${{ inputs.env }}"}
+        run: printf '%s\n' "$LINES" | grep -E '^[A-Z_][A-Z0-9_]*=' >> "$GITHUB_ENV"
+      - name: ${{ inputs.job }}
+        env: {CMD: "${{ inputs.run }}"}
+        run: |
+          printf '%s\n' "$CMD" > "$RUNNER_TEMP/cmd.sh"
+          bash scripts/lib/run_job.sh "${{ inputs.job }}" "${{ inputs.retries }}" "$RUNNER_TEMP/cmd.sh"

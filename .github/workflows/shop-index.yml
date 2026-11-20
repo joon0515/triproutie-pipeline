@@ -31,13 +31,10 @@ jobs:
         chunk: [0, 1, 2, 3, 4, 5, 6, 7]
     steps:
       - uses: actions/checkout@v4
-      - uses: google-github-actions/auth@v2
+      - uses: ./.github/actions/gcp-setup
         with:
-          workload_identity_provider: ${{ vars.GCP_WIF_PROVIDER || 'projects/222914945328/locations/global/workloadIdentityPools/github-pool/providers/github-provider' }}
-          service_account: ${{ vars.GCP_SA_EMAIL || 'pipeline-uploader@trip-mate-0vum9k.iam.gserviceaccount.com' }}
-      - uses: google-github-actions/setup-gcloud@v2
-      - uses: actions/setup-python@v5
-        with: {python-version: "3.12"}
+          wif: "${{ vars.GCP_WIF_PROVIDER }}"
+          sa: "${{ vars.GCP_SA_EMAIL }}"
       - run: pip install -q pyyaml "duckdb==1.*" >/dev/null
       - name: test
         run: set -o pipefail; python3 -W ignore -m unittest tests/test_shop_events.py 2>&1 | tail -3
@@ -85,13 +82,10 @@ jobs:
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
-      - uses: google-github-actions/auth@v2
+      - uses: ./.github/actions/gcp-setup
         with:
-          workload_identity_provider: ${{ vars.GCP_WIF_PROVIDER || 'projects/222914945328/locations/global/workloadIdentityPools/github-pool/providers/github-provider' }}
-          service_account: ${{ vars.GCP_SA_EMAIL || 'pipeline-uploader@trip-mate-0vum9k.iam.gserviceaccount.com' }}
-      - uses: google-github-actions/setup-gcloud@v2
-      - uses: actions/setup-python@v5
-        with: {python-version: "3.12"}
+          wif: "${{ vars.GCP_WIF_PROVIDER }}"
+          sa: "${{ vars.GCP_SA_EMAIL }}"
       - run: pip install -q pyyaml >/dev/null
       - name: 대만 활동(등록부 taiwan_events 가 active 일 때만 — 라이선스 쪽을 사람이 읽은 뒤)
         run: |

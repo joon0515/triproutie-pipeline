@@ -93,7 +93,10 @@ class Workflows(unittest.TestCase):
     def test_digest_names_exist(self):
         names = set()
         for f in glob.glob(os.path.join(ROOT, '.github', 'workflows', '*.yml')):
-            names.add(yaml.safe_load(open(f, encoding='utf-8'))['name'])
+            d = yaml.safe_load(open(f, encoding='utf-8'))
+            if 'workflow_call' in (d.get(True) or {}):
+                continue  # 재사용 작업(275기)은 부르는 워크플로의 이름으로 실패가 모인다
+            names.add(d['name'])
         y = yaml.safe_load(open(os.path.join(ROOT, '.github', 'workflows', 'failure-digest.yml'), encoding='utf-8'))
         watched = set(y[True]['workflow_run']['workflows'])  # yaml 1.1: on → True
         pending = {'coverage-report', 'fx-daily', 'climate-normals', 'patterns'}  # 열린 PR(#18·#22·#24·coverage)이 들여오는 이름

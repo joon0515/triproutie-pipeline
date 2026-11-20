@@ -42,13 +42,10 @@ jobs:
     timeout-minutes: 200
     steps:
       - uses: actions/checkout@v4
-      - uses: google-github-actions/auth@v2
+      - uses: ./.github/actions/gcp-setup
         with:
-          workload_identity_provider: ${{ vars.GCP_WIF_PROVIDER || 'projects/222914945328/locations/global/workloadIdentityPools/github-pool/providers/github-provider' }}
-          service_account: ${{ vars.GCP_SA_EMAIL || 'pipeline-uploader@trip-mate-0vum9k.iam.gserviceaccount.com' }}
-      - uses: google-github-actions/setup-gcloud@v2
-      - uses: actions/setup-python@v5
-        with: {python-version: "3.12"}
+          wif: "${{ vars.GCP_WIF_PROVIDER }}"
+          sa: "${{ vars.GCP_SA_EMAIL }}"
       - run: pip install -q pyyaml >/dev/null
       - name: partition
         run: python3 scripts/collect/process.py process --stage partition --budget-min 150 --store "$STORE"
@@ -65,13 +62,10 @@ jobs:
         shard: [0, 1, 2, 3, 4, 5, 6, 7]
     steps:
       - uses: actions/checkout@v4
-      - uses: google-github-actions/auth@v2
+      - uses: ./.github/actions/gcp-setup
         with:
-          workload_identity_provider: ${{ vars.GCP_WIF_PROVIDER || 'projects/222914945328/locations/global/workloadIdentityPools/github-pool/providers/github-provider' }}
-          service_account: ${{ vars.GCP_SA_EMAIL || 'pipeline-uploader@trip-mate-0vum9k.iam.gserviceaccount.com' }}
-      - uses: google-github-actions/setup-gcloud@v2
-      - uses: actions/setup-python@v5
-        with: {python-version: "3.12"}
+          wif: "${{ vars.GCP_WIF_PROVIDER }}"
+          sa: "${{ vars.GCP_SA_EMAIL }}"
       - run: pip install -q pyyaml >/dev/null
       - name: countries ${{ matrix.shard }}/8
         run: |
@@ -85,13 +79,10 @@ jobs:
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
-      - uses: google-github-actions/auth@v2
+      - uses: ./.github/actions/gcp-setup
         with:
-          workload_identity_provider: ${{ vars.GCP_WIF_PROVIDER || 'projects/222914945328/locations/global/workloadIdentityPools/github-pool/providers/github-provider' }}
-          service_account: ${{ vars.GCP_SA_EMAIL || 'pipeline-uploader@trip-mate-0vum9k.iam.gserviceaccount.com' }}
-      - uses: google-github-actions/setup-gcloud@v2
-      - uses: actions/setup-python@v5
-        with: {python-version: "3.12"}
+          wif: "${{ vars.GCP_WIF_PROVIDER }}"
+          sa: "${{ vars.GCP_SA_EMAIL }}"
       - run: pip install -q pyyaml >/dev/null
       - name: merge
         run: python3 scripts/collect/process.py process --stage merge --batch "${{ github.run_id }}-${{ github.run_attempt }}" --store "$STORE"
@@ -104,13 +95,10 @@ jobs:
     continue-on-error: true
     steps:
       - uses: actions/checkout@v4
-      - uses: google-github-actions/auth@v2
+      - uses: ./.github/actions/gcp-setup
         with:
-          workload_identity_provider: ${{ vars.GCP_WIF_PROVIDER || 'projects/222914945328/locations/global/workloadIdentityPools/github-pool/providers/github-provider' }}
-          service_account: ${{ vars.GCP_SA_EMAIL || 'pipeline-uploader@trip-mate-0vum9k.iam.gserviceaccount.com' }}
-      - uses: google-github-actions/setup-gcloud@v2
-      - uses: actions/setup-python@v5
-        with: {python-version: "3.12"}
+          wif: "${{ vars.GCP_WIF_PROVIDER }}"
+          sa: "${{ vars.GCP_SA_EMAIL }}"
       - run: pip install -q pyyaml >/dev/null
       - name: place-desc
         run: python3 scripts/place_desc.py build --store "$STORE" --bucket "$GCS_BUCKET" --budget-min 50 ${{ github.event.inputs.publish == 'dry' && '--dry-run' || '' }}
@@ -121,13 +109,10 @@ jobs:
     timeout-minutes: 60  # 관문만 22분대(11/17) + 금지 링크 정리·서명·복사
     steps:
       - uses: actions/checkout@v4
-      - uses: google-github-actions/auth@v2
+      - uses: ./.github/actions/gcp-setup
         with:
-          workload_identity_provider: ${{ vars.GCP_WIF_PROVIDER || 'projects/222914945328/locations/global/workloadIdentityPools/github-pool/providers/github-provider' }}
-          service_account: ${{ vars.GCP_SA_EMAIL || 'pipeline-uploader@trip-mate-0vum9k.iam.gserviceaccount.com' }}
-      - uses: google-github-actions/setup-gcloud@v2
-      - uses: actions/setup-python@v5
-        with: {python-version: "3.12"}
+          wif: "${{ vars.GCP_WIF_PROVIDER }}"
+          sa: "${{ vars.GCP_SA_EMAIL }}"
       - run: pip install -q pyyaml >/dev/null
       - name: gate + publish
         run: python3 scripts/collect/process.py publish --store "$STORE" --bucket "$GCS_BUCKET" --kms-key "$KMS_SIGN_KEY" --tools tools --alert "$RUNNER_TEMP/alert.md" ${{ github.event.inputs.publish == 'dry' && '--dry-run' || '' }}

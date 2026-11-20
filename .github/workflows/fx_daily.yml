@@ -8,7 +8,7 @@ on:
     - cron: "10 21 * * *"     # UTC 21:10 = KST 06:10
   workflow_dispatch: {}
   pull_request:
-    paths: ["scripts/fx_daily.py", "tests/test_fx_daily.py", ".github/workflows/fx_daily.yml"]
+    paths: ["scripts/fx_daily.py", "tests/test_fx_daily.py", ".github/workflows/fx_daily.yml", ".github/workflows/reusable-gcp-job.yml", "scripts/lib/**", ".github/actions/gcp-setup/**"]
 permissions:
   contents: read
   id-token: write          # Workload Identity Federation(OIDC) 전용
@@ -32,24 +32,18 @@ jobs:
   publish:
     needs: test
     if: github.repository == 'joon0515/triproutie-pipeline' && github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
-    runs-on: ubuntu-latest
-    timeout-minutes: 10
-    steps:
-      - uses: actions/checkout@v4
-      - uses: google-github-actions/auth@v2
-        with:
-          workload_identity_provider: ${{ vars.GCP_WIF_PROVIDER || 'projects/222914945328/locations/global/workloadIdentityPools/github-pool/providers/github-provider' }}
-          service_account: ${{ vars.GCP_SA_EMAIL || 'pipeline-uploader@trip-mate-0vum9k.iam.gserviceaccount.com' }}
-      - uses: google-github-actions/setup-gcloud@v2
-      - uses: actions/setup-python@v5
-        with:
-          python-version: "3.12"
-      - name: fetch-and-upload
-        run: |
-          set -uo pipefail
-          W="$RUNNER_TEMP/fx"; mkdir -p "$W"; G="gs://$GCS_BUCKET/$FX_OBJECT"
-          gcloud storage cp -q "$G" "$W/prev.json" >/dev/null 2>&1 || echo "prev: 없음(처음 실행)"
-          PREV=(); [ -f "$W/prev.json" ] && PREV=(--prev "$W/prev.json")
-          python3 scripts/fx_daily.py --out "$W/latest.json" "${PREV[@]}" || { echo "::warning::fx 받기 실패 — 어제 파일 유지"; exit 1; }
-          gcloud storage cp -q --content-type=application/json --cache-control="private, max-age=3600" "$W/latest.json" "$G"
-          echo "uploaded $FX_OBJECT"
+    uses: ./.github/workflows/reusable-gcp-job.yml   # 275기: 공용 작업(준비·지표·재시도 한 방식)
+    with:
+      job: fx-publish
+      timeout: 10
+      env: |
+        GCS_BUCKET=${{ vars.GCS_BUCKET || 'trip-mate-0vum9k.firebasestorage.app' }}
+        FX_OBJECT=places/v1/fx/latest.json
+      run: |
+        set -uo pipefail
+        W="$RUNNER_TEMP/fx"; mkdir -p "$W"; G="gs://$GCS_BUCKET/$FX_OBJECT"
+        gcloud storage cp -q "$G" "$W/prev.json" >/dev/null 2>&1 || echo "prev: 없음(처음 실행)"
+        PREV=(); [ -f "$W/prev.json" ] && PREV=(--prev "$W/prev.json")
+        python3 scripts/fx_daily.py --out "$W/latest.json" "${PREV[@]}" || { echo "::warning::fx 받기 실패 — 어제 파일 유지"; exit 1; }
+        gcloud storage cp -q --content-type=application/json --cache-control="private, max-age=3600" "$W/latest.json" "$G"
+        echo "uploaded $FX_OBJECT"
