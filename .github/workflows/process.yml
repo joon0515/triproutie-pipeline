@@ -1,4 +1,4 @@
-# 트립루티 세계 수집 2단(가공)·3단(게시). collect 가 끝나면 자동(workflow_run) + 3시간마다 + 수동.
+# 트립루티 세계 수집 2단(가공)·3단(게시). collect 가 끝나면 자동(workflow_run) + 수동. (295기) 3시간 예약 뺌, job 마다 GCS 다운로드 상한.
 # 단계(11/17): partition(원본 → 나라별 대기함, 1대) → countries(나라 8 조각 동시에) → merge(조각 합치기) → place-desc(장소 소개 층) → publish. 근거·계산: docs/THROUGHPUT.md
 # place-desc(11/17, 218기): 수집 층 wd·타일 id·OSM wikidata 태그의 QID → Wikidata 설명(QLever, CC0) + TourAPI 소개(공공누리 제1유형) + 대만 소개
 #   → places/v1/layers_extra/desc-*.json.gz(출처마다 따로 파일, 5개 언어 칸). 실패해도 게시는 계속(이전 desc 파일이 실림). 끄기: 저장소 변수 PLACE_DESC_OFF=1.
@@ -13,8 +13,7 @@ on:
   workflow_run:
     workflows: [collect]
     types: [completed]
-  schedule:
-    - cron: "17 */3 * * *"
+  # (295기) 3시간 예약은 뺐다 — collect(하루 1회 이하) 가 끝날 때만 돈다. 11/17~19 에 예약·workflow_run·chain 세 길로 매시간 돌며 해외 egress 598 GiB.
   workflow_dispatch:
     inputs:
       publish:
@@ -31,6 +30,7 @@ concurrency:
   group: process
   cancel-in-progress: false
 env:
+  GCS_DL_DAY_CAP_BYTES: ${{ vars.GCS_DL_DAY_CAP_BYTES || '2147483648' }}   # (295기) 모든 워크플로 합산 하루 GCS 다운로드 상한(tools/gcs_meter)
   GCS_BUCKET: ${{ vars.GCS_BUCKET || 'trip-mate-0vum9k.firebasestorage.app' }}
   STORE: gs://${{ vars.GCS_BUCKET || 'trip-mate-0vum9k.firebasestorage.app' }}/collect/v1
   KMS_SIGN_KEY: ${{ vars.KMS_SIGN_KEY || 'projects/trip-mate-0vum9k/locations/us-east1/keyRings/triproutie/cryptoKeys/places-manifest-ed25519/cryptoKeyVersions/1' }}
@@ -39,6 +39,8 @@ jobs:
   partition:
     if: github.repository == 'joon0515/triproutie-pipeline' && (github.event_name != 'workflow_run' || github.event.workflow_run.head_branch == 'main') && github.event.inputs.only_desc != 'yes'
     runs-on: ubuntu-latest
+    env:
+      GCS_DL_CAP_BYTES: ${{ vars.GCS_DL_CAP_PARTITION || '268435456' }}   # (295기) 실행당 GCS 다운로드 상한(바이트)
     timeout-minutes: 200
     steps:
       - uses: actions/checkout@v4
@@ -49,11 +51,17 @@ jobs:
       - run: pip install -q pyyaml >/dev/null
       - name: partition
         run: python3 scripts/collect/process.py process --stage partition --budget-min 150 --store "$STORE"
+      - name: gcs-meter report (실행당 GCS 다운로드 바이트 · 상한 넘었으면 실패)
+        if: always()
+        run: set -o pipefail; gcloud gcs-meter report | tee -a "$GITHUB_STEP_SUMMARY"
   # 2) 나라별 가공 — 나라를 8 조각(cc_shard)으로 나눠 러너 8대가 동시에. 조각은 제 파일(processed/shards/)에만 쓴다.
   #    조각 하나가 실패해도 나머지는 계속(fail-fast: false), 실패한 조각의 나라는 대기함·dirty 에 남아 다음 실행이 이어받는다.
+
   countries:
     needs: partition
     runs-on: ubuntu-latest
+    env:
+      GCS_DL_CAP_BYTES: ${{ vars.GCS_DL_CAP_COUNTRIES || '268435456' }}   # (295기) 실행당 GCS 다운로드 상한(바이트)
     timeout-minutes: 300
     strategy:
       fail-fast: false
@@ -71,11 +79,17 @@ jobs:
         run: |
           WT=$(gcloud storage cat "gs://$GCS_BUCKET/places/v1/manifest.json" 2>/dev/null | python3 -c "import json,sys;print(json.load(sys.stdin).get('version',''))" 2>/dev/null || true)
           python3 scripts/collect/process.py process --stage countries --shard "${{ matrix.shard }}/8" --batch "${{ github.run_id }}-${{ github.run_attempt }}" --budget-min 240 --store "$STORE" ${WT:+--world "gs://$GCS_BUCKET/places/v1/$WT/tiles"}
+      - name: gcs-meter report (실행당 GCS 다운로드 바이트 · 상한 넘었으면 실패)
+        if: always()
+        run: set -o pipefail; gcloud gcs-meter report | tee -a "$GITHUB_STEP_SUMMARY"
   # 3) 조각 결과 합치기(latest.json) — 조각이 일부 실패해도 끝난 조각은 반영한다.
+
   merge:
     needs: [partition, countries]
     if: ${{ !cancelled() && needs.partition.result == 'success' }}
     runs-on: ubuntu-latest
+    env:
+      GCS_DL_CAP_BYTES: ${{ vars.GCS_DL_CAP_MERGE || '134217728' }}   # (295기) 실행당 GCS 다운로드 상한(바이트)
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
@@ -86,11 +100,17 @@ jobs:
       - run: pip install -q pyyaml >/dev/null
       - name: merge
         run: python3 scripts/collect/process.py process --stage merge --batch "${{ github.run_id }}-${{ github.run_attempt }}" --store "$STORE"
+      - name: gcs-meter report (실행당 GCS 다운로드 바이트 · 상한 넘었으면 실패)
+        if: always()
+        run: set -o pipefail; gcloud gcs-meter report | tee -a "$GITHUB_STEP_SUMMARY"
   # 4) 장소 소개 층 — 게시 바로 앞. 시간 예산 50분(QLever 요청 5초 간격·하루 3000회, 다 못 물은 QID 는 다음 실행이 이어서).
+
   place-desc:
     needs: merge
     if: ${{ !cancelled() && github.repository == 'joon0515/triproutie-pipeline' && vars.PLACE_DESC_OFF != '1' && (needs.merge.result == 'success' || github.event.inputs.only_desc == 'yes') }}
     runs-on: ubuntu-latest
+    env:
+      GCS_DL_CAP_BYTES: ${{ vars.GCS_DL_CAP_PLACE_DESC || '1073741824' }}   # (295기) 실행당 GCS 다운로드 상한(바이트)
     timeout-minutes: 75
     continue-on-error: true
     steps:
@@ -102,10 +122,16 @@ jobs:
       - run: pip install -q pyyaml >/dev/null
       - name: place-desc
         run: python3 scripts/place_desc.py build --store "$STORE" --bucket "$GCS_BUCKET" --budget-min 50 ${{ github.event.inputs.publish == 'dry' && '--dry-run' || '' }}
+      - name: gcs-meter report (실행당 GCS 다운로드 바이트 · 상한 넘었으면 실패)
+        if: always()
+        run: set -o pipefail; gcloud gcs-meter report | tee -a "$GITHUB_STEP_SUMMARY"
+
   publish:
     needs: [merge, place-desc]
     if: ${{ !cancelled() && needs.merge.result == 'success' && github.event.inputs.publish != 'no' }}
     runs-on: ubuntu-latest
+    env:
+      GCS_DL_CAP_BYTES: ${{ vars.GCS_DL_CAP_PUBLISH || '1073741824' }}   # (295기) 실행당 GCS 다운로드 상한(바이트)
     timeout-minutes: 60  # 관문만 22분대(11/17) + 금지 링크 정리·서명·복사
     steps:
       - uses: actions/checkout@v4
@@ -125,3 +151,7 @@ jobs:
           T="수집 게시 중단: 품질 관문"
           N="$(gh issue list --state open --search "$T in:title" --json number -q '.[0].number')"
           if [ -z "$N" ]; then gh issue create --title "$T" --body-file "$RUNNER_TEMP/alert.md"; else gh issue comment "$N" --body-file "$RUNNER_TEMP/alert.md"; fi
+      - name: gcs-meter report (실행당 GCS 다운로드 바이트 · 상한 넘었으면 실패)
+        if: always()
+        run: set -o pipefail; gcloud gcs-meter report | tee -a "$GITHUB_STEP_SUMMARY"
+

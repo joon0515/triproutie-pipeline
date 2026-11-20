@@ -227,3 +227,40 @@ class TestSources(unittest.TestCase):
 
 if __name__ == '__main__':
     unittest.main()
+
+
+class SeedCache295(unittest.TestCase):
+    """(295기) 씨앗 캐시 — 결과는 add_col 과 같고, 두 번째부터는 새 층 파일만 받는다."""
+
+    def _layer(self, k):
+        rows = [{'id': f'x:{k}', 'nm': f'寺{k}', 'en': f'Temple {k}', 'lat': 35.68 + k / 1000, 'lon': 139.76, 'src': 'x', 'lic': 'CC0', 'c': 'temple',
+                 'url': None, 'wd': f'Q{1000 + k}', 'dsc': '這是一座歷史悠久的寺廟。'},
+                {'id': f'y:{k}', 'nm': f'塔{k}', 'lat': 35.0, 'lon': 135.0, 'src': 'x', 'lic': 'CC0', 'c': 'sight', 'url': None}]
+        return P.to_layer('JP', rows)
+
+    def test_partial_equals_add_col(self):
+        a, b = PD.Seeds(), PD.Seeds()
+        for k in range(5):
+            j = self._layer(k)
+            a.add_col(j)
+            b.apply_partial(json.loads(json.dumps(PD.col_partial(j, bool(b.cities)))))  # JSON 왕복(캐시 저장 모양)
+        self.assertEqual((a.q, a.names, a.tw, a.city_q, a.n_rows), (b.q, b.names, b.tw, b.city_q, b.n_rows))
+
+    def test_second_gather_pulls_only_new(self):
+        d = tempfile.mkdtemp(); store = Store(d)
+        paths = {}
+        for k in range(4):
+            f = f'col_JP_{k}.json.gz'; paths[f] = f'processed/out/r1/{f}'
+            store.put_json(paths[f], self._layer(k))
+        store.put_json('processed/latest.json', {'run': 'r1', 'files': list(paths), 'paths': paths, 'counts': {'JP': 8}})
+        pulled = []; real = store.pull
+        store.pull = lambda keys, dest, strict=True: (pulled.extend(keys), real(keys, dest, strict))[1]
+        s1 = PD.gather(store)
+        self.assertEqual(len(pulled), 4)
+        pulled.clear()
+        f = 'col_JP_9.json.gz'; paths[f] = f'processed/out/r2/{f}'; store.put_json(paths[f], self._layer(9))
+        store.put_json('processed/latest.json', {'run': 'r2', 'files': list(paths), 'paths': paths, 'counts': {'JP': 10}})
+        s2 = PD.gather(store)
+        self.assertEqual(pulled, [paths[f]])
+        self.assertEqual(s2.n_rows, s1.n_rows + 2)
+        self.assertIn('Q1009', s2.q)

@@ -192,8 +192,13 @@ class Chain(unittest.TestCase):
 
     def test_chain_cannot_break_on_optional_steps(self):
         st, y = self.steps()
-        self.assertTrue(st['가공(process)']['continue-on-error'])
+        # (295기) process 는 workflow_run 으로만 — 사슬이 또 걸지 않는다. 사슬은 기본 꺼짐 + 24시간 상한.
+        self.assertNotIn('가공(process)', st)
+        self.assertFalse(any('process.yml' in (s.get('run') or '') for s in y['jobs']['chain']['steps']))
+        self.assertIn("vars.CHAIN_ON == '1'", y['jobs']['chain']['if'])
         nxt = st['다음']['run']
+        self.assertIn('CHAIN_MAX_PER_DAY', nxt)
+        self.assertLess(nxt.index('CHAIN_MAX_PER_DAY'), nxt.index('gh workflow run collect.yml'))
         self.assertIn('for i in 1 2 3 4 5', nxt)
         self.assertIn('|| true', st['1시간']['run'])  # 시작 시각 조회 실패로 단계가 죽지 않음
         names = [s['name'] for s in y['jobs']['chain']['steps']]
