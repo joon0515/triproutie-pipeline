@@ -18,7 +18,7 @@
   },
   "catalog_discover": {
    "failing": 0,
-   "ok_today": 1,
+   "ok_today": 0,
    "rows_last": 0,
    "shards": 1
   },
@@ -30,7 +30,7 @@
   },
   "fsq_os_places": {
    "failing": 0,
-   "ok_today": 10,
+   "ok_today": 0,
    "rows_last": 91458995,
    "shards": 204
   },
@@ -48,7 +48,7 @@
   },
   "official_sites": {
    "failing": 0,
-   "ok_today": 6,
+   "ok_today": 1,
    "rows_last": 7,
    "shards": 6
   },
@@ -60,9 +60,9 @@
   },
   "overture_places": {
    "failing": 0,
-   "ok_today": 53,
-   "rows_last": 42587589,
-   "shards": 72
+   "ok_today": 0,
+   "rows_last": 42755079,
+   "shards": 78
   },
   "taiwan_tourism": {
    "failing": 0,
@@ -83,5 +83,5 @@
    "shards": 10
   }
  },
- "updated": "2026-11-19T23:13Z"
+ "updated": "2026-11-20T00:13Z"
 }
