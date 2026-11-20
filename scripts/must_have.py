@@ -27,6 +27,7 @@ from common import Store, today  # noqa: E402
 
 TOP = 30
 KR_BOX = [124.5, 33.0, 131.0, 38.7]
+PROBES = ['경복궁', '성산일출봉', '창덕궁', '해운대해수욕장', '남산서울타워', '감천문화마을', '한라산', '우도', '불국사', '해동용궁사']  # (270기) 대표 명소가 실제로 들어갔는지 행으로 확인
 PRESENT_M = 150.0
 KTO_DUP_M = 200.0
 KTO_CAT = {'12': 'tourist_attraction', '14': 'museum', '28': 'amusement_park'}
@@ -225,9 +226,23 @@ def run(store, bucket=None, tiles_dir=None, kto_dir=None, out=None, top=TOP, dry
         stale = [u for u in (r.stdout.decode().split() if r.stdout else []) if u.endswith('.json.gz') and u.rsplit('/', 1)[1] not in names]
         if stale:
             PD.gs('rm', '-q', '-I', stdin='\n'.join(stale).encode())
+    probe = {}
+    for nm in PROBES:
+        k = PP.geo_norm(nm)
+        hit = [r for rows in by_cc.values() for r in rows if k and any(k == PP.geo_norm(PP.KR_BR.sub(' ', r.get(x) or '')) or k == PP.geo_norm(r.get(x) or '') for x in ('nm', 'ko'))]
+        probe[nm] = [f"{r['id']}·{r['c']}·사진{'있음' if r['id'] in photos else '없음'}" for r in hit[:2]] or ['보충 없음(타일에 있거나 TourAPI·Wikidata 에 없음)']
+    pub = None
+    if bucket:
+        import place_desc as PD
+        lj = PD.gs_json(f'gs://{bucket}/places/v1/layers.json') or {}
+        files = [e.get('file') for e in lj.get('layers') or [] if isinstance(e, dict)]
+        pub = {'version': lj.get('version'), 'col_mustadd': sum(1 for f in files if isinstance(f, str) and 'col_mustadd_' in f),
+               'photos_must': sum(1 for f in files if isinstance(f, str) and 'photos-must' in f)}
     store.put_json('processed/photos/must_state.json', {'built': today(), 'cities': {k: {x: y for x, y in v.items() if x != 'missing_names'} for k, v in reps.items()}})
     L = [f'## 꼭 있어야 할 명소 점검·보충 {today()}',
          f"- 보충 행 {sum(len(v) for v in by_cc.values()):,}(나라 {len(by_cc)}) · 사진 {len(photos):,}",
+         f"- 대표 명소 보충 행 확인: {probe}",
+         f"- 앱 게시 목록(places/v1/layers.json)에 실린 보충 층: {pub}",
          '| 도시 | 꼭 있어야 할 명소 | 타일에 있음 | 빠짐(보충 전) | Wikidata 로 보충 | 보충 뒤 빠짐 | TourAPI 상자 안 | TourAPI 보충 | 빠졌던 명소(Wikidata 라벨) |', '|---|---|---|---|---|---|---|---|---|']
     for c in cities + [{'key': 'kr_rest'}]:
         r = reps.get(c['key']) or {}
