@@ -157,7 +157,7 @@ class T(unittest.TestCase):
         lc = {}
         got, why, n = PP.kr_loc({'jeju': [t]}, {}, lc, 'SECRET', opener=op, now_day='2026-11-20', sleep=lambda x: None)
         got2, _, n2 = PP.kr_loc({'jeju': [t]}, {}, lc, 'SECRET', opener=op, now_day='2026-11-25', sleep=lambda x: None)
-        self.assertEqual((list(got), n, n2, len(calls)), (['h:1'], 1, 0, 1))  # 30일 캐시
+        self.assertEqual((list(got), n, n2, len(calls)), (['h:1'], 2, 0, 2))  # 유형 2번 · 30일 캐시
         self.assertNotIn('SECRET', json.dumps([why, lc]))
 
     def test_kr_loc_stops_on_quota(self):
