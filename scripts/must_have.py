@@ -95,9 +95,25 @@ def is_place_item(g):
     return not YEARISH.search(en)
 
 
+# (270기 3차) 명소 종류(P31) 허용 목록 — 속성 제외만으로는 대학·지하철·정당·방송사·구(區)가 섞여 일정용 장소로 들어갔다.
+SIGHT_P31 = {
+    'Q16560',   # palace
+    'Q44539', 'Q5393308',  # temple · Buddhist temple
+    'Q845945',  # Shinto shrine
+    'Q23413', 'Q57821', 'Q1785071',  # castle · fortification · fort
+    'Q33506', 'Q207694',  # museum · art museum
+    'Q22698', 'Q1107656', 'Q167346', 'Q43501', 'Q194195',  # park · garden · botanical garden · zoo · amusement park
+    'Q40080', 'Q34038', 'Q8502', 'Q8072', 'Q23442',  # beach · waterfall · mountain · volcano · island
+    'Q12518', 'Q11303', 'Q12280',  # tower · skyscraper · bridge
+    'Q16970', 'Q2977', 'Q39614',  # church building · cathedral · cemetery
+    'Q4989906', 'Q179700', 'Q570116', 'Q839954', 'Q174782',  # monument · statue · tourist attraction · archaeological site · square
+    'Q11315', 'Q123705',  # shopping mall · neighborhood(아사쿠사·이태원 같은 관광 동네)
+}
+
+
 def must_list(items, top=TOP):
-    """geo_items 한 도시 → 꼭 있어야 할 명소(장소 아님 표시 없음, sitelinks 상위 top)."""
-    ok = [g for g in items or [] if is_place_item(g)]
+    """geo_items 한 도시 → 꼭 있어야 할 명소(장소 아님 표시 없음 · P31 이 명소 종류, sitelinks 상위 top)."""
+    ok = [g for g in items or [] if is_place_item(g) and set((g[7] or {}).get('p31') or ()) & SIGHT_P31]
     return sorted(ok, key=lambda g: (-g[3], g[0]))[:top]
 
 
