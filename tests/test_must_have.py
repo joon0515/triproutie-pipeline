@@ -45,18 +45,19 @@ class T(unittest.TestCase):
             'kto:126452': {'n': '성산일출봉 [유네스코 세계자연유산]', 't': '12', 'lat': 33.4581 + 10 * o, 'lon': 126.9425,
                            'photo': {'url': 'http://tong.visitkorea.or.kr/a.jpg', 'license': 'KOGL-1'}},
             'kto:9': {'n': '창덕궁', 't': '12', 'lat': 37.5794, 'lon': 126.9910},                   # 이미 있음
-            'kto:10': {'n': '어느식당', 't': '39', 'lat': 33.46, 'lon': 126.94}}})                   # 식당 유형은 싣지 않음
+            'kto:10': {'n': '어느식당', 't': '39', 'lat': 33.46, 'lon': 126.94},
+            'kto:11': {'n': '안동 하회마을', 't': '12', 'lat': 36.539, 'lon': 128.518}}})                 # 우선 도시 밖 — 한국 전역으로 보충                   # 식당 유형은 싣지 않음
         reps, by_cc, ph = MH.run(st, None, os.path.join(d, 'tiles'), os.path.join(d, 'kto'), os.path.join(d, 'out'))
         s, j = reps['seoul'], reps['jeju']
         self.assertEqual((s['must'], s['present'], s['missing_before'], s['missing_after']), (2, 1, 1, 0))
         self.assertEqual(s['missing_names'], ['Gyeongbokgung'])
         self.assertEqual((j['kto_added'], j['must'], j['present'], j['missing_before'], j['wd_added'], j['missing_after']), (1, 1, 0, 1, 0, 0))  # TourAPI 로 채워져 Wikidata 는 따로 안 더함
         ids = sorted(r['id'] for r in by_cc['KR'])
-        self.assertEqual(ids, ['kto:126452', 'wikidata:Q1'])
+        self.assertEqual(ids, ['kto:11', 'kto:126452', 'wikidata:Q1'])
         self.assertEqual(ph['kto:126452']['photo_license'], 'KOGL-1'); self.assertEqual(ph['wikidata:Q1']['photo_license'], 'CC BY-SA 4.0')
         f = os.path.join(d, 'out', 'col_mustadd_KR-00.json.gz')
         doc = json.loads(gzip.decompress(open(f, 'rb').read()))
-        self.assertEqual((doc['schema'], doc['n'], sorted(doc['lic'])), ('collect-1', 2, ['CC0', 'KOGL']))
+        self.assertEqual((doc['schema'], doc['n'], sorted(doc['lic'])), ('collect-1', 3, ['CC0', 'KOGL', 'KOGL']))
         b1 = open(f, 'rb').read()
         MH.run(st, None, os.path.join(d, 'tiles'), os.path.join(d, 'kto'), os.path.join(d, 'out'))
         self.assertEqual(b1, open(f, 'rb').read())  # 다시 돌려도 같은 파일
