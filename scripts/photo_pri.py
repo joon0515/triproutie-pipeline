@@ -743,7 +743,18 @@ def kr_loc_pick(t, items):
             hit = x
             break
     if hit is None:
-        return None, 'name'
+        # (270기 원인 보기) 이름이 안 맞은 까닭을 내용 없이: 타일 이름에 한글이 있나 · 가장 닮은 제목과의 두 글자 묶음 겹침 정도
+        def bg(x):
+            return {x[i:i + 2] for i in range(len(x) - 1)}
+        best = 0.0
+        for a in mine:
+            for x in near:
+                for b in kr_keys(x.get('title')):
+                    A, B = bg(a), bg(b)
+                    if A and B:
+                        best = max(best, len(A & B) / len(A | B))
+        hg = any(re.search('[가-힣]', a) for a in mine)
+        return None, f"name:{'ko' if hg else 'noko'}:{'≥0.5' if best >= 0.5 else ('0.2-0.5' if best >= 0.2 else '<0.2')}"
     lic = {'Type1': 'KOGL-1', 'Type3': 'KOGL-3'}.get(str(hit.get('cpyrhtDivCd') or ''))
     if not (hit.get('firstimage') or '').startswith('http'):
         return None, 'no_photo'
