@@ -49,6 +49,13 @@ const ok = (c, m) => { if (c) pass++; else { fail++; console.log('FAIL', m); } }
   let n = 0; const g = L.makeLinkCore({ verify: async () => ({ uid: 'x' + n }), fetch: async () => ({ ok: true, status: 200, json: async () => ({ candidates: [] }) }), now: () => t, key: () => 'K', log: () => {}, dayGate: async () => (++n) <= 2 });
   ok((await g.handle({ method: 'POST', body: { text: TEXT } })).status === 200 && (await g.handle({ method: 'POST', body: { text: TEXT } })).status === 200, '하루 상한 안');
   ok((await g.handle({ method: 'POST', body: { text: TEXT } })).status === 429, '하루 상한 넘으면 429(새 익명 uid 여도)');
+  // 289기(SCAN1120 S5): 익명 게스트는 시간당 5회(로그인 20회는 그대로) · uid 기록 메모리 상한
+  const an = L.makeLinkCore({ verify: async (q) => ({ uid: q.uid || 'g1', anonymous: !q.full }), fetch: async () => ({ ok: true, status: 200, json: async () => ({ candidates: [] }) }), now: () => t, key: () => 'K', log: () => {} });
+  const codes = []; for (let i = 0; i < 6; i++) codes.push((await an.handle({ method: 'POST', body: { text: TEXT } })).status);
+  ok(codes.slice(0, 5).every((x) => x === 200) && codes[5] === 429, '익명 시간당 5회 ' + codes.join());
+  ok((await an.handle({ method: 'POST', uid: 'full1', full: true, body: { text: TEXT } })).status === 200, '로그인 사용자는 따로');
+  for (let i = 0; i < 5100; i++) await an.handle({ method: 'POST', uid: 'm' + i, body: { text: TEXT } });
+  ok((await an.handle({ method: 'POST', body: { text: TEXT } })).status === 200, '메모리 상한 넘으면 오래된 uid 부터 비움');
   const store = {}; const fdb = { doc: (k) => ({ k }), runTransaction: async (fn) => fn({ get: async (r) => ({ exists: r.k in store, data: () => store[r.k] }), set: (r, v) => { store[r.k] = v; } }) };
   const dg = L.makeDayGate(() => fdb, () => 2);
   ok((await dg(t)) && (await dg(t)) && !(await dg(t)), 'makeDayGate 2회까지');
