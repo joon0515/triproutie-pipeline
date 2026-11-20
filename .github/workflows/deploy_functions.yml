@@ -69,7 +69,7 @@ jobs:
         run: |
           set -o pipefail
           node test_link_fn.js | tail -1 | tee /tmp/link.txt
-          grep -qx 'link_fn: 23/0' /tmp/link.txt
+          grep -qx 'link_fn: 26/0' /tmp/link.txt
       - name: vote test (262기 votePage·voteCast)
         run: |
           set -o pipefail
