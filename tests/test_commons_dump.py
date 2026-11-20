@@ -139,6 +139,34 @@ class T(unittest.TestCase):
         self.assertTrue(CD.name_hit({'大阪城'}, ['大阪城天守閣'])); self.assertFalse(CD.name_hit({'城'}, ['大阪城'])); self.assertFalse(CD.name_hit({'zoo'}, ['tennojizoo']))
         CD.set_targets({})
 
+    def test_kr_loc(self):
+        import photo_pri as PP
+        t = ['h:1', 33.4581, 126.9425, sorted(PP.kr_keys('성산일출봉')), None]
+        items = [{'contentid': '9', 'contenttypeid': '39', 'title': '성산일출봉 식당', 'firstimage': 'http://tong.visitkorea.or.kr/a.jpg', 'cpyrhtDivCd': 'Type1'},
+                 {'contentid': '1', 'contenttypeid': '12', 'title': '성산일출봉 [유네스코 세계자연유산]', 'firstimage': 'http://tong.visitkorea.or.kr/b.jpg', 'cpyrhtDivCd': 'Type3'}]
+        r, w = PP.kr_loc_pick(t, items)
+        self.assertEqual((w, r['kto_cid'], r['photo_license'], r.get('no_modify')), ('ok', '1', 'KOGL-3', True))
+        self.assertTrue(r['photo_url'].startswith('https://'))
+        self.assertEqual(PP.kr_loc_pick(t, items[:1])[1], 'no_near')                      # 식당(39) 은 대상 아님
+        self.assertEqual(PP.kr_loc_pick(t, [dict(items[1], title='우도')])[1], 'name')
+        self.assertEqual(PP.kr_loc_pick(t, [dict(items[1], cpyrhtDivCd='Type2')])[1], 'license')
+        self.assertEqual(PP.kr_loc_pick(t, [dict(items[1], firstimage='')])[1], 'no_photo')
+        calls = []
+        def op(req):
+            calls.append(1); return {'response': {'body': {'items': {'item': items[1]}}}}
+        lc = {}
+        got, why, n = PP.kr_loc({'jeju': [t]}, {}, lc, 'SECRET', opener=op, now_day='2026-11-20', sleep=lambda x: None)
+        got2, _, n2 = PP.kr_loc({'jeju': [t]}, {}, lc, 'SECRET', opener=op, now_day='2026-11-25', sleep=lambda x: None)
+        self.assertEqual((list(got), n, n2, len(calls)), (['h:1'], 1, 0, 1))  # 30일 캐시
+        self.assertNotIn('SECRET', json.dumps([why, lc]))
+
+    def test_miss_diag(self):
+        import photo_pri as PP
+        tg = {'paris': [['a', 48.85, 2.35, ['louvre'], None], ['b', 48.86, 2.30, [], None], ['c', 48.87, 2.31, ['x'], None]]}
+        geo = {'paris': [['Q1', 48.85, 2.3501, 5, 'f', ['Musée du Louvre', 'Louvre']]]}
+        d = PP.miss_diag({'paris': ['a', 'b', 'c', 'd']}, {'d': {}}, tg, geo)
+        self.assertEqual(d['paris']['all'], {'qid_or_geo': 1, 'no_name': 1, 'no_qid_no_geo': 1})
+
     def test_geo_item(self):
         WD.city_setup([{'key': 'osaka', 'bbox': [135.35, 34.55, 135.65, 34.8]}])
         ent = {'id': 'Q1', 'labels': {'en': {'value': 'Osaka Castle'}, 'ja': {'value': '大阪城'}}, 'aliases': {'ja': [{'value': '大坂城'}]}, 'sitelinks': {'a': {}},

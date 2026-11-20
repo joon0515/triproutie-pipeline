@@ -342,6 +342,40 @@ def city_fallback(items, geo, n=CITY_GEO_MORE):
     return out
 
 
+def miss_diag(sight_ids, rows, targets, geo, sample=10):
+    """(270기) 관광·명소 상위 50 중 사진 없는 행 → 원인 개수. 도시마다 앞 10개 표본과 전체를 따로 센다(장소 이름·id 는 남기지 않음).
+    원인: no_name(타일 행에 이름 없음) · no_qid_no_geo(QID 없고 100m 안 Wikidata 좌표 항목도 없음) · geo_near_name_diff(100m 안 항목 있으나 이름 다름) ·
+          qid_or_geo(QID 또는 이름 맞는 항목이 있으나 자유 라이선스 사진 없음)."""
+    out = {}
+    for k, ids in sight_ids.items():
+        tmap = {t[0]: t for t in targets.get(k) or []}
+        grid = {}
+        for g in geo.get(k) or []:
+            if isinstance(g, list) and len(g) >= 6:
+                grid.setdefault((int(g[1] * 500), int(g[2] * 500)), []).append(g)
+        miss = [r for r in ids[:TOP_N] if r not in rows]
+        def why(r):
+            t = tmap.get(r)
+            if not t or not t[3]:
+                return 'no_name'
+            if t[4]:
+                return 'qid_or_geo'
+            near = [g for di in (-1, 0, 1) for dj in (-1, 0, 1) for g in grid.get((int(t[1] * 500) + di, int(t[2] * 500) + dj), ()) if _dist_m(t[1], t[2], g[1], g[2]) <= GEO_MAX_M]
+            if not near:
+                return 'no_qid_no_geo'
+            ok = any(name_sim(a, geo_norm(b)) >= GEO_SIM for g in near for a in t[3] for b in g[5])
+            return 'qid_or_geo' if ok else 'geo_near_name_diff'
+        c_all, c_s = {}, {}
+        for i, r in enumerate(miss):
+            w = why(r)
+            c_all[w] = c_all.get(w, 0) + 1
+            if i < sample:
+                c_s[w] = c_s.get(w, 0) + 1
+        if miss:
+            out[k] = {'miss': len(miss), 'sample10': c_s, 'all': c_all}
+    return {k: out[k] for k in ('jeju', 'busan', 'seoul', 'tokyo', 'osaka', 'bangkok', 'paris') if k in out}
+
+
 def city_diag(cities, cstate, ccache, items=None, made=None):
     """도시 사진이 왜 0 인지 보이게(263기 관측): 단계별 도시 수. 상태 파일의 오류 이름만 센다(주소·열쇠 없음)."""
     d = {'no_state': 0, 'unsplash': 0, 'wd_hit': 0, 'judged': 0, 'free_license': 0, 'judged_not_free': 0}
@@ -501,7 +535,7 @@ def city_doc(rows):
             'attribution': '도시 사진: Unsplash(작가·Unsplash 표기, 핫링크) 또는 위키미디어 공용(저작자·라이선스)', 'built': today(), 'rows': rows}
 
 
-def run(store, bucket=None, tiles_dir=None, out=None, budget_min=50.0, http_wd=None, http_c=None, key=None, opener=None, clock=time.time, dry_run=False, src=None, kto_cards=None):
+def run(store, bucket=None, tiles_dir=None, out=None, budget_min=50.0, http_wd=None, http_c=None, key=None, opener=None, clock=time.time, dry_run=False, src=None, kto_cards=None, kr_key=None):
     t_end = clock() + budget_min * 60
     src = src or {}
     cities = load_cities()
@@ -543,6 +577,7 @@ def run(store, bucket=None, tiles_dir=None, out=None, budget_min=50.0, http_wd=N
             log(f'TourAPI 붙이기 실패 {type(e).__name__}')
         city_ids, geo_hits, sight_ids, targets = {}, {}, {}, {}
         geo = (store.get_json('processed/photos/geo_items.json.gz', None) or {}).get('cities') or {}
+        qnames = {g[0]: g[5] for items in geo.values() for g in items if isinstance(g, list) and len(g) >= 6}  # (270기) QID → 라벨·별칭(ja·th·fr·en 등 20개 언어)
         try:
             for c in cities:
                 ts = tiles_for(c['bbox'])
@@ -550,7 +585,7 @@ def run(store, bucket=None, tiles_dir=None, out=None, budget_min=50.0, http_wd=N
                 sight_ids[c['key']] = city_tile_ids(ts, c['bbox'], sight_only=True)
                 if geo.get(c['key']):
                     geo_hits.update(geo_match(ts, geo[c['key']], c['bbox']))
-                targets[c['key']] = city_targets(ts, c['bbox'], city_ids[c['key']][:TOP_N] + sight_ids[c['key']][:TARGET_SIGHT], geo_hits)
+                targets[c['key']] = city_targets(ts, c['bbox'], city_ids[c['key']][:TOP_N] + sight_ids[c['key']][:TARGET_SIGHT], geo_hits, qnames)
         except Exception as e:  # noqa: BLE001 — 측정 실패는 층 만들기를 막지 않는다(이름만)
             log(f'도시별 타일 행 측정 실패 {type(e).__name__}')
     finally:
@@ -594,6 +629,15 @@ def run(store, bucket=None, tiles_dir=None, out=None, budget_min=50.0, http_wd=N
     rows, by_city = pri_rows(prio, cache, pcache, ccache, keys_of)
     for rk, v in kto_rows.items():
         rows.setdefault(rk, v)  # P18(Commons)가 이미 있는 행이 먼저
+    kr_got, kr_why, kr_asked = {}, {}, 0
+    if targets:
+        lcache = store.get_json('processed/photos/kr_loc.json.gz', {}) or {}
+        sight_t = {k: [t for t in targets.get(k) or [] if t[0] in set(sight_ids.get(k, [])[:TOP_N])] for k in KR_CITIES}
+        kr_got, kr_why, kr_asked = kr_loc(sight_t, rows, lcache, kr_key)
+        if kr_asked:
+            store.put_json('processed/photos/kr_loc.json.gz', lcache)
+        for rk, v in kr_got.items():
+            rows.setdefault(rk, v)
     pov_n = 0
     for rk, v in sorted(((store.get_json('processed/photos/pov.json.gz', None) or {}).get('rows') or {}).items()):
         # (270기) Commons 덤프의 촬영 좌표·묘사 대상으로 고른 사진(자유 라이선스+저작자, 50m) — P18·TourAPI·이름 맞춤이 없는 행만
@@ -620,7 +664,8 @@ def run(store, bucket=None, tiles_dir=None, out=None, budget_min=50.0, http_wd=N
         made['photos-city-1.json.gz'] = len(crow)
     rep = {'p18_asked': p_asked, 'p18_left': len(need) - p_asked, 'p18_stop': p_stop, 'commons_asked': asked, 'commons_left': len(todo) - asked,
            'commons_stop': stop, 'rows': len(rows), 'cities': len(crow), 'unsplash': sum(1 for v in crow.values() if v.get('photo_src') == 'unsplash'),
-           'by_city': by_city, 'city_diag': cdiag, 'kto': {k: list(v) for k, v in kto_stat.items()}, 'tile_cov': tile_cov(city_ids, rows), 'geo_matched': len(geo_hits), 'geo_rows': geo_n, 'pov_rows': pov_n, 'sight_cov': tile_cov(sight_ids, rows)}
+           'by_city': by_city, 'city_diag': cdiag, 'kto': {k: list(v) for k, v in kto_stat.items()}, 'tile_cov': tile_cov(city_ids, rows), 'geo_matched': len(geo_hits), 'geo_rows': geo_n, 'pov_rows': pov_n, 'sight_cov': tile_cov(sight_ids, rows),
+           'kr_loc': {'asked': kr_asked, 'rows': len(kr_got), 'why': kr_why}, 'miss': miss_diag(sight_ids, rows, targets, geo)}
     st['last'] = dict(rep, at=datetime.datetime.now(datetime.timezone.utc).isoformat())
     store.put_json('processed/photos/state.json', st)
     if bucket and not dry_run:
@@ -642,6 +687,94 @@ def run(store, bucket=None, tiles_dir=None, out=None, budget_min=50.0, http_wd=N
 
 
 TOP_N = 50
+KR_LOC_API = 'https://apis.data.go.kr/B551011/KorService2/locationBasedList2'
+KR_LOC_TYPES = {'12', '14', '15'}   # 관광지·문화시설·축제공연행사
+KR_LOC_RADIUS = 200
+KR_LOC_MAX = 150                    # 하루 호출 한도(tourapi_daily 900 회와 합쳐 data.go.kr 1,000 안쪽 — 도시 3곳 × 상위 50)
+KR_LOC_REFRESH = 30
+KR_CITIES = ('jeju', 'busan', 'seoul')
+KR_BR = re.compile(r'\[[^\]]*\]|\([^)]*\)|（[^）]*）|<[^>]*>')
+
+
+def kr_keys(s):
+    """한국어 이름 정규화 열쇠: NFKC·소문자·기호 제거 + 괄호·대괄호 덧붙임 뺀 꼴."""
+    if not isinstance(s, str):
+        return set()
+    return {k for k in (norm_name(s), norm_name(KR_BR.sub(' ', s))) if len(k) >= 2}
+
+
+def kr_loc_get(la, lo, key, opener=None):
+    q = urllib.parse.urlencode({'serviceKey': key, 'MobileOS': 'ETC', 'MobileApp': 'TripRoutie', '_type': 'json', 'mapX': f'{lo:.6f}', 'mapY': f'{la:.6f}',
+                                'radius': KR_LOC_RADIUS, 'numOfRows': 30, 'pageNo': 1, 'arrange': 'E'})
+    req = urllib.request.Request(f'{KR_LOC_API}?{q}', headers={'User-Agent': 'TripRoutie-pipeline/1.0'})
+    if opener:
+        return opener(req)
+    with urllib.request.urlopen(req, timeout=30) as r:
+        return json.loads(r.read())
+
+
+def kr_loc_items(j):
+    it = ((((j or {}).get('response') or {}).get('body') or {}).get('items') or {})
+    it = it.get('item') if isinstance(it, dict) else []
+    return [it] if isinstance(it, dict) else (it or [])
+
+
+def kr_loc_pick(t, items):
+    """대상 장소 t=[행 id, 위도, 경도, 정규화 이름들, QID] + 위치기반 목록 → (사진 행|None, 원인).
+    원인: ok · no_near(200m 안 관광지·문화시설·축제 없음) · name(가까이 있으나 이름 다름) · no_photo(맞았으나 사진 없음) · license(공공누리 1·3유형 아님)."""
+    near = [x for x in items if str(x.get('contenttypeid') or '') in KR_LOC_TYPES]
+    if not near:
+        return None, 'no_near'
+    mine = set(t[3] or ())
+    hit = None
+    for x in near:
+        ks = kr_keys(x.get('title'))
+        if any(a == b or (min(len(a), len(b)) >= 3 and (a in b or b in a)) for a in mine for b in ks):
+            hit = x
+            break
+    if hit is None:
+        return None, 'name'
+    lic = {'Type1': 'KOGL-1', 'Type3': 'KOGL-3'}.get(str(hit.get('cpyrhtDivCd') or ''))
+    if not (hit.get('firstimage') or '').startswith('http'):
+        return None, 'no_photo'
+    if not lic:
+        return None, 'license'
+    ph = {'url': hit['firstimage'], 'license': lic, 'credit': '한국관광공사'}
+    if (hit.get('firstimage2') or '').startswith('http'):
+        ph['thumb'] = hit['firstimage2']
+    r = kto_photo_row(ph)
+    if not r:
+        return None, 'license'
+    return dict(r, kto_cid=str(hit.get('contentid') or '')), 'ok'
+
+
+def kr_loc(targets, rows, lcache, key, opener=None, cap=KR_LOC_MAX, now_day=None, sleep=time.sleep):
+    """한국 3도시 관광·명소 대상 중 사진 없는 행마다 위치기반 목록 1회(30일 캐시). 돌려줌 ({행: 사진 행}, {원인: 수}, 물은 수)."""
+    d0 = datetime.date.fromisoformat(now_day or today())
+    got, why, asked = {}, {}, 0
+    for k in KR_CITIES:
+        for t in (targets.get(k) or [])[:TOP_N * 2]:
+            rid = t[0]
+            if rid in rows:
+                continue
+            c = lcache.get(rid)
+            if not (c and (d0 - datetime.date.fromisoformat(c[0])).days < KR_LOC_REFRESH):
+                if not key or asked >= cap:
+                    why['not_asked'] = why.get('not_asked', 0) + 1
+                    continue
+                asked += 1
+                try:
+                    items = [{x: i.get(x) for x in ('contentid', 'contenttypeid', 'title', 'firstimage', 'firstimage2', 'cpyrhtDivCd')} for i in kr_loc_items(kr_loc_get(t[1], t[2], key, opener))]
+                except Exception as e:  # noqa: BLE001 — 이유 이름만(열쇠가 든 주소를 남기지 않음)
+                    why['err:' + type(e).__name__] = why.get('err:' + type(e).__name__, 0) + 1
+                    continue
+                c = lcache[rid] = [now_day or today(), items]
+                sleep(0.5)
+            r, w = kr_loc_pick(t, c[1])
+            why[w] = why.get(w, 0) + 1
+            if r:
+                got[rid] = r
+    return got, why, asked
 GEO_MAX_M = 100.0
 GEO_SIM = 0.8
 GEO_TIE_M = 25.0
@@ -716,8 +849,10 @@ def is_sight(d, i):
     return isinstance(c, list) and i < len(c) and isinstance(c[i], int) and 0 <= c[i] < len(cats) and cats[c[i]] in SIGHT_CATS
 
 
-def city_targets(tiles, bbox, want_ids, geo_hits):
-    """(270기) 촬영 좌표 사진을 찾을 장소: [행 id, 위도, 경도, 정규화 이름들, QID|None] — 상위 50 + 관광·명소 상위 100."""
+def city_targets(tiles, bbox, want_ids, geo_hits, qnames=None):
+    """(270기) 촬영 좌표 사진을 찾을 장소: [행 id, 위도, 경도, 정규화 이름들, QID|None] — 상위 50 + 관광·명소 상위 100.
+    QID 를 알면 그 항목의 다국어 라벨·별칭도 이름에 더한다(Commons 파일 이름·설명은 영어·현지어가 많다)."""
+    qnames = qnames or {}
     want, out = set(want_ids), {}
     for d in tiles:
         ids, la_, lo_ = d.get('id') or [], d.get('_lat') or [], d.get('_lon') or []
@@ -727,7 +862,7 @@ def city_targets(tiles, bbox, want_ids, geo_hits):
             if rid in want and rid not in out:
                 m = QID_IN_ID.search(rid)
                 q = m.group(1) if m else (geo_hits.get(rid) or (None,))[0]
-                ns = sorted({geo_norm(c[i]) for c in cols if i < len(c)} - {''})
+                ns = sorted(({geo_norm(c[i]) for c in cols if i < len(c)} | {geo_norm(n) for n in qnames.get(q) or ()}) - {''})
                 out[rid] = [rid, round(la_[i], 6), round(lo_[i], 6), ns, q]
     return [out[r] for r in want_ids if r in out]
 
@@ -758,6 +893,8 @@ def report_lines(rep, cities):
          f"- 도시 사진 단계: {rep.get('city_diag')}",
          f"- 덤프 이름+좌표(100m·닮음 0.8) 맞춤 타일 행 {rep.get('geo_matched', 0):,} · 그중 사진(자유+저작자) {rep.get('geo_rows', 0):,}",
          f"- 한국 TourAPI 사진 붙임(도시: 상자 안 사진 카드 · 붙은 타일 행): {rep.get('kto')}",
+         f"- 한국 위치기반 목록(관광지·문화시설·축제, 200m·이름): {rep.get('kr_loc')}",
+         f"- 관광·명소 상위 50 중 사진 없는 행의 원인(개수, 앞 10개 표본 · 이름 없음): {rep.get('miss')}",
          f"- 촬영 좌표·묘사 대상(Commons 덤프) 사진 붙인 행 {rep.get('pov_rows', 0):,}",
          '| 순위 | 도시 | 일정 후보(QID) | QID 사진 | 타일 행(전체, QID 없는 행 포함) | 사진 있음 | 비율 | 상위 50 중 사진 | 관광·명소 행 | 관광·명소 사진 비율 | 관광·명소 상위 50 중 사진 |',
          '|---|---|---|---|---|---|---|---|---|---|---|']
@@ -783,7 +920,10 @@ def main():
     key = os.environ.get('UNSPLASH_ACCESS_KEY') or None
     if key and any(forbidden(u) for u in (UNSPLASH_API,)):
         key = None
-    run(Store(a.store), a.bucket, a.tiles, a.out, a.budget_min, key=key, dry_run=a.dry_run, src=src)
+    kr_key = os.environ.get('DATA_GO_KR_KEY') or None
+    if kr_key and forbidden(KR_LOC_API):
+        kr_key = None
+    run(Store(a.store), a.bucket, a.tiles, a.out, a.budget_min, key=key, dry_run=a.dry_run, src=src, kr_key=kr_key)
 
 
 if __name__ == '__main__':
