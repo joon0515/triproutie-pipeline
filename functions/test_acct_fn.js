@@ -96,7 +96,9 @@ function rig(opt = {}) {
     'usage/A': { tokens: 3 }, 'usage/B': { tokens: 1 }, '_quota/u_A': { n: 1 }, '_quota/ur_A': { n: 1 }, '_quota/imp_A': { n: 1 }, '_quota/ocr_A': { n: 1 }, '_quota/u_B': { n: 1 }, '_quota/google_2026-11-16': { n: 9 },
     'geo_cache/k': { r: [] },
   }));
-  const files = new Set(['uploads/import/A/1_0.jpg', 'uploads/import/A/1_1.jpg', 'users/A/uploads/x.png', 'uploads/import/B/9.jpg', 'places/v1/t.json']);
+  const files = new Set(['uploads/import/A/1_0.jpg', 'uploads/import/A/1_1.jpg', 'users/A/uploads/x.png', 'uploads/import/B/9.jpg', 'places/v1/t.json',
+    // 289기(SCAN1120 S3): 영수증 사진 trips/{여행}/receipts/{올린 사람}/… — 탈퇴하면 A 것만(혼자 여행은 통째) 지워져야 함
+    'trips/solo1/receipts/A/r1.jpg', 'trips/sh1/receipts/A/r2.jpg', 'trips/sh1/receipts/C/r3.jpg', 'trips/m1/receipts/A/r4.jpg', 'trips/m1/receipts/C/r5.jpg', 'trips/other/receipts/B/r6.jpg']);
   const authDeleted = []; const logs = [];
   const deps = {
     db, FV, now: () => NOW, log: (n, o) => logs.push(o),
@@ -165,7 +167,7 @@ const keysOf = (x, pre) => [...x.db.store.keys()].filter((k) => k.startsWith(pre
   ok(!has(x, 'usage/A') && has(x, 'usage/B') && keysOf(x, '_quota/').sort().join() === '_quota/google_2026-11-16,_quota/u_B', 'usage/quota');
   ok(keysOf(x, 'users/A').length === 0 && has(x, 'users/B') && has(x, 'users/C'), 'user doc + subcollections gone');
   ok(has(x, 'reports/r1') && has(x, 'geo_cache/k'), 'reports retained(1y policy), shared cache untouched');
-  ok([...x.files].sort().join() === 'places/v1/t.json,uploads/import/B/9.jpg' && c.files === 3, 'storage: only A folders');
+  ok([...x.files].sort().join() === 'places/v1/t.json,trips/m1/receipts/C/r5.jpg,trips/other/receipts/B/r6.jpg,trips/sh1/receipts/C/r3.jpg,uploads/import/B/9.jpg' && c.files === 6, 'storage: only A folders + A receipts (S3) ' + [...x.files].sort().join());
   ok(x.authDeleted.join() === 'A', 'auth deleted');
   ok(keysOf(x, '_acct_delete/').length === 0 && keysOf(x, '_acct_retained/').length === 0, 'marker cleared, nothing retained');
   ok(x.db.ops.indexOf('rdelete users/A') > x.db.ops.findIndex((o) => o.startsWith('query trips')), 'order: trips before user doc');

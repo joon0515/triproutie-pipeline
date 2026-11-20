@@ -99,6 +99,16 @@ function makeAcctHandler(deps) {
       step = 'trips';
       const t = await findTrips(uid);
       const toDelete = sharedMode === 'delete' ? [...t.solo, ...t.shared] : t.solo;
+      // SCAN1120: 여행 Storage(영수증 trips/{id}/receipts/{uid}/…)도 지운다 — 전에는 Firestore 만 지워 영수증 사진이 남았다.
+      const tripPrefixes = [
+        ...toDelete.map((d) => `trips/${d.id}/`),
+        ...(sharedMode !== 'delete' ? t.shared : []).map((d) => `trips/${d.id}/receipts/${uid}/`),
+        ...t.member.map((d) => `trips/${d.id}/receipts/${uid}/`),
+      ];
+      // 여행 문서를 지우기 전에 먼저(중간에 멈춰 다시 돌려도 여행을 다시 찾을 수 있게 — 되풀이 안전)
+      step = 'trip_storage';
+      for (const p of tripPrefixes) c.files += (await deps.storage.deletePrefix(p)) || 0;
+      step = 'trips';
       for (const d of toDelete) { await db.recursiveDelete(d.ref); c.trips_deleted++; }
       if (sharedMode !== 'delete') for (const d of t.shared) { c.trip_items += await transferTrip(d, uid); c.trips_transferred++; }
       for (const d of t.member) { c.trip_items += await leaveTrip(d, uid); c.trips_left++; }
