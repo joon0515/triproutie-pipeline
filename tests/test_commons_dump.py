@@ -183,6 +183,18 @@ class T(unittest.TestCase):
         d = PP.miss_diag({'paris': ['a', 'b', 'c', 'd']}, {'d': {}}, tg, geo)
         self.assertEqual(d['paris']['all'], {'qid_or_geo': 1, 'no_name': 1, 'no_qid_no_geo': 1})
 
+    def test_wiki_boost_ranks_landmarks(self):
+        import photo_pri as PP
+        d = {'id': ['h:church', 'h:palace', 'h:tower', 'h:cafe'], '_lat': [37.5] * 4, '_lon': [127.0] * 4, 's': [75, 75, 62, 80],
+             'cats': ['sight', 'activity', 'food'], 'c': [0, 0, 1, 2]}
+        pop = {}
+        b = PP.wiki_boost([d], {'h:palace': ('Q1', 'p'), 'h:tower': ('Q2', 'p'), 'h:cafe': ('Q3', 'p')}, {'Q1': 120, 'Q2': 90, 'Q3': 2}, pop)
+        self.assertEqual(set(b), {'h:palace', 'h:tower'})  # sitelinks 2 → pop<10 가점 없음
+        self.assertGreater(b['h:palace'], 75); self.assertEqual(pop['h:palace']['q'], 'Q1')
+        box = [126.7, 37.4, 127.2, 37.7]
+        self.assertEqual(PP.city_tile_ids([d], box, sight_only=True, boost=b), ['h:palace', 'h:tower', 'h:church'])  # 활동 분류라도 위키 연결이면 명소
+        self.assertEqual(PP.city_tile_ids([d], box, sight_only=True), ['h:church', 'h:palace'])
+
     def test_geo_item(self):
         WD.city_setup([{'key': 'osaka', 'bbox': [135.35, 34.55, 135.65, 34.8]}])
         ent = {'id': 'Q1', 'labels': {'en': {'value': 'Osaka Castle'}, 'ja': {'value': '大阪城'}}, 'aliases': {'ja': [{'value': '大坂城'}]}, 'sitelinks': {'a': {}},
