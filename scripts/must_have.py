@@ -83,9 +83,21 @@ class Index:
         return max(self.cc, key=self.cc.get) if self.cc else None
 
 
+YEARISH = re.compile(r'\d{3,}|\b\d+(st|nd|rd|th)\b', re.I)
+
+
+def is_place_item(g):
+    """(270기 2차) 사건·대회·노선·대학 등이 '명소' 로 들어가 앱에 실렸던 일(2022 Itaewon stampede·1998 FIFA World Cup 등) — 언어별 라벨이 있는 새 꼴만,
+    장소 아님 표시가 없고, 영어 라벨에 연도·서수가 없을 때만 명소로 본다."""
+    if not (isinstance(g, list) and len(g) >= 8 and not g[6] and isinstance(g[7], dict)):
+        return False
+    en = g[7].get('en') or ''
+    return not YEARISH.search(en)
+
+
 def must_list(items, top=TOP):
     """geo_items 한 도시 → 꼭 있어야 할 명소(장소 아님 표시 없음, sitelinks 상위 top)."""
-    ok = [g for g in items or [] if isinstance(g, list) and len(g) >= 7 and not g[6]]
+    ok = [g for g in items or [] if is_place_item(g)]
     return sorted(ok, key=lambda g: (-g[3], g[0]))[:top]
 
 
@@ -144,7 +156,7 @@ def city_run(c, tiles, geo_items, kto, ccache, top=TOP):
     added_wd = 0
     for g in missing:
         q, la, lo, sl, p, names = g[:6]
-        ln = lang_names(names)
+        ln = {k: v for k, v in (g[7] or {}).items() if k in ('en', 'ko', 'ja', 'zh') and v} or lang_names(names)
         rid = 'wikidata:' + q
         adds.append({'id': rid, 'nm': ln.get('en') or names[0], **{k: v for k, v in ln.items() if k in ('ko', 'en', 'ja', 'zh')},
                      'lat': la, 'lon': lo, 'c': 'tourist_attraction', 'src': 'wikidata', 'lic': 'CC0', 'wd': q, 'tr': 1})
@@ -156,7 +168,7 @@ def city_run(c, tiles, geo_items, kto, ccache, top=TOP):
             photos[rid] = dict(v, q=q)
     after = sum(1 for g in must if g[0] in ix.qids or ix.has(g[1], g[2], g[5], PRESENT_M))
     rep.update(must=len(must), present=len(in_tiles), missing_before=len(missing_before), wd_added=added_wd, missing_after=len(must) - after,
-               missing_names=[(lang_names(g[5]).get('en') or g[5][0])[:40] for g in missing_before][:30], cc=ix.main_cc())
+               missing_names=[((g[7] or {}).get('en') or g[5][0])[:40] for g in missing_before][:30], cc=ix.main_cc())
     return adds, photos, rep
 
 

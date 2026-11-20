@@ -34,10 +34,12 @@ class T(unittest.TestCase):
             ('h:a', '창덕궁', 37.5794, 126.9910, 'sight'),
             ('h:b', '경복궁역', 37.5757, 126.9735, 'sight'),          # 역 이름 — 궁과 닮음 0.75 미만이면 있음으로 치지 않음
             ('h:c', '성산일출봉 청운식당', 33.4600, 126.9400, 'food')]))
-        geo = {'seoul': [['Q1', 37.5796, 126.9770, 200, FP + 'G.jpg', ['Gyeongbokgung', '경복궁', '景福宮'], 0],
-                         ['Q2', 37.5794, 126.9911, 150, FP + 'C.jpg', ['Changdeokgung', '창덕궁'], 0],
-                         ['Q3', 37.56, 126.98, 900, FP + 'S.jpg', ['Jung District', '중구'], 1]],          # 행정구역 → 대상 아님
-               'jeju': [['Q4', 33.4581, 126.9425, 120, FP + 'I.jpg', ['Seongsan Ilchulbong', '성산일출봉'], 0]]}
+        geo = {'seoul': [['Q1', 37.5796, 126.9770, 200, FP + 'G.jpg', ['Gyeongbokgung', '경복궁', '景福宮'], 0, {'en': 'Gyeongbokgung', 'ko': '경복궁'}],
+                         ['Q2', 37.5794, 126.9911, 150, FP + 'C.jpg', ['Changdeokgung', '창덕궁'], 0, {'en': 'Changdeokgung'}],
+                         ['Q3', 37.56, 126.98, 900, FP + 'S.jpg', ['Jung District', '중구'], 1, {'en': 'Jung District'}],
+                         ['Q5', 37.57, 126.99, 800, FP + 'E.jpg', ['2022 Itaewon stampede'], 0, {'en': '2022 Itaewon stampede'}],          # 사건 → 대상 아님
+                         ['Q6', 37.57, 126.99, 700, FP + 'O.jpg', ['Old form item'], 0]],          # 행정구역 → 대상 아님
+               'jeju': [['Q4', 33.4581, 126.9425, 120, FP + 'I.jpg', ['Seongsan Ilchulbong', '성산일출봉'], 0, {'en': 'Seongsan Ilchulbong'}]]}
         st = Store(os.path.join(d, 'store'))
         st.put_json('processed/photos/geo_items.json.gz', {'cities': geo})
         st.put_json('processed/photos/commons.json.gz', {FP + 'G.jpg': ['2026-11-17', {'lic': 'Q18199165', 'by': 'K'}]})
