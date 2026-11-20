@@ -570,8 +570,8 @@ def run(store, bucket=None, tiles_dir=None, out=None, budget_min=50.0, http_wd=N
     if pm and any(rows for _, rows in pm.get('cities') or []):
         # place-desc 가 남긴 '인기 도시 상자 안 수집 행' 지도(행 열쇠 = 앱 타일 행 id 포함) — 이것을 먼저 쓴다
         prio = []
-        for key, rows in pm['cities']:
-            prio.append((key, [q for q, _ in rows]))
+        for city_key, rows in pm["cities"]:
+            prio.append((city_key, [q for q, _ in rows]))
             for q, ks in rows:
                 keys_of.setdefault(q, set()).update(ks)
         log(f"순서(수집 행 지도 {pm.get('built')}): 도시 {sum(1 for _, qs in prio if qs)}/{len(prio)} · QID {sum(len(qs) for _, qs in prio):,}")
