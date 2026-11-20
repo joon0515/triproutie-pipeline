@@ -153,7 +153,7 @@ class T(unittest.TestCase):
         self.assertEqual(PP.kr_loc_pick(t, [dict(items[1], firstimage='')])[1], 'no_photo')
         calls = []
         def op(req):
-            calls.append(1); return {'response': {'body': {'items': {'item': items[1]}}}}
+            calls.append(1); return {'response': {'header': {'resultCode': '0000'}, 'body': {'items': {'item': items[1]}}}}
         lc = {}
         got, why, n = PP.kr_loc({'jeju': [t]}, {}, lc, 'SECRET', opener=op, now_day='2026-11-20', sleep=lambda x: None)
         got2, _, n2 = PP.kr_loc({'jeju': [t]}, {}, lc, 'SECRET', opener=op, now_day='2026-11-25', sleep=lambda x: None)
@@ -168,6 +168,13 @@ class T(unittest.TestCase):
         got, why, n = PP.kr_loc({'jeju': t}, {}, {}, 'SECRET', opener=op, now_day='2026-11-20', sleep=lambda x: None)
         self.assertEqual((n, why.get('stop')), (1, 'err:HTTPError:429'))
         self.assertNotIn('SECRET', json.dumps(why))
+
+    def test_kr_loc_api_error_not_cached(self):
+        import photo_pri as PP
+        lc = {}
+        got, why, n = PP.kr_loc({'jeju': [['h:1', 33.4, 126.5, ['a'], None]]}, {}, lc, 'K', opener=lambda r: {'response': {'header': {'resultCode': '10'}}},
+                                now_day='2026-11-20', sleep=lambda x: None)
+        self.assertEqual((lc, list(why)), ({}, ['err:KrApiError:10']))
 
     def test_miss_diag(self):
         import photo_pri as PP

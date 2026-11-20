@@ -631,11 +631,11 @@ def run(store, bucket=None, tiles_dir=None, out=None, budget_min=50.0, http_wd=N
         rows.setdefault(rk, v)  # P18(Commons)가 이미 있는 행이 먼저
     kr_got, kr_why, kr_asked = {}, {}, 0
     if targets:
-        lcache = store.get_json('processed/photos/kr_loc.json.gz', {}) or {}
+        lcache = store.get_json('processed/photos/kr_loc2.json.gz', {}) or {}
         sight_t = {k: [t for t in targets.get(k) or [] if t[0] in set(sight_ids.get(k, [])[:TOP_N])] for k in KR_CITIES}
         kr_got, kr_why, kr_asked = kr_loc(sight_t, rows, lcache, kr_key)
         if kr_asked:
-            store.put_json('processed/photos/kr_loc.json.gz', lcache)
+            store.put_json('processed/photos/kr_loc2.json.gz', lcache)
         for rk, v in kr_got.items():
             rows.setdefault(rk, v)
     pov_n = 0
@@ -713,7 +713,15 @@ def kr_loc_get(la, lo, key, opener=None):
         return json.loads(r.read())
 
 
+class KrApiError(Exception):
+    pass
+
+
 def kr_loc_items(j):
+    """응답 → 항목 목록. 머리(resultCode)가 정상(0000)이 아니면 KrApiError(코드만) — 오류 응답을 '항목 없음'으로 캐시하지 않게(270기)."""
+    hd = (((j or {}).get('response') or {}).get('header') or {})
+    if not hd or str(hd.get('resultCode')) not in ('0000', '00', '0'):
+        raise KrApiError(str(hd.get('resultCode') or 'nohdr')[:12])
     it = ((((j or {}).get('response') or {}).get('body') or {}).get('items') or {})
     it = it.get('item') if isinstance(it, dict) else []
     return [it] if isinstance(it, dict) else (it or [])
@@ -768,7 +776,7 @@ def kr_loc(targets, rows, lcache, key, opener=None, cap=KR_LOC_MAX, now_day=None
                 try:
                     items = [{x: i.get(x) for x in ('contentid', 'contenttypeid', 'title', 'firstimage', 'firstimage2', 'cpyrhtDivCd')} for i in kr_loc_items(kr_loc_get(t[1], t[2], key, opener))]
                 except Exception as e:  # noqa: BLE001 — 이유 이름·HTTP 코드만(열쇠가 든 주소를 남기지 않음)
-                    code = getattr(e, 'code', None)
+                    code = getattr(e, 'code', None) or (str(e) if isinstance(e, KrApiError) else None)
                     k2 = 'err:' + type(e).__name__ + (f':{code}' if code else '')
                     why[k2] = why.get(k2, 0) + 1
                     if code in (401, 403, 429) or why[k2] >= 5:  # 열쇠·한도 문제면 그날 멈춤(헛호출 없이)
