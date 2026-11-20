@@ -101,8 +101,43 @@ document.getElementById('s').addEventListener('click',function(){s.nick=document
 fetch('voteCast',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({t:t,bid:s.bid,v:s.v,p:s.p,nick:s.nick})}).then(function(r){m.textContent=r.ok?${JSON.stringify(L.sent)}:${JSON.stringify(L.err)}}).catch(function(){m.textContent=${JSON.stringify(L.err)}})});paint()})();</script></body></html>`;
 }
 
-function headers(res, nonce) {
+// 276기: 웹 면 보안 머리글(페이지·표 보내기 공통). HSTS·틀 안 띄우기·검색/AI 수집 금지·권한 끄기.
+function baseHeaders(res) {
   res.set('Cache-Control', 'no-store');
+  res.set('Strict-Transport-Security', 'max-age=31536000; includeSubDomains');
+  res.set('X-Frame-Options', 'DENY');
+  res.set('X-Robots-Tag', 'noindex, nofollow, noarchive, noai, noimageai');
+  res.set('Permissions-Policy', 'camera=(), microphone=(), geolocation=(), payment=(), usb=()');
+  res.set('Cross-Origin-Opener-Policy', 'same-origin');
+  res.set('Cross-Origin-Resource-Policy', 'same-origin');
+}
+
+// 276기: 같은 접속 주소(IP)에서 몰아 넣는 표 막기(인스턴스 메모리, 최선 노력). 주소는 해시로만 들고 로그하지 않는다.
+// Cloud Run 앞단은 실제 접속 주소를 X-Forwarded-For 끝에 붙인다(앞쪽은 보내는 쪽이 꾸밀 수 있음) → 끝 값을 쓴다.
+const IP_LIMIT = Object.freeze({ windowMs: 10 * 60e3, casts: 60, newPerLink: 25, memMax: 5000 });
+function clientKey(req) {
+  const xff = String((req.get && req.get('x-forwarded-for')) || '').split(',').map((x) => x.trim()).filter(Boolean);
+  const ip = xff.length ? xff[xff.length - 1] : String(req.ip || '');
+  return require('crypto').createHash('sha256').update('tlv276|' + ip).digest('base64').slice(0, 16);
+}
+function makeIpGate(now = Date.now, L = IP_LIMIT) {
+  const m = new Map();
+  const prune = (a, t) => a.filter((x) => t - x.t < L.windowMs);
+  return {
+    /** 'ok' | 'rate'. isNew = 새 표(그 링크에 이 기기 첫 표) 여부를 알면 넣는다. */
+    hit(key, link, isNew) {
+      const t = now();
+      if (m.size >= L.memMax && !m.has(key)) m.delete(m.keys().next().value);
+      const a = prune(m.get(key) || [], t);
+      if (a.length >= L.casts) { m.set(key, a); return 'rate'; }
+      if (isNew && a.filter((x) => x.l === link && x.n).length >= L.newPerLink) { m.set(key, a); return 'rate'; }
+      a.push({ t, l: link, n: !!isNew }); m.set(key, a); return 'ok';
+    },
+  };
+}
+
+function headers(res, nonce) {
+  baseHeaders(res);
   res.set('X-Content-Type-Options', 'nosniff');
   res.set('Referrer-Policy', 'no-referrer');
   res.set('Content-Security-Policy', `default-src 'none'; img-src https:; style-src 'nonce-${nonce}'; script-src 'nonce-${nonce}'; connect-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'`);
@@ -120,12 +155,16 @@ function makeHandlers(getDb, nowFn = Date.now) {
     const link = snap.exists ? snap.data() : null;
     return res.status(isOpen(link, nowFn()) ? 200 : 410).type('html').send(renderPage(link, t, lang, nonce));
   }
+  const gate = makeIpGate(nowFn);
   async function cast(req, res) {
-    res.set('Cache-Control', 'no-store');
+    baseHeaders(res);
     if (req.method !== 'POST') return res.status(405).json({ ok: false, reason: 'method' });
     const b = req.body || {};
     const t = String(b.t || '');
     if (!TOKEN.test(t)) return res.status(404).json({ ok: false, reason: 'token' });
+    if (!/^Mozilla\/|^[A-Za-z][\w.-]*\/[\d.]+/.test(String((req.get && req.get('user-agent')) || ''))) return res.status(400).json({ ok: false, reason: 'client' });
+    const ck = clientKey(req);
+    if (gate.hit(ck, t, false) === 'rate') return res.status(429).json({ ok: false, reason: 'rate' });
     const db = getDb();
     const ref = db.collection('vote_links').doc(t);
     try {
@@ -138,11 +177,12 @@ function makeHandlers(getDb, nowFn = Date.now) {
         const had = await tx.get(bref);
         const nb = Number(link.nb || 0);
         if (!had.exists && nb >= MAX_BALLOTS) return { ok: false, reason: 'full' };
+        if (!had.exists && gate.hit(ck, t, true) === 'rate') return { ok: false, reason: 'rate' };
         tx.set(bref, { ...c.ballot, at: new Date(nowFn()) });
         if (!had.exists) tx.update(ref, { nb: nb + 1 });
         return { ok: true };
       });
-      return res.status(out.ok ? 200 : (out.reason === 'closed' ? 410 : 400)).json(out);
+      return res.status(out.ok ? 200 : (out.reason === 'closed' ? 410 : out.reason === 'rate' ? 429 : 400)).json(out);
     } catch (e) {
       return res.status(500).json({ ok: false, reason: 'server' });
     }
@@ -158,4 +198,4 @@ function makeVoteFunctions({ region = REGION } = {}) {
   return { votePage: onRequest(opts, h.page), voteCast: onRequest(opts, h.cast) };
 }
 
-module.exports = { makeVoteFunctions, makeHandlers, checkBallot, renderPage, publicView, isOpen, pickLang, MAX_BALLOTS };
+module.exports = { makeVoteFunctions, makeHandlers, makeIpGate, clientKey, IP_LIMIT, checkBallot, renderPage, publicView, isOpen, pickLang, MAX_BALLOTS };

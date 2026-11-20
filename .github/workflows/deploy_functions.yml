@@ -69,12 +69,17 @@ jobs:
         run: |
           set -o pipefail
           node test_link_fn.js | tail -1 | tee /tmp/link.txt
-          grep -qx 'link_fn: 17/0' /tmp/link.txt
+          grep -qx 'link_fn: 23/0' /tmp/link.txt
       - name: vote test (262기 votePage·voteCast)
         run: |
           set -o pipefail
           node test_vote_fn.js | tail -1 | tee /tmp/vote.txt
-          grep -qx 'vote_fn 4/4 통과' /tmp/vote.txt
+          grep -qx 'vote_fn 5/5 통과' /tmp/vote.txt
+      - name: appcheck test (276기 App Check 기록·강제 단계)
+        run: |
+          set -o pipefail
+          node test_appcheck.js | tail -1 | tee /tmp/appcheck.txt
+          grep -qx 'appcheck: 7/0' /tmp/appcheck.txt
       - name: entry loads
         run: node -e "const e=require('./index.js'); for (const k of ['flightLookup','geoLookup','deleteAccount','liveBudget','placeDetailsLive','transitLiveMta','transitLiveTfl','transitLiveLta','transitLiveOba','transitLiveIdfm','transitNotices','linkPlaces264','votePage','voteCast']) if(!e[k]) throw new Error(k)"
   deploy:

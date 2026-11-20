@@ -176,16 +176,12 @@ function makeAcctHandler(deps) {
 // ID 토큰(취소 여부까지) + 설정 시 App Check. google.js 의 makeVerify 와 같은 방식에 auth_time 만 더함(google.js 는 건드리지 않음).
 function makeVerifyAcct(requireAppCheck) {
   const { getAuth } = require('firebase-admin/auth');
-  const { getAppCheck } = require('firebase-admin/app-check');
   return async (req) => {
     const idTok = (req.get('authorization') || '').replace(/^Bearer /, '');
     if (!idTok) throw Object.assign(new Error('auth'), { reason: 'auth' });
     const u = await getAuth().verifyIdToken(idTok, true);
-    if (requireAppCheck.value()) {
-      const ac = req.get('x-firebase-appcheck') || '';
-      if (!ac) throw Object.assign(new Error('appcheck'), { reason: 'appcheck' });
-      try { await getAppCheck().verifyToken(ac); } catch (_) { throw Object.assign(new Error('appcheck'), { reason: 'appcheck' }); }
-    }
+    // 276기: 계정 삭제는 되풀이되면 안 되므로 강제 모드에서는 재사용 방지 토큰(consume)을 요구
+    await require('./appcheck').checkAppCheck(req, requireAppCheck.value() === true, { consume: requireAppCheck.value() === true });
     return { uid: u.uid, email: u.email || '', authTime: u.auth_time || 0, anonymous: !!u.firebase && u.firebase.sign_in_provider === 'anonymous' };
   };
 }
