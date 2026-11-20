@@ -54,7 +54,7 @@ class T(unittest.TestCase):
         self.assertEqual(PP.tile_cov({'jeju': ids}, {'h:b': {}, 'x': {}}), {'jeju': [3, 1, 1]})
         L = PP.report_lines({'p18_asked': 0, 'p18_left': 0, 'p18_stop': None, 'commons_asked': 0, 'commons_left': 0, 'commons_stop': None, 'rows': 1,
                              'cities': 0, 'unsplash': 0, 'by_city': {}, 'tile_cov': {'jeju': [3, 1, 1]}}, [{'rank': 1, 'key': 'jeju'}])
-        self.assertIn('| 1 | jeju | 0 | 0 | 3 | 1 | 33.3% | 1/3 |', L)
+        self.assertIn('| 1 | jeju | 0 | 0 | 3 | 1 | 33.3% | 1/3 | 0 | 0.0% | 0/0 |', L)
 
     def test_city_items_skip_qlever(self):
         import photo_pri as PP
@@ -103,6 +103,41 @@ class T(unittest.TestCase):
         it = PP.city_fallback({'okinawa_naha': {'q': 'Q1', 'p': 'a', 'files': ['a', 'b']}},
                               {'okinawa_naha': [['Q5', 0, 0, 3, 'c', ['x']], ['Q6', 0, 0, 90, 'd', ['y']], ['Q7', 0, 0, 1, 'a', ['z']]]})
         self.assertEqual(it['okinawa_naha']['files'], ['a', 'b', 'd', 'c'])  # sitelinks 큰 명소 먼저 · 중복 없음
+
+    def test_sight_only_ids(self):
+        import photo_pri as PP
+        d = {'id': ['a', 'b', 'c'], '_lat': [34.6, 34.6, 34.6], '_lon': [135.5, 135.5, 135.5], 's': [9, 5, 1], 'cats': ['food', 'sight', 'nature'], 'c': [0, 1, 2]}
+        self.assertEqual(PP.city_tile_ids([d], [135.35, 34.55, 135.65, 34.8], sight_only=True), ['b', 'c'])
+
+    def test_pov_match(self):
+        o = 1 / 111320.0
+        CD.set_targets({'osaka': [['fsq:castle', 34.6873, 135.5259, ['osakacastle', '大阪城'], 'Q1'], ['fsq:park', 34.70, 135.40, ['park'], None],
+                                  ['fsq:tower', 34.6525, 135.5063, ['tsutenkaku', '通天閣'], None]]})
+
+        def ent(title, la, lo, lic='Q18199165', an='Kim', dep=None, cap=None):
+            st = {'P275': [{'mainsnak': {'datavalue': {'value': {'id': lic}}}}], 'P1259': [{'mainsnak': {'datavalue': {'value': {'latitude': la, 'longitude': lo}}}}]}
+            if an:
+                st['P170'] = [{'mainsnak': {'snaktype': 'somevalue'}, 'qualifiers': {'P2093': [{'datavalue': {'value': an}}]}}]
+            if dep:
+                st['P180'] = [{'mainsnak': {'datavalue': {'value': {'id': dep}}}}]
+            e = {'type': 'mediainfo', 'id': 'M1', 'title': 'File:' + title, 'statements': st, 'labels': {'en': {'language': 'en', 'value': cap}} if cap else {}}
+            return json.dumps(e, ensure_ascii=False).encode() + b','
+        sk = CD.Sink(set(), '2026-11-17', False)
+        sk.feed(b'\n'.join([
+            ent('IMG 0001.jpg', 34.6873 + 30 * o, 135.5259, dep='Q1'),                 # 묘사 대상 일치 · 30m
+            ent('Osaka Castle at night.jpg', 34.6873 + 10 * o, 135.5259),              # 이름 일치 · 10m (순위는 묘사 대상이 먼저)
+            ent('通天閣 夜景.jpg', 34.6525 + 70 * o, 135.5063),                         # 70m — 거리 넘음
+            ent('Tsutenkaku tower.jpg', 34.6525 + 20 * o, 135.5063, lic='Q99'),        # 비자유
+            ent('Tsutenkaku 2.jpg', 34.6525 + 25 * o, 135.5063, an=None),             # 저작자 없음
+            ent('Some park bench.jpg', 34.70, 135.40),                                # 'park' 4글자 영문 — 포함은 맞지만 아래에서 따로 봄
+            ent('Random street.jpg', 34.6525 + 5 * o, 135.5063, cap='a street'),       # 이름 없음 → 안 붙음
+        ]) + b'\n')
+        pv = sk.out['_pov']
+        self.assertEqual((pv['fsq:castle'][0], pv['fsq:castle'][2]), (0, CD.url_of('IMG 0001.jpg')))
+        self.assertNotIn('fsq:tower', pv)
+        self.assertEqual(pv['fsq:park'][0], 1)
+        self.assertTrue(CD.name_hit({'大阪城'}, ['大阪城天守閣'])); self.assertFalse(CD.name_hit({'城'}, ['大阪城'])); self.assertFalse(CD.name_hit({'zoo'}, ['tennojizoo']))
+        CD.set_targets({})
 
     def test_geo_item(self):
         WD.city_setup([{'key': 'osaka', 'bbox': [135.35, 34.55, 135.65, 34.8]}])

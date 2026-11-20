@@ -541,18 +541,22 @@ def run(store, bucket=None, tiles_dir=None, out=None, budget_min=50.0, http_wd=N
                     kto_stat[c['key']] = (nc, nm)
         except Exception as e:  # noqa: BLE001 — TourAPI 붙이기가 실패해도 P18 길은 계속(이름만 기록)
             log(f'TourAPI 붙이기 실패 {type(e).__name__}')
-        city_ids, geo_hits = {}, {}
+        city_ids, geo_hits, sight_ids, targets = {}, {}, {}, {}
         geo = (store.get_json('processed/photos/geo_items.json.gz', None) or {}).get('cities') or {}
         try:
             for c in cities:
                 ts = tiles_for(c['bbox'])
                 city_ids[c['key']] = city_tile_ids(ts, c['bbox'])
+                sight_ids[c['key']] = city_tile_ids(ts, c['bbox'], sight_only=True)
                 if geo.get(c['key']):
                     geo_hits.update(geo_match(ts, geo[c['key']], c['bbox']))
+                targets[c['key']] = city_targets(ts, c['bbox'], city_ids[c['key']][:TOP_N] + sight_ids[c['key']][:TARGET_SIGHT], geo_hits)
         except Exception as e:  # noqa: BLE001 — 측정 실패는 층 만들기를 막지 않는다(이름만)
             log(f'도시별 타일 행 측정 실패 {type(e).__name__}')
     finally:
         shutil.rmtree(wd, ignore_errors=True)
+    if any(targets.values()) and not dry_run:
+        store.put_json('processed/photos/targets.json.gz', {'built': today(), 'cities': targets})  # commons_dump 가 촬영 좌표로 사진을 찾을 장소(270기)
     cache = store.get_json('processed/desc/wd.json.gz', {}) or {}
     for q, v in (store.get_json('processed/desc/wd_dump.json.gz', None) or {}).items():
         if q not in cache or len(cache[q]) < 3 or cache[q][0] < v[0]:
@@ -590,6 +594,12 @@ def run(store, bucket=None, tiles_dir=None, out=None, budget_min=50.0, http_wd=N
     rows, by_city = pri_rows(prio, cache, pcache, ccache, keys_of)
     for rk, v in kto_rows.items():
         rows.setdefault(rk, v)  # P18(Commons)가 이미 있는 행이 먼저
+    pov_n = 0
+    for rk, v in sorted(((store.get_json('processed/photos/pov.json.gz', None) or {}).get('rows') or {}).items()):
+        # (270기) Commons 덤프의 촬영 좌표·묘사 대상으로 고른 사진(자유 라이선스+저작자, 50m) — P18·TourAPI·이름 맞춤이 없는 행만
+        r = PN.photo_row(v[2], v[3]) if isinstance(v, list) and len(v) > 3 else None
+        if r and rk not in rows:
+            rows[rk] = dict(r, match='pov_' + str(v[0])); pov_n += 1
     geo_n = 0
     for rk, (q, u) in sorted(geo_hits.items()):  # (270기 2차) 이름+좌표로 맞춘 덤프 항목의 P18 — 판정이 자유+저작자인 것만
         cc = ccache.get(u)
@@ -610,7 +620,7 @@ def run(store, bucket=None, tiles_dir=None, out=None, budget_min=50.0, http_wd=N
         made['photos-city-1.json.gz'] = len(crow)
     rep = {'p18_asked': p_asked, 'p18_left': len(need) - p_asked, 'p18_stop': p_stop, 'commons_asked': asked, 'commons_left': len(todo) - asked,
            'commons_stop': stop, 'rows': len(rows), 'cities': len(crow), 'unsplash': sum(1 for v in crow.values() if v.get('photo_src') == 'unsplash'),
-           'by_city': by_city, 'city_diag': cdiag, 'kto': {k: list(v) for k, v in kto_stat.items()}, 'tile_cov': tile_cov(city_ids, rows), 'geo_matched': len(geo_hits), 'geo_rows': geo_n}
+           'by_city': by_city, 'city_diag': cdiag, 'kto': {k: list(v) for k, v in kto_stat.items()}, 'tile_cov': tile_cov(city_ids, rows), 'geo_matched': len(geo_hits), 'geo_rows': geo_n, 'pov_rows': pov_n, 'sight_cov': tile_cov(sight_ids, rows)}
     st['last'] = dict(rep, at=datetime.datetime.now(datetime.timezone.utc).isoformat())
     store.put_json('processed/photos/state.json', st)
     if bucket and not dry_run:
@@ -697,14 +707,39 @@ def geo_match(tiles, items, bbox, max_m=GEO_MAX_M, sim=GEO_SIM):
     return out
 
 
-def city_tile_ids(tiles, bbox):
-    """(270기) 도시 상자 안 타일 행 id 전부(점수 높은 순, 중복 없음) — QID 가 없는 한국·해외 행도 센다(측정 분모)."""
+SIGHT_CATS = ('sight', 'nature')
+TARGET_SIGHT = 100
+
+
+def is_sight(d, i):
+    cats, c = d.get('cats') or [], d.get('c')
+    return isinstance(c, list) and i < len(c) and isinstance(c[i], int) and 0 <= c[i] < len(cats) and cats[c[i]] in SIGHT_CATS
+
+
+def city_targets(tiles, bbox, want_ids, geo_hits):
+    """(270기) 촬영 좌표 사진을 찾을 장소: [행 id, 위도, 경도, 정규화 이름들, QID|None] — 상위 50 + 관광·명소 상위 100."""
+    want, out = set(want_ids), {}
+    for d in tiles:
+        ids, la_, lo_ = d.get('id') or [], d.get('_lat') or [], d.get('_lon') or []
+        cols = [d[k] for k in ('nm', 'ko', 'en', 'ja', 'zh') if isinstance(d.get(k), list)]
+        for i in range(min(len(ids), len(la_), len(lo_))):
+            rid = ids[i]
+            if rid in want and rid not in out:
+                m = QID_IN_ID.search(rid)
+                q = m.group(1) if m else (geo_hits.get(rid) or (None,))[0]
+                ns = sorted({geo_norm(c[i]) for c in cols if i < len(c)} - {''})
+                out[rid] = [rid, round(la_[i], 6), round(lo_[i], 6), ns, q]
+    return [out[r] for r in want_ids if r in out]
+
+
+def city_tile_ids(tiles, bbox, sight_only=False):
+    """(270기) 도시 상자 안 타일 행 id 전부(점수 높은 순, 중복 없음) — QID 가 없는 한국·해외 행도 센다(측정 분모). sight_only = 관광·명소 분류만."""
     rows = []
     for d in tiles:
         ids, la_, lo_ = d.get('id') or [], d.get('_lat') or [], d.get('_lon') or []
         sc = d.get('s') if isinstance(d.get('s'), list) else None
         for i in range(min(len(ids), len(la_), len(lo_))):
-            if isinstance(ids[i], str) and bbox[0] <= lo_[i] <= bbox[2] and bbox[1] <= la_[i] <= bbox[3]:
+            if isinstance(ids[i], str) and bbox[0] <= lo_[i] <= bbox[2] and bbox[1] <= la_[i] <= bbox[3] and (not sight_only or is_sight(d, i)):
                 rows.append((-(sc[i] or 0) if sc else 0, ids[i]))
     rows.sort()
     return list(dict.fromkeys(r for _, r in rows))
@@ -723,12 +758,16 @@ def report_lines(rep, cities):
          f"- 도시 사진 단계: {rep.get('city_diag')}",
          f"- 덤프 이름+좌표(100m·닮음 0.8) 맞춤 타일 행 {rep.get('geo_matched', 0):,} · 그중 사진(자유+저작자) {rep.get('geo_rows', 0):,}",
          f"- 한국 TourAPI 사진 붙임(도시: 상자 안 사진 카드 · 붙은 타일 행): {rep.get('kto')}",
-         '| 순위 | 도시 | 일정 후보(QID) | QID 사진 | 타일 행(전체, QID 없는 행 포함) | 사진 있음 | 비율 | 상위 50 중 사진 |', '|---|---|---|---|---|---|---|---|']
-    tc = rep.get('tile_cov') or {}
+         f"- 촬영 좌표·묘사 대상(Commons 덤프) 사진 붙인 행 {rep.get('pov_rows', 0):,}",
+         '| 순위 | 도시 | 일정 후보(QID) | QID 사진 | 타일 행(전체, QID 없는 행 포함) | 사진 있음 | 비율 | 상위 50 중 사진 | 관광·명소 행 | 관광·명소 사진 비율 | 관광·명소 상위 50 중 사진 |',
+         '|---|---|---|---|---|---|---|---|---|---|---|']
+    tc, sc = rep.get('tile_cov') or {}, rep.get('sight_cov') or {}
     for c in cities:
         n, k = rep['by_city'].get(c['key'], (0, 0))
         tn, th, t50 = tc.get(c['key'], (0, 0, 0))
-        L.append(f"| {c['rank']} | {c['key']} | {n:,} | {k:,} | {tn:,} | {th:,} | {(100.0 * th / tn if tn else 0):.1f}% | {t50}/{min(TOP_N, tn)} |")
+        sn, sh, s50 = sc.get(c['key'], (0, 0, 0))
+        L.append(f"| {c['rank']} | {c['key']} | {n:,} | {k:,} | {tn:,} | {th:,} | {(100.0 * th / tn if tn else 0):.1f}% | {t50}/{min(TOP_N, tn)} | {sn:,} | "
+                 f"{(100.0 * sh / sn if sn else 0):.1f}% | {s50}/{min(TOP_N, sn)} |")
     return L
 
 
