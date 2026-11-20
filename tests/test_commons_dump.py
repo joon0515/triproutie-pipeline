@@ -98,6 +98,12 @@ class T(unittest.TestCase):
         e = WD.city_entry([400, 'Q90', a, [a, b]], [[5, 'Q7', 'X', ['X']]], {'Q2': ['Q2', 0, 0, 900, 'L', ['l']], 'Q3': ['Q3', 0, 0, 1, 'M', ['m']]})
         self.assertEqual(e['files'], [a, b, 'X', 'L', 'M'])
 
+    def test_city_geo_fallback(self):
+        import photo_pri as PP
+        it = PP.city_fallback({'okinawa_naha': {'q': 'Q1', 'p': 'a', 'files': ['a', 'b']}},
+                              {'okinawa_naha': [['Q5', 0, 0, 3, 'c', ['x']], ['Q6', 0, 0, 90, 'd', ['y']], ['Q7', 0, 0, 1, 'a', ['z']]]})
+        self.assertEqual(it['okinawa_naha']['files'], ['a', 'b', 'd', 'c'])  # sitelinks 큰 명소 먼저 · 중복 없음
+
     def test_geo_item(self):
         WD.city_setup([{'key': 'osaka', 'bbox': [135.35, 34.55, 135.65, 34.8]}])
         ent = {'id': 'Q1', 'labels': {'en': {'value': 'Osaka Castle'}, 'ja': {'value': '大阪城'}}, 'aliases': {'ja': [{'value': '大坂城'}]}, 'sitelinks': {'a': {}},
