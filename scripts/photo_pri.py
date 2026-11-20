@@ -705,7 +705,7 @@ def kr_keys(s):
 
 def kr_loc_get(la, lo, key, opener=None):
     q = urllib.parse.urlencode({'serviceKey': key, 'MobileOS': 'ETC', 'MobileApp': 'TripRoutie', '_type': 'json', 'mapX': f'{lo:.6f}', 'mapY': f'{la:.6f}',
-                                'radius': KR_LOC_RADIUS, 'numOfRows': 30, 'pageNo': 1, 'arrange': 'E'})
+                                'radius': KR_LOC_RADIUS, 'numOfRows': 100, 'pageNo': 1, 'arrange': 'E'})
     req = urllib.request.Request(f'{KR_LOC_API}?{q}', headers={'User-Agent': 'TripRoutie-pipeline/1.0'})
     if opener:
         return opener(req)
