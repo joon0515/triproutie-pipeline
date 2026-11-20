@@ -160,6 +160,15 @@ class T(unittest.TestCase):
         self.assertEqual((list(got), n, n2, len(calls)), (['h:1'], 1, 0, 1))  # 30일 캐시
         self.assertNotIn('SECRET', json.dumps([why, lc]))
 
+    def test_kr_loc_stops_on_quota(self):
+        import photo_pri as PP, urllib.error
+        def op(req):
+            raise urllib.error.HTTPError('https://x/?serviceKey=SECRET', 429, 'Too Many', {}, None)
+        t = [['h:%d' % i, 33.4, 126.5, ['a'], None] for i in range(5)]
+        got, why, n = PP.kr_loc({'jeju': t}, {}, {}, 'SECRET', opener=op, now_day='2026-11-20', sleep=lambda x: None)
+        self.assertEqual((n, why.get('stop')), (1, 'err:HTTPError:429'))
+        self.assertNotIn('SECRET', json.dumps(why))
+
     def test_miss_diag(self):
         import photo_pri as PP
         tg = {'paris': [['a', 48.85, 2.35, ['louvre'], None], ['b', 48.86, 2.30, [], None], ['c', 48.87, 2.31, ['x'], None]]}
