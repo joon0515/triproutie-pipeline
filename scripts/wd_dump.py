@@ -95,7 +95,10 @@ def image_files(cl, props=IMG_PROPS):
 
 
 # (270기) '꼭 있어야 할 명소' 후보에서 뺄 항목: 행정구역·마을(P1082 인구), 역(P81 노선), 강(P403·P885), 회사(P452 업종), 학교(P2196 학생 수), 공항(P238)
-NONPLACE_PROPS = ('P1082', 'P81', 'P403', 'P885', 'P452', 'P2196', 'P238')
+NONPLACE_PROPS = ('P1082', 'P81', 'P403', 'P885', 'P452', 'P2196', 'P238',
+                  # (270기 2차) 사건·대회·협정(P585 시점·P580/P582 시작·끝·P1120 사망자·P710 참가자·P1132 참가 수·P641 종목·P664 주최·P1346 우승),
+                  # 하위 행정구역을 가진 곳(P150)·수도(P36)
+                  'P585', 'P580', 'P582', 'P1120', 'P710', 'P1132', 'P641', 'P664', 'P1346', 'P150', 'P36')
 GEO_LANGS = ('en', 'ja', 'ko', 'zh', 'zh-hans', 'zh-hant', 'zh-tw', 'zh-cn', 'fr', 'th', 'vi', 'id', 'es', 'it', 'cs', 'tr', 'ar', 'de', 'tl', 'ms')
 
 
@@ -130,7 +133,10 @@ def geo_item(ent):
     if not names:
         return None
     nonplace = int(any(cl.get(pr) for pr in NONPLACE_PROPS))
-    return keys, [ent.get('id'), round(pt[0], 6), round(pt[1], 6), len(ent.get('sitelinks') or {}), files[0], names, nonplace]
+    lab = lambda t: ((ent.get('labels') or {}).get(t) or {}).get('value') if isinstance((ent.get('labels') or {}).get(t), dict) else None
+    p31 = sorted({((c.get('mainsnak') or {}).get('datavalue') or {}).get('value', {}).get('id') for c in cl.get('P31') or []} - {None})[:5]
+    return keys, [ent.get('id'), round(pt[0], 6), round(pt[1], 6), len(ent.get('sitelinks') or {}), files[0], names, nonplace,
+                  {'en': lab('en'), 'ko': lab('ko'), 'ja': lab('ja'), 'zh': lab('zh') or lab('zh-hans'), 'p31': p31}]
 
 
 def log(m):
@@ -489,8 +495,8 @@ def main():
         m['qids'] = qn
         skip = (not a.force) and st.get('date') == m['date'] and st.get('qids', -1) >= qn and st.get('jobs') == a.jobs  # 조각이 빠졌으면 다시
         gi = ((store.get_json('processed/photos/geo_items.json.gz', None) or {}).get('cities') or {}).get('tokyo') or [[]]
-        if skip and len(gi[0]) < 7:
-            skip = False  # (270기 6차) 꼭 있어야 할 명소용 '장소 아님' 표시(nonplace)를 아직 모으지 않음
+        if skip and len(gi[0]) < 8:
+            skip = False  # (270기 6차) 꼭 있어야 할 명소용 '장소 아님' 표시·언어별 라벨·P31 을 아직 모으지 않음
         if skip and ((store.get_json('processed/photos/city_items.json', None) or {}).get('cities') or {}).get('tokyo', {}).get('files') is None:
             skip = False  # (270기 2차) 도시 후보 여러 장·상자 안 명소(geo_items)를 아직 모으지 않음
         if skip and (store.get_json('processed/photos/city_items.json', None) or {}).get('date') != m['date']:
