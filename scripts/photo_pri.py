@@ -765,8 +765,13 @@ def kr_loc(targets, rows, lcache, key, opener=None, cap=KR_LOC_MAX, now_day=None
                 asked += 1
                 try:
                     items = [{x: i.get(x) for x in ('contentid', 'contenttypeid', 'title', 'firstimage', 'firstimage2', 'cpyrhtDivCd')} for i in kr_loc_items(kr_loc_get(t[1], t[2], key, opener))]
-                except Exception as e:  # noqa: BLE001 — 이유 이름만(열쇠가 든 주소를 남기지 않음)
-                    why['err:' + type(e).__name__] = why.get('err:' + type(e).__name__, 0) + 1
+                except Exception as e:  # noqa: BLE001 — 이유 이름·HTTP 코드만(열쇠가 든 주소를 남기지 않음)
+                    code = getattr(e, 'code', None)
+                    k2 = 'err:' + type(e).__name__ + (f':{code}' if code else '')
+                    why[k2] = why.get(k2, 0) + 1
+                    if code in (401, 403, 429) or why[k2] >= 5:  # 열쇠·한도 문제면 그날 멈춤(헛호출 없이)
+                        why['stop'] = k2
+                        return got, why, asked
                     continue
                 c = lcache[rid] = [now_day or today(), items]
                 sleep(0.5)
