@@ -723,8 +723,10 @@ def kr_loc_pick(t, items):
     """대상 장소 t=[행 id, 위도, 경도, 정규화 이름들, QID] + 위치기반 목록 → (사진 행|None, 원인).
     원인: ok · no_near(200m 안 관광지·문화시설·축제 없음) · name(가까이 있으나 이름 다름) · no_photo(맞았으나 사진 없음) · license(공공누리 1·3유형 아님)."""
     near = [x for x in items if str(x.get('contenttypeid') or '') in KR_LOC_TYPES]
+    if not items:
+        return None, 'no_items'  # 200m 안에 TourAPI 항목이 하나도 없음
     if not near:
-        return None, 'no_near'
+        return None, 'no_near:' + ','.join(sorted({str(x.get('contenttypeid') or '?') for x in items}))  # 있으나 관광지·문화시설·축제 아님(유형 번호)
     mine = set(t[3] or ())
     hit = None
     for x in near:

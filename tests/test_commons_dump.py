@@ -147,7 +147,7 @@ class T(unittest.TestCase):
         r, w = PP.kr_loc_pick(t, items)
         self.assertEqual((w, r['kto_cid'], r['photo_license'], r.get('no_modify')), ('ok', '1', 'KOGL-3', True))
         self.assertTrue(r['photo_url'].startswith('https://'))
-        self.assertEqual(PP.kr_loc_pick(t, items[:1])[1], 'no_near')                      # 식당(39) 은 대상 아님
+        self.assertEqual(PP.kr_loc_pick(t, items[:1])[1], 'no_near:39'); self.assertEqual(PP.kr_loc_pick(t, [])[1], 'no_items')                      # 식당(39) 은 대상 아님
         self.assertEqual(PP.kr_loc_pick(t, [dict(items[1], title='우도')])[1], 'name')
         self.assertEqual(PP.kr_loc_pick(t, [dict(items[1], cpyrhtDivCd='Type2')])[1], 'license')
         self.assertEqual(PP.kr_loc_pick(t, [dict(items[1], firstimage='')])[1], 'no_photo')
