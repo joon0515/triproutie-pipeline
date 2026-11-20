@@ -330,6 +330,18 @@ def city_rows(cities, cstate, ccache, http_wd, budget_end, key=None, opener=None
 
 
 # ---------- 4. 실행 ----------
+CITY_GEO_MORE = 40
+
+
+def city_fallback(items, geo, n=CITY_GEO_MORE):
+    """(270기) 도시 후보가 모두 비자유·저작자 없음일 때(오키나와 나하 7/7): 상자 안 명소 P18 을 sitelinks 큰 순으로 n 장 더 뒤에 붙인다(판정은 commons_dump 가 이미 함)."""
+    out = {}
+    for k, v in items.items():
+        more = [g[4] for g in sorted((g for g in geo.get(k) or [] if isinstance(g, list) and len(g) > 4), key=lambda g: (-g[3], g[0]))[:n]]
+        out[k] = dict(v, files=list(dict.fromkeys(list(v.get('files') or []) + more)))
+    return out
+
+
 def city_diag(cities, cstate, ccache, items=None, made=None):
     """도시 사진이 왜 0 인지 보이게(263기 관측): 단계별 도시 수. 상태 파일의 오류 이름만 센다(주소·열쇠 없음)."""
     d = {'no_state': 0, 'unsplash': 0, 'wd_hit': 0, 'judged': 0, 'free_license': 0, 'judged_not_free': 0}
@@ -564,6 +576,7 @@ def run(store, bucket=None, tiles_dir=None, out=None, budget_min=50.0, http_wd=N
             ccache[u] = v
     cstate = store.get_json('processed/photos/cities.json', {}) or {}
     items = (store.get_json('processed/photos/city_items.json', None) or {}).get('cities') or {}
+    items = city_fallback(items, (store.get_json('processed/photos/geo_items.json.gz', None) or {}).get('cities') or {})
     crow, cfiles = city_rows(cities, cstate, ccache, http_wd, t_end - budget_min * 60 * 0.4, key=key, opener=opener, clock=clock, items=items)
     todo = [u for u in cfiles + judge_files(prio, cache, pcache) if u not in ccache]
     todo = list(dict.fromkeys(todo))
