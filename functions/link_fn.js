@@ -8,7 +8,7 @@ const { makeVerify } = require('./google');
 
 const REGION = 'asia-northeast3';
 const MODELS = Object.freeze(['gemini-2.5-flash-lite', 'gemini-2.0-flash-lite']);
-const MAX_TEXT = 3000, MAX_OUT = 8, PER_HOUR = 20;
+const MAX_TEXT = 3000, MAX_OUT = 8, PER_HOUR = 20, PER_HOUR_ANON = 5, HITS_MAX = 5000;
 const DAY_CAP_DEFAULT = 1500; // 276기: 앱 전체 하루 상한(익명 계정을 새로 만들어 사용자당 한도를 피해도 여기서 멈춤). 무료 키 한도 보호.
 
 function cleanText(s) {
@@ -69,8 +69,10 @@ function makeLinkCore(deps) {
     if (text.length < 4) return { status: 400, body: { ok: false, reason: 'text' } };
     const now = deps.now(), uid = (u && u.uid) || '?';
     const h = (hits.get(uid) || []).filter((t) => now - t < 3600e3);
-    if (h.length >= PER_HOUR) return { status: 429, body: { ok: false, reason: 'quota' } };
-    h.push(now); hits.set(uid, h);
+    // SCAN1120: 익명 게스트는 새로 만들기 쉬워 앱 전체 하루 상한(1500)을 남 몫까지 다 쓸 수 있다 → 익명은 시간당 5회.
+    if (h.length >= (u && u.anonymous ? PER_HOUR_ANON : PER_HOUR)) return { status: 429, body: { ok: false, reason: 'quota' } };
+    h.push(now); hits.delete(uid); hits.set(uid, h);
+    if (hits.size > HITS_MAX) hits.delete(hits.keys().next().value); // 메모리 상한(익명 uid 를 끝없이 만들어도 커지지 않게)
     if (deps.dayGate && !(await deps.dayGate(now))) return { status: 429, body: { ok: false, reason: 'quota', scope: 'day' } };
     const city = String(b.city || '').slice(0, 40), lang = String(b.lang || 'ko').slice(0, 8);
     for (const model of MODELS) {

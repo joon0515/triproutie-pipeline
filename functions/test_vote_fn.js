@@ -110,6 +110,14 @@ function res() {
     assert.strictEqual(last, 429);
     const xff = (ip) => (k) => (k === 'user-agent' ? 'Mozilla/5.0' : k === 'x-forwarded-for' ? ip : '');
     assert.strictEqual(V.clientKey({ get: xff('6.6.6.6, 1.1.1.1') }), V.clientKey({ get: xff('7.7.7.7, 1.1.1.1') }), '앞쪽 꾸민 주소는 무시');
+    // 289기(SCAN1120 S6): IPv6 는 같은 /64 안 주소를 한 사람으로(표기·대소문자·0 줄임이 달라도), 다른 /64·IPv4 는 따로
+    const k6 = (ip) => V.clientKey({ get: xff(ip) });
+    assert.strictEqual(k6('2001:db8:1:2::1'), k6('2001:DB8:1:2:abcd:ef01:2345:6789'), 'IPv6 같은 /64');
+    assert.strictEqual(k6('2001:db8:1:2::1'), k6('2001:0db8:0001:0002:0:0:0:ffff'), 'IPv6 0 채운 표기');
+    assert.strictEqual(k6('2001:db8::5'), k6('2001:db8:0:0:9::1'), 'IPv6 :: 줄임');
+    assert.notStrictEqual(k6('2001:db8:1:2::1'), k6('2001:db8:1:3::1'), 'IPv6 다른 /64');
+    assert.notStrictEqual(k6('1.2.3.4'), k6('1.2.3.5'), 'IPv4 그대로');
+    assert.notStrictEqual(k6('::ffff:1.2.3.4'), k6('::ffff:1.2.3.5'), 'IPv4 대응 주소 그대로');
     const g = V.makeIpGate(() => NOW, { windowMs: 1000, casts: 2, newPerLink: 9, memMax: 10 });
     assert.deepStrictEqual([g.hit('k', 'a', false), g.hit('k', 'a', false), g.hit('k', 'a', false)], ['ok', 'ok', 'rate']);
   });
