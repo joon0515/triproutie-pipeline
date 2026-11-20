@@ -156,9 +156,10 @@ jobs:
         run: |
           case "$ONLY" in *[!A-Za-z0-9,]*|""|,*|*,|*,,*) echo "::error::only 형식 오류(함수 이름을 쉼표로)"; exit 1;; esac
           for n in $(echo "$ONLY" | tr ',' ' '); do case $n in flightLookup|geoLookup|deleteAccount) ;; *) echo "::error::$n 은 이 저장소 함수가 아님"; exit 1;; esac; done
+          # 289기(SCAN1120 S11): firebase-tools 판 정확히 고정(GCP 자격 증명이 있는 단계). 올릴 때는 npm 레지스트리 15.x 최신 확인 뒤 한 줄 바꿈.
           F=$(echo "$ONLY" | tr ',' '\n' | sed "s/^/functions:$CODEBASE:/" | paste -sd, -)
           echo "targets=$F"
-          npx -y firebase-tools@15 deploy --project "$PROJECT" --only "$F" --non-interactive 2>&1 | tee /tmp/deploy.log | grep -E "✔|Error|error|Deploy complete|ecret|⚠|delet" | head -40
+          npx -y firebase-tools@15.37.0 deploy --project "$PROJECT" --only "$F" --non-interactive 2>&1 | tee /tmp/deploy.log | grep -E "✔|Error|error|Deploy complete|ecret|⚠|delet" | head -40
           [ "${PIPESTATUS[0]}" = 0 ] || { echo "::error::배포 실패"; tail -40 /tmp/deploy.log; exit 1; }
       - name: verify (401·바인딩·인스턴스 상한)
         run: |
