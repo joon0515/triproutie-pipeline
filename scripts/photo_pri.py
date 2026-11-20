@@ -576,15 +576,19 @@ def run(store, bucket=None, tiles_dir=None, out=None, budget_min=50.0, http_wd=N
         except Exception as e:  # noqa: BLE001 — TourAPI 붙이기가 실패해도 P18 길은 계속(이름만 기록)
             log(f'TourAPI 붙이기 실패 {type(e).__name__}')
         city_ids, geo_hits, sight_ids, targets = {}, {}, {}, {}
+        pop_rows = {}
         geo = (store.get_json('processed/photos/geo_items.json.gz', None) or {}).get('cities') or {}
         qnames = {g[0]: g[5] for items in geo.values() for g in items if isinstance(g, list) and len(g) >= 6}  # (270기) QID → 라벨·별칭(ja·th·fr·en 등 20개 언어)
+        qsl = {g[0]: g[3] for items in geo.values() for g in items if isinstance(g, list) and len(g) >= 6}  # QID → sitelinks
+        pop_rows = {}
         try:
             for c in cities:
                 ts = tiles_for(c['bbox'])
-                city_ids[c['key']] = city_tile_ids(ts, c['bbox'])
-                sight_ids[c['key']] = city_tile_ids(ts, c['bbox'], sight_only=True)
-                if geo.get(c['key']):
-                    geo_hits.update(geo_match(ts, geo[c['key']], c['bbox']))
+                gh = geo_match(ts, geo[c['key']], c['bbox']) if geo.get(c['key']) else {}
+                geo_hits.update(gh)
+                boost = wiki_boost(ts, gh, qsl, pop_rows)
+                city_ids[c['key']] = city_tile_ids(ts, c['bbox'], boost=boost)
+                sight_ids[c['key']] = city_tile_ids(ts, c['bbox'], sight_only=True, boost=boost)
                 targets[c['key']] = city_targets(ts, c['bbox'], city_ids[c['key']][:TOP_N] + sight_ids[c['key']][:TARGET_SIGHT], geo_hits, qnames)
         except Exception as e:  # noqa: BLE001 — 측정 실패는 층 만들기를 막지 않는다(이름만)
             log(f'도시별 타일 행 측정 실패 {type(e).__name__}')
@@ -657,6 +661,11 @@ def run(store, bucket=None, tiles_dir=None, out=None, budget_min=50.0, http_wd=N
     made = {}
     if rows:
         made.update(PN.write_sharded(out, 'photos-pri', rows, pri_doc, n=PRI_SHARDS))
+    if pop_rows:  # (270기) 위키 연결이 없던 명소(한국 fsq·해시 행 등)에 덤프 이름+좌표 연결로 인기 점수 — popularity-1 층(앱 정렬)
+        p = os.path.join(out, 'pop-geo-1.json.gz')
+        with open(p, 'wb') as f:
+            f.write(gzip.compress(json.dumps(pop_doc(pop_rows), ensure_ascii=False, separators=(',', ':')).encode()))
+        made['pop-geo-1.json.gz'] = len(pop_rows)
     if crow:
         p = os.path.join(out, 'photos-city-1.json.gz')
         with open(p, 'wb') as f:
@@ -665,7 +674,7 @@ def run(store, bucket=None, tiles_dir=None, out=None, budget_min=50.0, http_wd=N
     rep = {'p18_asked': p_asked, 'p18_left': len(need) - p_asked, 'p18_stop': p_stop, 'commons_asked': asked, 'commons_left': len(todo) - asked,
            'commons_stop': stop, 'rows': len(rows), 'cities': len(crow), 'unsplash': sum(1 for v in crow.values() if v.get('photo_src') == 'unsplash'),
            'by_city': by_city, 'city_diag': cdiag, 'kto': {k: list(v) for k, v in kto_stat.items()}, 'tile_cov': tile_cov(city_ids, rows), 'geo_matched': len(geo_hits), 'geo_rows': geo_n, 'pov_rows': pov_n, 'sight_cov': tile_cov(sight_ids, rows),
-           'kr_loc': {'asked': kr_asked, 'rows': len(kr_got), 'why': kr_why}, 'miss': miss_diag(sight_ids, rows, targets, geo)}
+           'pop_geo': len(pop_rows), 'kr_loc': {'asked': kr_asked, 'rows': len(kr_got), 'why': kr_why}, 'miss': miss_diag(sight_ids, rows, targets, geo)}
     st['last'] = dict(rep, at=datetime.datetime.now(datetime.timezone.utc).isoformat())
     store.put_json('processed/photos/state.json', st)
     if bucket and not dry_run:
@@ -898,15 +907,62 @@ def city_targets(tiles, bbox, want_ids, geo_hits, qnames=None):
     return [out[r] for r in want_ids if r in out]
 
 
-def city_tile_ids(tiles, bbox, sight_only=False):
-    """(270기) 도시 상자 안 타일 행 id 전부(점수 높은 순, 중복 없음) — QID 가 없는 한국·해외 행도 센다(측정 분모). sight_only = 관광·명소 분류만."""
+def pop_from_sitelinks(sl):
+    """pop_build.pop_score 와 같은 식(조회수 모름 = 0) — 0.3 × log(1+sitelinks)/log(1+150) × 100."""
+    import math
+    return round(100 * 0.3 * min(1.0, math.log1p(max(0, sl or 0)) / math.log1p(150)))
+
+
+def wiki_boost(tiles, gh, qsl, pop_rows):
+    """(270기 원인: 한국 상위 명소 순위) 위키 연결이 없는 행은 팩 점수가 75 에서 멈춰 경복궁·해운대 같은 곳이 성당·체육공원과 같은 75 줄에 섞였다
+    (pop_build 의 위키 가점은 Q-id·위키 제목이 있는 행만). 덤프 이름+좌표로 이은 QID 의 sitelinks 로 pop_build.merge_score 와 같은 식의 점수를 준다.
+    돌려줌 {행 id: 새 점수} (팩 점수보다 높을 때만). pop_rows 에 popularity-1 행을 채운다."""
+    out = {}
+    if not gh:
+        return out
+    for d in tiles:
+        sc = d.get('s') if isinstance(d.get('s'), list) else None
+        for i, rid in enumerate(d.get('id') or []):
+            if rid in gh:
+                q = gh[rid][0]
+                sl = qsl.get(q, 0)
+                pop = pop_from_sitelinks(sl)
+                s0 = (sc[i] or 0) if sc and i < len(sc) else 0
+                if pop >= 10:
+                    ns = min(100, 76 + round(0.24 * pop))
+                    if ns > s0:
+                        out[rid] = ns
+                        pop_rows[rid] = {'q': q, 'sl': sl, 'pop': pop, 's': ns, 'src': 'wikidata-geo'}
+    return out
+
+
+def pop_doc(rows):
+    return {'schema': 'popularity-1', 'built': today(), 'region': 'wikidata-geo',
+            'attribution': '인기 점수: Wikidata(CC0) sitelinks — 덤프 좌표·이름으로 이은 항목',
+            'formula': 'pop = round(100*0.3*log(1+sitelinks)/log(1+150)); s = 76 + round(0.24*pop) if pop >= 10 (pop_build.merge_score 와 같은 꼴, 조회수 없음)', 'rows': rows}
+
+
+LINKED_SIGHT_CATS = ('activity',)  # 남산서울타워·해동용궁사처럼 '활동' 으로 들어온 명소 — 위키 연결(boost)이 있을 때만 관광·명소로 센다
+
+
+def city_tile_ids(tiles, bbox, sight_only=False, boost=None):
+    """(270기) 도시 상자 안 타일 행 id 전부(점수 높은 순, 중복 없음) — QID 가 없는 한국·해외 행도 센다(측정 분모). sight_only = 관광·명소 분류만.
+    boost = {행 id: 위키 연결 점수} — 있으면 그 점수로 줄 세운다(앱의 popularity-1 층과 같은 순서)."""
+    boost = boost or {}
     rows = []
     for d in tiles:
         ids, la_, lo_ = d.get('id') or [], d.get('_lat') or [], d.get('_lon') or []
         sc = d.get('s') if isinstance(d.get('s'), list) else None
+        cats, cc = d.get('cats') or [], d.get('c')
         for i in range(min(len(ids), len(la_), len(lo_))):
-            if isinstance(ids[i], str) and bbox[0] <= lo_[i] <= bbox[2] and bbox[1] <= la_[i] <= bbox[3] and (not sight_only or is_sight(d, i)):
-                rows.append((-(sc[i] or 0) if sc else 0, ids[i]))
+            rid = ids[i]
+            if not (isinstance(rid, str) and bbox[0] <= lo_[i] <= bbox[2] and bbox[1] <= la_[i] <= bbox[3]):
+                continue
+            if sight_only and not is_sight(d, i):
+                ci = cc[i] if isinstance(cc, list) and i < len(cc) else None
+                if not (rid in boost and isinstance(ci, int) and 0 <= ci < len(cats) and cats[ci] in LINKED_SIGHT_CATS):
+                    continue
+            rows.append((-(boost.get(rid) or (sc[i] or 0 if sc else 0)), rid))
     rows.sort()
     return list(dict.fromkeys(r for _, r in rows))
 
@@ -924,6 +980,7 @@ def report_lines(rep, cities):
          f"- 도시 사진 단계: {rep.get('city_diag')}",
          f"- 덤프 이름+좌표(100m·닮음 0.8) 맞춤 타일 행 {rep.get('geo_matched', 0):,} · 그중 사진(자유+저작자) {rep.get('geo_rows', 0):,}",
          f"- 한국 TourAPI 사진 붙임(도시: 상자 안 사진 카드 · 붙은 타일 행): {rep.get('kto')}",
+         f"- 위키 연결 인기 점수(popularity-1, pop-geo) 행 {rep.get('pop_geo', 0):,}",
          f"- 한국 위치기반 목록(관광지·문화시설·축제, 1km·이름): {rep.get('kr_loc')}",
          f"- 관광·명소 상위 50 중 사진 없는 행의 원인(개수, 앞 10개 표본 · 이름 없음): {rep.get('miss')}",
          f"- 촬영 좌표·묘사 대상(Commons 덤프) 사진 붙인 행 {rep.get('pov_rows', 0):,}",
