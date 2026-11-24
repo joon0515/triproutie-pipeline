@@ -18,7 +18,7 @@
   },
   "catalog_discover": {
    "failing": 0,
-   "ok_today": 1,
+   "ok_today": 0,
    "rows_last": 0,
    "shards": 1
   },
@@ -48,8 +48,8 @@
   },
   "official_sites": {
    "failing": 0,
-   "ok_today": 1,
-   "rows_last": 0,
+   "ok_today": 3,
+   "rows_last": 8,
    "shards": 6
   },
   "open_dataset": {
@@ -61,8 +61,8 @@
   "overture_places": {
    "failing": 0,
    "ok_today": 6,
-   "rows_last": 49084703,
-   "shards": 156
+   "rows_last": 49368542,
+   "shards": 162
   },
   "taiwan_tourism": {
    "failing": 0,
@@ -72,7 +72,7 @@
   },
   "wikidata_official": {
    "failing": 0,
-   "ok_today": 1,
+   "ok_today": 0,
    "rows_last": 5614,
    "shards": 1
   },
@@ -83,5 +83,5 @@
    "shards": 10
   }
  },
- "updated": "2026-11-22T23:43Z"
+ "updated": "2026-11-24T04:52Z"
 }
